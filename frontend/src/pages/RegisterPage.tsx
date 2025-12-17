@@ -38,7 +38,7 @@ export default function RegisterPage() {
   }
   
   return (
-    <div className="min-h-screen flex items-center justify-center p-8 bg-slate-900">
+    <div className="min-h-screen flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-900">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -50,20 +50,20 @@ export default function RegisterPage() {
           <div className="w-12 h-12 bg-gradient-to-br from-sign-500 to-sign-600 rounded-xl flex items-center justify-center shadow-lg shadow-sign-500/20">
             <FolderOpen className="w-6 h-6 text-white" />
           </div>
-          <span className="text-2xl font-display font-bold text-white">Sign House</span>
+          <span className="text-2xl font-display font-bold text-slate-900 dark:text-white">Sign House</span>
         </div>
         
         <div className="card p-8">
-          <h2 className="text-2xl font-display font-semibold text-white mb-2">
+          <h2 className="text-2xl font-display font-semibold text-slate-900 dark:text-white mb-2">
             Create an account
           </h2>
-          <p className="text-slate-400 mb-8">
+          <p className="text-slate-600 dark:text-slate-400 mb-8">
             Start analyzing floor plans today
           </p>
           
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-slate-300 mb-2">
+              <label htmlFor="username" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                 Username
               </label>
               <input
@@ -79,7 +79,7 @@ export default function RegisterPage() {
             </div>
             
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-slate-300 mb-2">
+              <label htmlFor="email" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                 Email Address
               </label>
               <input
@@ -95,7 +95,7 @@ export default function RegisterPage() {
             </div>
             
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-2">
+              <label htmlFor="password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                 Password
               </label>
               <div className="relative">
@@ -112,7 +112,7 @@ export default function RegisterPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
@@ -120,7 +120,7 @@ export default function RegisterPage() {
             </div>
             
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-300 mb-2">
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                 Confirm Password
               </label>
               <input
@@ -161,9 +161,9 @@ export default function RegisterPage() {
             </button>
           </form>
           
-          <p className="mt-6 text-center text-slate-400">
+          <p className="mt-6 text-center text-slate-600 dark:text-slate-400">
             Already have an account?{' '}
-            <Link to="/login" className="text-sign-400 hover:text-sign-300 font-medium">
+            <Link to="/login" className="text-sign-500 hover:text-sign-400 dark:text-sign-400 dark:hover:text-sign-300 font-medium">
               Sign in
             </Link>
           </p>

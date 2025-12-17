@@ -70,8 +70,8 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-display font-bold text-white">Projects</h1>
-          <p className="text-slate-400 mt-1">Manage your floor plan analysis projects</p>
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Projects</h1>
+          <p className="text-slate-600 dark:text-slate-400 mt-1">Manage your floor plan analysis projects</p>
         </div>
         
         <button
@@ -91,13 +91,13 @@ export default function DashboardPage() {
             animate={{ opacity: 1, scale: 1 }}
             className="card p-6 w-full max-w-md mx-4"
           >
-            <h2 className="text-xl font-display font-semibold text-white mb-4">
+            <h2 className="text-xl font-display font-semibold text-slate-900 dark:text-white mb-4">
               Create New Project
             </h2>
             
             <form onSubmit={handleCreateProject} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Project Name
                 </label>
                 <input
@@ -112,7 +112,7 @@ export default function DashboardPage() {
               </div>
               
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Description (optional)
                 </label>
                 <textarea
@@ -158,11 +158,11 @@ export default function DashboardPage() {
           animate={{ opacity: 1, y: 0 }}
           className="text-center py-20"
         >
-          <div className="w-20 h-20 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <FolderOpen className="w-10 h-10 text-slate-500" />
+          <div className="w-20 h-20 bg-slate-100 dark:bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <FolderOpen className="w-10 h-10 text-slate-400 dark:text-slate-500" />
           </div>
-          <h2 className="text-xl font-semibold text-white mb-2">No projects yet</h2>
-          <p className="text-slate-400 mb-6 max-w-sm mx-auto">
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">No projects yet</h2>
+          <p className="text-slate-600 dark:text-slate-400 mb-6 max-w-sm mx-auto">
             Create your first project to start analyzing floor plans
           </p>
           <button
@@ -188,11 +188,11 @@ export default function DashboardPage() {
             <div className="p-5">
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-semibold text-white truncate group-hover:text-sign-400 transition-colors">
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white truncate group-hover:text-sign-600 dark:group-hover:text-sign-400 transition-colors">
                     {project.name}
                   </h3>
                   {project.description && (
-                    <p className="text-slate-400 text-sm mt-1 line-clamp-2">
+                    <p className="text-slate-600 dark:text-slate-400 text-sm mt-1 line-clamp-2">
                       {project.description}
                     </p>
                   )}
@@ -204,16 +204,16 @@ export default function DashboardPage() {
                       e.preventDefault()
                       setOpenMenu(openMenu === project.id ? null : project.id)
                     }}
-                    className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-700 rounded-lg transition-colors"
                   >
                     <MoreVertical className="w-4 h-4" />
                   </button>
                   
                   {openMenu === project.id && (
-                    <div className="absolute right-0 top-full mt-1 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-10 py-1 min-w-[140px]">
+                    <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl z-10 py-1 min-w-[140px]">
                       <button
                         onClick={() => handleDeleteProject(project.id)}
-                        className="w-full px-4 py-2 text-left text-red-400 hover:bg-slate-700 flex items-center gap-2 text-sm"
+                        className="w-full px-4 py-2 text-left text-red-500 dark:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-2 text-sm"
                       >
                         <Trash2 className="w-4 h-4" />
                         Delete
@@ -223,7 +223,7 @@ export default function DashboardPage() {
                 </div>
               </div>
               
-              <div className="flex items-center gap-4 text-sm text-slate-400 mb-4">
+              <div className="flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400 mb-4">
                 <div className="flex items-center gap-1.5">
                   <Layers className="w-4 h-4" />
                   <span>{project.floorplan_count} floor{project.floorplan_count !== 1 ? 's' : ''}</span>
@@ -244,7 +244,7 @@ export default function DashboardPage() {
                 
                 <Link
                   to={`/project/${project.id}`}
-                  className="flex items-center gap-1 text-sign-400 hover:text-sign-300 font-medium text-sm transition-colors"
+                  className="flex items-center gap-1 text-sign-600 hover:text-sign-500 dark:text-sign-400 dark:hover:text-sign-300 font-medium text-sm transition-colors"
                 >
                   Open
                   <ArrowRight className="w-4 h-4" />

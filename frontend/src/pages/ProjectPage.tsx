@@ -96,7 +96,7 @@ export default function ProjectPage() {
   if (!currentProject) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-8">
-        <p className="text-slate-400 text-center py-20">Project not found</p>
+        <p className="text-slate-600 dark:text-slate-400 text-center py-20">Project not found</p>
       </div>
     )
   }
@@ -109,7 +109,7 @@ export default function ProjectPage() {
       <div className="mb-8">
         <Link 
           to="/" 
-          className="inline-flex items-center gap-1 text-slate-400 hover:text-white mb-4 transition-colors"
+          className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white mb-4 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
           Back to Dashboard
@@ -117,9 +117,9 @@ export default function ProjectPage() {
         
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold text-white">{currentProject.name}</h1>
+            <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">{currentProject.name}</h1>
             {currentProject.description && (
-              <p className="text-slate-400 mt-1">{currentProject.description}</p>
+              <p className="text-slate-600 dark:text-slate-400 mt-1">{currentProject.description}</p>
             )}
           </div>
           
@@ -151,26 +151,26 @@ export default function ProjectPage() {
               <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
-              <h3 className="font-semibold text-white">Excel Template</h3>
-              <p className="text-sm text-slate-400">Define your export format</p>
+              <h3 className="font-semibold text-slate-900 dark:text-white">Excel Template</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Define your export format</p>
             </div>
           </div>
           
           {currentProject.template ? (
-            <div className="p-4 bg-slate-900/50 rounded-lg border border-slate-700">
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-slate-400" />
+                  <FileText className="w-5 h-5 text-slate-500 dark:text-slate-400" />
                   <div>
-                    <p className="text-white font-medium">{currentProject.template.filename}</p>
-                    <p className="text-sm text-slate-400">
+                    <p className="text-slate-900 dark:text-white font-medium">{currentProject.template.filename}</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">
                       {currentProject.template.columns.length} columns defined
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => templateInputRef.current?.click()}
-                  className="text-sign-400 hover:text-sign-300 text-sm font-medium"
+                  className="text-sign-600 hover:text-sign-500 dark:text-sign-400 dark:hover:text-sign-300 text-sm font-medium"
                 >
                   Replace
                 </button>
@@ -180,17 +180,17 @@ export default function ProjectPage() {
             <button
               onClick={() => templateInputRef.current?.click()}
               disabled={uploadingTemplate}
-              className="w-full p-6 border-2 border-dashed border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
+              className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
             >
               {uploadingTemplate ? (
                 <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
               ) : (
                 <>
-                  <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                  <p className="text-slate-400 group-hover:text-white transition-colors">
+                  <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
+                  <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
                     Click to upload Excel template
                   </p>
-                  <p className="text-sm text-slate-500 mt-1">.xlsx or .xls</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">.xlsx or .xls</p>
                 </>
               )}
             </button>
@@ -217,25 +217,25 @@ export default function ProjectPage() {
               <Layers className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className="font-semibold text-white">Floor Plan PDF</h3>
-              <p className="text-sm text-slate-400">Upload multi-page floor plans</p>
+              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDF</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">Upload multi-page floor plans</p>
             </div>
           </div>
           
           <button
             onClick={() => floorplanInputRef.current?.click()}
             disabled={uploadingFloorplan}
-            className="w-full p-6 border-2 border-dashed border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
+            className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
           >
             {uploadingFloorplan ? (
               <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
             ) : (
               <>
-                <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                <p className="text-slate-400 group-hover:text-white transition-colors">
+                <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
+                <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
                   Click to upload floor plan PDF
                 </p>
-                <p className="text-sm text-slate-500 mt-1">Multi-page PDF supported</p>
+                <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">Multi-page PDF supported</p>
               </>
             )}
           </button>
@@ -257,7 +257,7 @@ export default function ProjectPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <h2 className="text-xl font-semibold text-white mb-4">
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">
             Floor Plans ({currentProject.floorplans.length})
           </h2>
           
@@ -268,20 +268,20 @@ export default function ProjectPage() {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.1 * index }}
-                className="card p-4 hover:border-slate-600 transition-colors"
+                className="card p-4 hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blueprint-900 rounded-lg flex items-center justify-center text-blueprint-400 font-mono font-bold">
+                    <div className="w-12 h-12 bg-blueprint-100 dark:bg-blueprint-900 rounded-lg flex items-center justify-center text-blueprint-700 dark:text-blueprint-400 font-mono font-bold">
                       {floorplan.floor_number}
                     </div>
                     
                     <div>
-                      <h3 className="font-medium text-white">{floorplan.floor_name}</h3>
-                      <div className="flex items-center gap-3 text-sm text-slate-400 mt-0.5">
+                      <h3 className="font-medium text-slate-900 dark:text-white">{floorplan.floor_name}</h3>
+                      <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 mt-0.5">
                         <span>{floorplan.data_count} items extracted</span>
                         {floorplan.shape_type && (
-                          <span className="px-2 py-0.5 bg-slate-700 rounded text-slate-300 text-xs">
+                          <span className="px-2 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-slate-700 dark:text-slate-300 text-xs">
                             {floorplan.shape_type}s
                           </span>
                         )}
@@ -292,7 +292,7 @@ export default function ProjectPage() {
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
                       {getStatusIcon(floorplan.status)}
-                      <span className="text-sm text-slate-300">
+                      <span className="text-sm text-slate-700 dark:text-slate-300">
                         {getStatusText(floorplan.status)}
                       </span>
                     </div>
@@ -314,7 +314,7 @@ export default function ProjectPage() {
       
       {/* Empty State for Floorplans */}
       {(!currentProject.floorplans || currentProject.floorplans.length === 0) && (
-        <div className="text-center py-12 text-slate-400">
+        <div className="text-center py-12 text-slate-600 dark:text-slate-400">
           <Layers className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>Upload a floor plan PDF to get started</p>
         </div>

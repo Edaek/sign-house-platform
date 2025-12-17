@@ -123,14 +123,14 @@ export default function ExportPage() {
       <div className="mb-8">
         <Link 
           to={`/project/${projectId}`}
-          className="inline-flex items-center gap-1 text-slate-400 hover:text-white mb-4 transition-colors"
+          className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white mb-4 transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
           Back to Project
         </Link>
         
-        <h1 className="text-3xl font-display font-bold text-white">Export Data</h1>
-        <p className="text-slate-400 mt-1">
+        <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Export Data</h1>
+        <p className="text-slate-600 dark:text-slate-400 mt-1">
           Review and export extracted data from {currentProject?.name}
         </p>
       </div>
@@ -160,7 +160,7 @@ export default function ExportPage() {
             animate={{ opacity: 1, y: 0 }}
             className="card p-6"
           >
-            <h2 className="text-lg font-semibold text-white mb-4">Export Format</h2>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Export Format</h2>
             
             <div className="space-y-3">
               <button
@@ -169,17 +169,17 @@ export default function ExportPage() {
                   'w-full p-4 rounded-lg border-2 text-left transition-all',
                   exportFormat === 'excel'
                     ? 'border-sign-500 bg-sign-500/10'
-                    : 'border-slate-700 hover:border-slate-600'
+                    : 'border-slate-300 hover:border-slate-400 dark:border-slate-700 dark:hover:border-slate-600'
                 )}
               >
-                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3">
                   <FileSpreadsheet className={clsx(
                     'w-6 h-6',
-                    exportFormat === 'excel' ? 'text-sign-400' : 'text-slate-400'
+                    exportFormat === 'excel' ? 'text-sign-500 dark:text-sign-400' : 'text-slate-500 dark:text-slate-400'
                   )} />
                   <div>
-                    <p className="font-medium text-white">Excel (.xlsx)</p>
-                    <p className="text-sm text-slate-400">Uses template if uploaded</p>
+                    <p className="font-medium text-slate-900 dark:text-white">Excel (.xlsx)</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">Uses template if uploaded</p>
                   </div>
                 </div>
               </button>
@@ -190,17 +190,17 @@ export default function ExportPage() {
                   'w-full p-4 rounded-lg border-2 text-left transition-all',
                   exportFormat === 'csv'
                     ? 'border-sign-500 bg-sign-500/10'
-                    : 'border-slate-700 hover:border-slate-600'
+                    : 'border-slate-300 hover:border-slate-400 dark:border-slate-700 dark:hover:border-slate-600'
                 )}
               >
-                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3">
                   <FileText className={clsx(
                     'w-6 h-6',
-                    exportFormat === 'csv' ? 'text-sign-400' : 'text-slate-400'
+                    exportFormat === 'csv' ? 'text-sign-500 dark:text-sign-400' : 'text-slate-500 dark:text-slate-400'
                   )} />
                   <div>
-                    <p className="font-medium text-white">CSV (.csv)</p>
-                    <p className="text-sm text-slate-400">Simple comma-separated values</p>
+                    <p className="font-medium text-slate-900 dark:text-white">CSV (.csv)</p>
+                    <p className="text-sm text-slate-600 dark:text-slate-400">Simple comma-separated values</p>
                   </div>
                 </div>
               </button>
@@ -212,9 +212,9 @@ export default function ExportPage() {
                   type="checkbox"
                   checked={includeMetadata}
                   onChange={(e) => setIncludeMetadata(e.target.checked)}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sign-500 focus:ring-sign-500"
+                  className="w-4 h-4 rounded border-slate-300 bg-white dark:border-slate-600 dark:bg-slate-800 text-sign-500 focus:ring-sign-500"
                 />
-                <span className="text-slate-300">Include position metadata</span>
+                <span className="text-slate-700 dark:text-slate-300">Include position metadata</span>
               </label>
             </div>
             
@@ -234,26 +234,26 @@ export default function ExportPage() {
             transition={{ delay: 0.1 }}
             className="card p-6"
           >
-            <h2 className="text-lg font-semibold text-white mb-4">Summary</h2>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Summary</h2>
             
             <div className="space-y-3">
               <div className="flex justify-between">
-                <span className="text-slate-400">Total Items</span>
-                <span className="text-white font-medium">{preview?.total_items || 0}</span>
+                <span className="text-slate-600 dark:text-slate-400">Total Items</span>
+                <span className="text-slate-900 dark:text-white font-medium">{preview?.total_items || 0}</span>
               </div>
               {preview?.summary_stats && (
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Unique Items</span>
-                  <span className="text-emerald-400 font-medium">{preview.summary_stats.unique_items}</span>
+                  <span className="text-slate-600 dark:text-slate-400">Unique Items</span>
+                  <span className="text-emerald-500 dark:text-emerald-400 font-medium">{preview.summary_stats.unique_items}</span>
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-slate-400">Floors</span>
-                <span className="text-white font-medium">{currentProject?.floorplans?.length || 0}</span>
+                <span className="text-slate-600 dark:text-slate-400">Floors</span>
+                <span className="text-slate-900 dark:text-white font-medium">{currentProject?.floorplans?.length || 0}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Template</span>
-                <span className="text-white font-medium">
+                <span className="text-slate-600 dark:text-slate-400">Template</span>
+                <span className="text-slate-900 dark:text-white font-medium">
                   {currentProject?.template ? (
                     <span className="flex items-center gap-1 text-emerald-400">
                       <CheckCircle className="w-4 h-4" />
@@ -275,33 +275,33 @@ export default function ExportPage() {
           transition={{ delay: 0.2 }}
           className="lg:col-span-2 card overflow-hidden"
         >
-          <div className="p-4 border-b border-slate-700 flex items-center gap-3">
-            <Table className="w-5 h-5 text-slate-400" />
-            <h2 className="text-lg font-semibold text-white">Data Preview</h2>
+          <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center gap-3">
+            <Table className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Data Preview</h2>
           </div>
           
           <div className="overflow-auto max-h-[600px]">
             <table className="w-full">
-              <thead className="bg-slate-800/50 sticky top-0">
+              <thead className="bg-slate-100 dark:bg-slate-800/50 sticky top-0">
                 <tr>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">#</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Extracted Text</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Qty</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Confidence</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Source</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Floor</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">#</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Extracted Text</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Qty</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Confidence</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Source</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/50">
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-700/50">
                 {preview?.data.map((item, index) => (
-                  <tr key={index} className="hover:bg-slate-800/30">
-                    <td className="px-4 py-3 text-sm text-slate-300">
+                  <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
                       {item.floor_name}
                     </td>
-                    <td className="px-4 py-3 text-sm text-slate-400 font-mono">
+                    <td className="px-4 py-3 text-sm text-slate-600 dark:text-slate-400 font-mono">
                       {item.shape_index + 1}
                     </td>
-                    <td className="px-4 py-3 text-sm text-white font-mono">
+                    <td className="px-4 py-3 text-sm text-slate-900 dark:text-white font-mono">
                       <div className="flex items-center gap-2">
                         {item.text || <span className="text-slate-500">—</span>}
                         {item.merged_count && item.merged_count > 1 && (
@@ -315,13 +315,13 @@ export default function ExportPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm">
-                      <span className="text-white font-mono">
+                      <span className="text-slate-900 dark:text-white font-mono">
                         {item.quantity || 1}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm">
                       <div className="flex items-center gap-2">
-                        <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                        <div className="w-16 h-1.5 bg-slate-300 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div 
                             className={clsx(
                               'h-full rounded-full',
@@ -331,7 +331,7 @@ export default function ExportPage() {
                             style={{ width: `${item.confidence}%` }}
                           />
                         </div>
-                        <span className="text-slate-400 text-xs">{item.confidence}%</span>
+                        <span className="text-slate-600 dark:text-slate-400 text-xs">{item.confidence}%</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm">
@@ -367,30 +367,30 @@ export default function ExportPage() {
             transition={{ delay: 0.3 }}
             className="lg:col-span-3 card overflow-hidden"
           >
-            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Table className="w-5 h-5 text-slate-400" />
-                <h2 className="text-lg font-semibold text-white">Cross-Floor Summary</h2>
+                <Table className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Cross-Floor Summary</h2>
               </div>
-              <div className="text-sm text-slate-400">
+              <div className="text-sm text-slate-600 dark:text-slate-400">
                 {preview.summary_stats?.unique_items || 0} unique items across {preview.summary_stats?.total_floors || 0} floors
               </div>
             </div>
             
             <div className="overflow-auto max-h-[500px]">
               <table className="w-full">
-                <thead className="bg-slate-800/50 sticky top-0">
+                <thead className="bg-slate-100 dark:bg-slate-800/50 sticky top-0">
                   <tr>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Text</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Total Qty</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floors</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor Details</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Text</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Total Qty</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Floors</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-700 dark:text-slate-300">Floor Details</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-700/50">
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700/50">
                   {preview.summary.map((item, index) => (
-                    <tr key={index} className="hover:bg-slate-800/30">
-                      <td className="px-4 py-3 text-sm text-white font-mono">
+                    <tr key={index} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                      <td className="px-4 py-3 text-sm text-slate-900 dark:text-white font-mono">
                         {item.text || <span className="text-slate-500">—</span>}
                       </td>
                       <td className="px-4 py-3 text-sm">
@@ -400,9 +400,9 @@ export default function ExportPage() {
                       </td>
                       <td className="px-4 py-3 text-sm">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-slate-300">{item.floor_count} floor{item.floor_count !== 1 ? 's' : ''}</span>
+                          <span className="text-slate-700 dark:text-slate-300">{item.floor_count} floor{item.floor_count !== 1 ? 's' : ''}</span>
                           <span className="text-slate-500">•</span>
-                          <span className="text-slate-400 font-mono text-xs">
+                          <span className="text-slate-600 dark:text-slate-400 font-mono text-xs">
                             {item.floors.join(', ')}
                           </span>
                         </div>
@@ -412,11 +412,11 @@ export default function ExportPage() {
                           {item.floor_details.map((detail, idx) => (
                             <span
                               key={idx}
-                              className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-700/50 rounded text-xs"
+                              className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-200 dark:bg-slate-700/50 rounded text-xs"
                             >
-                              <span className="text-slate-300">{detail.floor_name}</span>
+                              <span className="text-slate-700 dark:text-slate-300">{detail.floor_name}</span>
                               <span className="text-slate-500">:</span>
-                              <span className="text-emerald-400 font-semibold">×{detail.quantity}</span>
+                              <span className="text-emerald-500 dark:text-emerald-400 font-semibold">×{detail.quantity}</span>
                             </span>
                           ))}
                         </div>

@@ -140,8 +140,9 @@ export default function EditorPage() {
       canvas.height = container.clientHeight
     }
     
-    // Clear canvas
-    ctx.fillStyle = '#1e293b'
+    // Clear canvas - use appropriate background color
+    const isDark = document.documentElement.classList.contains('dark')
+    ctx.fillStyle = isDark ? '#1e293b' : '#f8fafc'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
     
     // Draw image with transform
@@ -503,17 +504,17 @@ export default function EditorPage() {
   return (
     <div className="h-[calc(100vh-64px)] flex flex-col">
       {/* Top Bar */}
-      <div className="h-14 bg-slate-900 border-b border-slate-700 flex items-center justify-between px-4 sticky top-0 z-40">
+      <div className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 sticky top-0 z-40">
         <div className="flex items-center gap-4">
           <Link 
             to={`/project/${projectId}`}
-            className="flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
+            className="flex items-center gap-1 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
             Back
           </Link>
           
-          <div className="h-6 w-px bg-slate-700" />
+          <div className="h-6 w-px bg-slate-200 dark:bg-slate-700" />
           
           {isEditingFloorName ? (
             <div className="flex items-center gap-2">
@@ -546,7 +547,7 @@ export default function EditorPage() {
             </div>
           ) : (
             <div className="flex items-center gap-2 group">
-              <h2 className="font-medium text-white">
+              <h2 className="font-medium text-slate-900 dark:text-white">
                 {currentFloorplan?.floor_name}
               </h2>
               <button
@@ -554,14 +555,14 @@ export default function EditorPage() {
                   setIsEditingFloorName(true)
                   setEditedFloorName(currentFloorplan?.floor_name || '')
                 }}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors opacity-0 group-hover:opacity-100"
+                className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 rounded transition-colors opacity-0 group-hover:opacity-100"
                 title="Rename floor"
               >
                 <Edit3 className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => setShowDeleteConfirm(true)}
-                className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors opacity-0 group-hover:opacity-100"
+                className="p-1.5 text-slate-500 hover:text-red-500 hover:bg-red-50 dark:text-slate-400 dark:hover:text-red-400 dark:hover:bg-red-400/10 rounded transition-colors opacity-0 group-hover:opacity-100"
                 title="Delete floor"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -586,10 +587,10 @@ export default function EditorPage() {
           </Link>
           
           <div className="flex items-center gap-2 min-w-[120px] justify-center">
-            <span className="text-white font-medium text-sm">
+            <span className="text-slate-900 dark:text-white font-medium text-sm">
               {(currentIndex ?? 0) + 1}
             </span>
-            <span className="text-slate-500 text-sm">
+            <span className="text-slate-500 dark:text-slate-500 text-sm">
               of {currentProject?.floorplans?.length || 0}
             </span>
           </div>
@@ -619,12 +620,12 @@ export default function EditorPage() {
       
       <div className="flex-1 flex overflow-hidden">
         {/* Toolbar */}
-        <div className="w-14 bg-slate-900 border-r border-slate-700 flex flex-col items-center py-4 gap-2">
+        <div className="w-14 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 flex flex-col items-center py-4 gap-2">
           <button
             onClick={() => setTool('select')}
             className={clsx(
               'p-3 rounded-lg transition-colors',
-              tool === 'select' ? 'bg-sign-500 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+              tool === 'select' ? 'bg-sign-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
             )}
             title="Select (V)"
           >
@@ -635,18 +636,18 @@ export default function EditorPage() {
             onClick={() => setTool('draw')}
             className={clsx(
               'p-3 rounded-lg transition-colors',
-              tool === 'draw' ? 'bg-sign-500 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+              tool === 'draw' ? 'bg-sign-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
             )}
             title="Draw Region (D)"
           >
             <Square className="w-5 h-5" />
           </button>
           
-          <div className="h-px w-8 bg-slate-700 my-2" />
+          <div className="h-px w-8 bg-slate-200 dark:bg-slate-700 my-2" />
           
           <button
             onClick={() => setScale(s => Math.min(s * 1.2, 5))}
-            className="p-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-lg transition-colors"
+            className="p-3 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white rounded-lg transition-colors"
             title="Zoom In"
           >
             <ZoomIn className="w-5 h-5" />
@@ -654,7 +655,7 @@ export default function EditorPage() {
           
           <button
             onClick={() => setScale(s => Math.max(s * 0.8, 0.1))}
-            className="p-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-lg transition-colors"
+            className="p-3 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white rounded-lg transition-colors"
             title="Zoom Out"
           >
             <ZoomOut className="w-5 h-5" />
@@ -662,7 +663,7 @@ export default function EditorPage() {
           
           <button
             onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }) }}
-            className="p-3 text-slate-400 hover:bg-slate-800 hover:text-white rounded-lg transition-colors"
+            className="p-3 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white rounded-lg transition-colors"
             title="Reset View"
           >
             <Move className="w-5 h-5" />
@@ -672,7 +673,7 @@ export default function EditorPage() {
         {/* Canvas Area */}
         <div 
           ref={containerRef}
-          className="flex-1 relative overflow-hidden bg-slate-900"
+          className="flex-1 relative overflow-hidden bg-slate-50 dark:bg-slate-900"
         >
           <canvas
             ref={canvasRef}
@@ -713,17 +714,17 @@ export default function EditorPage() {
         </div>
         
         {/* Right Panel */}
-        <div className="w-80 bg-slate-900 border-l border-slate-700 flex flex-col">
+        <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col">
           {/* Actions */}
-          <div className="p-4 border-b border-slate-700">
-            <h3 className="font-medium text-white mb-3">Detection</h3>
+          <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+            <h3 className="font-medium text-slate-900 dark:text-white mb-3">Detection</h3>
             
             <div className="flex gap-2 mb-3">
               <button
                 onClick={() => setShapeType('auto')}
                 className={clsx(
                   'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                  shapeType === 'auto' ? 'bg-sign-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  shapeType === 'auto' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
                 Auto
@@ -732,7 +733,7 @@ export default function EditorPage() {
                 onClick={() => setShapeType('circle')}
                 className={clsx(
                   'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
-                  shapeType === 'circle' ? 'bg-sign-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  shapeType === 'circle' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
                 <Circle className="w-4 h-4" />
@@ -741,7 +742,7 @@ export default function EditorPage() {
                 onClick={() => setShapeType('rectangle')}
                 className={clsx(
                   'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
-                  shapeType === 'rectangle' ? 'bg-sign-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  shapeType === 'rectangle' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
                 <Square className="w-4 h-4" />
@@ -789,9 +790,9 @@ export default function EditorPage() {
           
           {/* Selected Shape Info */}
           {selectedData && (
-            <div className="p-4 border-b border-slate-700">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="font-medium text-white">Selected Shape</h3>
+                <h3 className="font-medium text-slate-900 dark:text-white">Selected Shape</h3>
                 <button
                   onClick={() => handleDeleteShape(selectedData.id)}
                   className="p-1.5 text-red-400 hover:bg-red-400/10 rounded transition-colors"
@@ -802,32 +803,32 @@ export default function EditorPage() {
               
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Type</span>
-                  <span className="text-white capitalize">{selectedData.shape_type}</span>
+                  <span className="text-slate-600 dark:text-slate-400">Type</span>
+                  <span className="text-slate-900 dark:text-white capitalize">{selectedData.shape_type}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Position</span>
-                  <span className="text-white font-mono text-xs">
+                  <span className="text-slate-600 dark:text-slate-400">Position</span>
+                  <span className="text-slate-900 dark:text-white font-mono text-xs">
                     {selectedData.x}, {selectedData.y}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-400">Size</span>
-                  <span className="text-white font-mono text-xs">
+                  <span className="text-slate-600 dark:text-slate-400">Size</span>
+                  <span className="text-slate-900 dark:text-white font-mono text-xs">
                     {selectedData.width} × {selectedData.height}
                   </span>
                 </div>
                 
                 <div className="pt-2">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-400">Extracted Text</span>
+                    <span className="text-slate-600 dark:text-slate-400">Extracted Text</span>
                     {editingText !== selectedData.id && (
                       <button
                         onClick={() => {
                           setEditingText(selectedData.id)
                           setEditText(selectedData.display_text || '')
                         }}
-                        className="p-1 text-slate-400 hover:text-white transition-colors"
+                        className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
@@ -857,7 +858,7 @@ export default function EditorPage() {
                       </button>
                     </div>
                   ) : (
-                    <p className="text-white bg-slate-800 rounded-lg p-2 font-mono text-xs">
+                    <p className="text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 rounded-lg p-2 font-mono text-xs">
                       {selectedData.display_text || <span className="text-slate-500">No text</span>}
                     </p>
                   )}
@@ -872,14 +873,14 @@ export default function EditorPage() {
                 {/* Quantity Field */}
                 <div className="pt-2">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-slate-400">Quantity</span>
+                    <span className="text-slate-600 dark:text-slate-400">Quantity</span>
                     {editingQuantity !== selectedData.id && (
                       <button
                         onClick={() => {
                           setEditingQuantity(selectedData.id)
                           setEditQuantity(String(selectedData.quantity || 1))
                         }}
-                        className="p-1 text-slate-400 hover:text-white transition-colors"
+                        className="p-1 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
@@ -911,7 +912,7 @@ export default function EditorPage() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span className="text-white bg-slate-800 rounded-lg px-3 py-2 font-mono text-xs">
+                      <span className="text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 rounded-lg px-3 py-2 font-mono text-xs">
                         {selectedData.quantity || 1}
                       </span>
                       {(selectedData.quantity || 1) > 1 && (
@@ -929,7 +930,7 @@ export default function EditorPage() {
           {/* Extracted Data List */}
           <div className="flex-1 overflow-auto">
             <div className="p-4">
-              <h3 className="font-medium text-white mb-3">
+              <h3 className="font-medium text-slate-900 dark:text-white mb-3">
                 Extracted Data ({currentFloorplan?.extracted_data?.length || 0})
               </h3>
               
@@ -950,14 +951,14 @@ export default function EditorPage() {
                         'p-3 rounded-lg cursor-pointer transition-colors',
                         selectedShape === data.id 
                           ? 'bg-sign-500/20 border border-sign-500/50' 
-                          : 'bg-slate-800 border border-transparent hover:border-slate-600'
+                          : 'bg-slate-100 dark:bg-slate-800 border border-transparent hover:border-slate-300 dark:hover:border-slate-600'
                       )}
                     >
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="w-6 h-6 bg-blueprint-900 rounded text-blueprint-400 text-xs font-bold flex items-center justify-center">
+                        <span className="w-6 h-6 bg-blueprint-100 dark:bg-blueprint-900 rounded text-blueprint-700 dark:text-blueprint-400 text-xs font-bold flex items-center justify-center">
                           {index + 1}
                         </span>
-                        <span className="text-xs text-slate-400 capitalize">{data.shape_type}</span>
+                        <span className="text-xs text-slate-600 dark:text-slate-400 capitalize">{data.shape_type}</span>
                         {data.is_manual && (
                           <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                             manual
@@ -977,7 +978,7 @@ export default function EditorPage() {
                           </span>
                         )}
                       </div>
-                      <p className="text-white text-sm font-mono truncate">
+                      <p className="text-slate-900 dark:text-white text-sm font-mono truncate">
                         {data.display_text || <span className="text-slate-500">No text</span>}
                       </p>
                     </motion.div>
@@ -995,24 +996,24 @@ export default function EditorPage() {
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-slate-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border border-slate-700"
+            className="bg-white dark:bg-slate-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border border-slate-200 dark:border-slate-700"
           >
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
                 <Trash2 className="w-5 h-5 text-red-400" />
               </div>
-              <h3 className="text-lg font-semibold text-white">Delete Floor</h3>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Delete Floor</h3>
             </div>
             
-            <p className="text-slate-300 mb-6">
-              Are you sure you want to delete <span className="font-semibold text-white">{currentFloorplan?.floor_name}</span>? 
+            <p className="text-slate-700 dark:text-slate-300 mb-6">
+              Are you sure you want to delete <span className="font-semibold text-slate-900 dark:text-white">{currentFloorplan?.floor_name}</span>? 
               This will permanently remove the floor and all its extracted data. This action cannot be undone.
             </p>
             
             <div className="flex gap-3 justify-end">
               <button
                 onClick={() => setShowDeleteConfirm(false)}
-                className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-colors"
+                className="px-4 py-2 bg-slate-200 text-slate-700 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 rounded-lg dark:hover:bg-slate-600 transition-colors"
               >
                 Cancel
               </button>

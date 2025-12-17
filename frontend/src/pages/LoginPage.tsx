@@ -29,7 +29,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex">
       {/* Left Panel - Branding */}
       <div className="hidden lg:flex lg:w-1/2 blueprint-bg relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-blueprint-950/90 to-blueprint-900/80" />
+        <div className="absolute inset-0 bg-gradient-to-br from-white/60 to-blueprint-100/80 dark:from-blueprint-950/90 dark:to-blueprint-900/80" />
         
         <div className="relative z-10 flex flex-col justify-center px-16">
           <motion.div
@@ -42,12 +42,12 @@ export default function LoginPage() {
                 <FolderOpen className="w-8 h-8 text-white" />
               </div>
               <div>
-                <h1 className="text-4xl font-display font-bold text-white">Sign House</h1>
-                <p className="text-blueprint-300 font-medium">Floor Plan Analysis</p>
+                <h1 className="text-4xl font-display font-bold text-slate-900 dark:text-white">Sign House</h1>
+                <p className="text-blueprint-700 dark:text-blueprint-300 font-medium">Floor Plan Analysis</p>
               </div>
             </div>
             
-            <p className="text-xl text-blueprint-200 leading-relaxed max-w-md">
+            <p className="text-xl text-slate-700 dark:text-blueprint-200 leading-relaxed max-w-md">
               Extract room labels, areas, and data from floor plans using 
               computer vision and OCR technology.
             </p>
@@ -67,7 +67,7 @@ export default function LoginPage() {
       </div>
       
       {/* Right Panel - Login Form */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-slate-900">
+      <div className="flex-1 flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-900">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -79,20 +79,20 @@ export default function LoginPage() {
             <div className="w-12 h-12 bg-gradient-to-br from-sign-500 to-sign-600 rounded-xl flex items-center justify-center">
               <FolderOpen className="w-6 h-6 text-white" />
             </div>
-            <span className="text-2xl font-display font-bold text-white">Sign House</span>
+            <span className="text-2xl font-display font-bold text-slate-900 dark:text-white">Sign House</span>
           </div>
           
           <div className="card p-8">
-            <h2 className="text-2xl font-display font-semibold text-white mb-2">
+            <h2 className="text-2xl font-display font-semibold text-slate-900 dark:text-white mb-2">
               Welcome back
             </h2>
-            <p className="text-slate-400 mb-8">
+            <p className="text-slate-600 dark:text-slate-400 mb-8">
               Sign in to continue to your projects
             </p>
             
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label htmlFor="username" className="block text-sm font-medium text-slate-300 mb-2">
+                <label htmlFor="username" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Username or Email
                 </label>
                 <input
@@ -108,7 +108,7 @@ export default function LoginPage() {
               </div>
               
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-2">
+                <label htmlFor="password" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                   Password
                 </label>
                 <div className="relative">
@@ -125,7 +125,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
@@ -158,9 +158,9 @@ export default function LoginPage() {
               </button>
             </form>
             
-            <p className="mt-6 text-center text-slate-400">
+            <p className="mt-6 text-center text-slate-600 dark:text-slate-400">
               Don't have an account?{' '}
-              <Link to="/register" className="text-sign-400 hover:text-sign-300 font-medium">
+              <Link to="/register" className="text-sign-500 hover:text-sign-400 dark:text-sign-400 dark:hover:text-sign-300 font-medium">
                 Create one
               </Link>
             </p>
@@ -175,7 +175,7 @@ function Feature({ text }: { text: string }) {
   return (
     <div className="flex items-center gap-3">
       <div className="w-2 h-2 bg-sign-500 rounded-full" />
-      <span className="text-blueprint-200">{text}</span>
+      <span className="text-slate-700 dark:text-blueprint-200">{text}</span>
     </div>
   )
 }
