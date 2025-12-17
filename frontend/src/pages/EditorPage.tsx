@@ -273,12 +273,23 @@ export default function EditorPage() {
       setIsDrawing(true)
       setDrawingRect({ startX: coords.x, startY: coords.y, width: 0, height: 0 })
     } else {
-      // Check if clicked on a shape
+      // Check if clicked on a shape (including all merged bounding boxes)
       const clickedShape = currentFloorplan?.extracted_data?.find(shape => {
-        return coords.x >= shape.x && 
-               coords.x <= shape.x + shape.width &&
-               coords.y >= shape.y && 
-               coords.y <= shape.y + shape.height
+        // If shape has merged bounding boxes, check all of them
+        const boxesToCheck = shape.all_bounding_boxes || [{
+          x: shape.x,
+          y: shape.y,
+          width: shape.width,
+          height: shape.height
+        }]
+        
+        // Check if click is within any of the boxes
+        return boxesToCheck.some(box => 
+          coords.x >= box.x && 
+          coords.x <= box.x + box.width &&
+          coords.y >= box.y && 
+          coords.y <= box.y + box.height
+        )
       })
       
       if (clickedShape) {
