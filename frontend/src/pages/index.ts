@@ -4,4 +4,6 @@ export { default as DashboardPage } from './DashboardPage'
 export { default as ProjectPage } from './ProjectPage'
 export { default as EditorPage } from './EditorPage'
 export { default as ExportPage } from './ExportPage'
+export { default as AdminPage } from './AdminPage'
+export { default as AuditLogsPage } from './AuditLogsPage'
 

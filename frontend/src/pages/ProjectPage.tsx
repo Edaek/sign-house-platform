@@ -11,9 +11,11 @@ import {
   Clock,
   AlertCircle,
   Download,
-  ChevronLeft
+  ChevronLeft,
+  Users
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
+import ProjectMembersModal from '../components/ProjectMembersModal'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
@@ -23,6 +25,7 @@ export default function ProjectPage() {
   const { currentProject, fetchProject, uploadTemplate, uploadFloorplan, isLoading } = useProjectStore()
   const [uploadingTemplate, setUploadingTemplate] = useState(false)
   const [uploadingFloorplan, setUploadingFloorplan] = useState(false)
+  const [showMembersModal, setShowMembersModal] = useState(false)
   
   const templateInputRef = useRef<HTMLInputElement>(null)
   const floorplanInputRef = useRef<HTMLInputElement>(null)
@@ -123,18 +126,28 @@ export default function ProjectPage() {
             )}
           </div>
           
-          {currentProject.floorplans && currentProject.floorplans.length > 0 && (
-            <Link
-              to={`/project/${projectId}/export`}
-              className={clsx(
-                'btn flex items-center gap-2',
-                allFloorsCompleted ? 'btn-primary' : 'btn-secondary'
-              )}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowMembersModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
             >
-              <Download className="w-5 h-5" />
-              Export Data
-            </Link>
-          )}
+              <Users className="w-4 h-4" />
+              Members
+            </button>
+            
+            {currentProject.floorplans && currentProject.floorplans.length > 0 && (
+              <Link
+                to={`/project/${projectId}/export`}
+                className={clsx(
+                  'btn flex items-center gap-2',
+                  allFloorsCompleted ? 'btn-primary' : 'btn-secondary'
+                )}
+              >
+                <Download className="w-5 h-5" />
+                Export Data
+              </Link>
+            )}
+          </div>
         </div>
       </div>
       
@@ -318,6 +331,16 @@ export default function ProjectPage() {
           <Layers className="w-12 h-12 mx-auto mb-4 opacity-50" />
           <p>Upload a floor plan PDF to get started</p>
         </div>
+      )}
+      
+      {/* Project Members Modal */}
+      {currentProject && projectId && (
+        <ProjectMembersModal
+          projectId={projectId}
+          projectName={currentProject.name}
+          isOpen={showMembersModal}
+          onClose={() => setShowMembersModal(false)}
+        />
       )}
     </div>
   )

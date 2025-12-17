@@ -7,6 +7,7 @@ from flask_jwt_extended import (
 from bson import ObjectId
 from app import mongo
 from app.models import create_user_doc, check_user_password, user_to_dict
+from app.services.audit_service import log_action
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -33,10 +34,23 @@ def register():
     if mongo.db.users.find_one({'email': email}):
         return jsonify({'error': 'Email already exists'}), 409
     
+    # Check if this is the first user (make them admin)
+    user_count = mongo.db.users.count_documents({})
+    role = 'admin' if user_count == 0 else 'user'
+    
     # Create new user
-    user_doc = create_user_doc(username, email, password)
+    user_doc = create_user_doc(username, email, password, role=role)
     result = mongo.db.users.insert_one(user_doc)
     user_doc['_id'] = result.inserted_id
+    
+    # Log the registration
+    log_action(
+        user_id=str(result.inserted_id),
+        action='user_registered',
+        resource_type='user',
+        resource_id=str(result.inserted_id),
+        details={'username': username, 'role': role}
+    )
     
     # Create access token
     access_token = create_access_token(identity=str(result.inserted_id))
@@ -78,6 +92,15 @@ def login():
     
     # Create access token
     access_token = create_access_token(identity=str(user['_id']))
+    
+    # Log the login
+    log_action(
+        user_id=str(user['_id']),
+        action='login',
+        resource_type='user',
+        resource_id=str(user['_id']),
+        details={'username': user['username']}
+    )
     
     return jsonify({
         'message': 'Login successful',

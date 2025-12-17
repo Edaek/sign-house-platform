@@ -8,14 +8,17 @@ import {
   Layers,
   ArrowRight,
   Trash2,
-  MoreVertical
+  MoreVertical,
+  User
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
+import { useAuthStore } from '../store/authStore'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 export default function DashboardPage() {
   const { projects, fetchProjects, createProject, deleteProject, isLoading } = useProjectStore()
+  const { isManager } = useAuthStore()
   const navigate = useNavigate()
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectName, setNewProjectName] = useState('')
@@ -195,6 +198,12 @@ export default function DashboardPage() {
                     <p className="text-slate-600 dark:text-slate-400 text-sm mt-1 line-clamp-2">
                       {project.description}
                     </p>
+                  )}
+                  {isManager() && (project as any).owner_username && (
+                    <div className="flex items-center gap-1 mt-2 text-xs text-slate-500 dark:text-slate-400">
+                      <User className="w-3 h-3" />
+                      <span>{(project as any).owner_username}</span>
+                    </div>
                   )}
                 </div>
                 

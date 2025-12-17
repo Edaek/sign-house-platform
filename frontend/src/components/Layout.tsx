@@ -6,16 +6,19 @@ import {
   LogOut, 
   User,
   Menu,
-  X
+  X,
+  Users,
+  FileText
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '../store/authStore'
 import { useThemeStore } from '../store/themeStore'
 import ThemeToggle from './ThemeToggle'
+import RoleBadge from './RoleBadge'
 import clsx from 'clsx'
 
 export default function Layout() {
-  const { user, logout } = useAuthStore()
+  const { user, logout, isAdmin, isManager } = useAuthStore()
   const { initTheme } = useThemeStore()
   const navigate = useNavigate()
   const location = useLocation()
@@ -31,8 +34,16 @@ export default function Layout() {
   }
   
   const navItems = [
-    { path: '/', icon: Home, label: 'Dashboard' },
+    { path: '/', icon: Home, label: isManager() ? 'All Projects' : 'Dashboard' },
   ]
+  
+  // Add admin-only navigation items
+  if (isAdmin()) {
+    navItems.push(
+      { path: '/admin', icon: Users, label: 'User Management' },
+      { path: '/audit-logs', icon: FileText, label: 'Audit Logs' }
+    )
+  }
   
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
@@ -73,9 +84,10 @@ export default function Layout() {
           
           {/* User Menu */}
           <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 text-slate-600 dark:text-slate-400">
+            <div className="hidden sm:flex items-center gap-3 text-slate-600 dark:text-slate-400">
               <User className="w-4 h-4" />
               <span className="text-sm">{user?.username}</span>
+              {user && <RoleBadge role={user.role} size="sm" />}
             </div>
             
             <ThemeToggle />

@@ -7,6 +7,8 @@ import DashboardPage from './pages/DashboardPage'
 import ProjectPage from './pages/ProjectPage'
 import EditorPage from './pages/EditorPage'
 import ExportPage from './pages/ExportPage'
+import AdminPage from './pages/AdminPage'
+import AuditLogsPage from './pages/AuditLogsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -33,6 +35,8 @@ function App() {
         <Route path="project/:projectId" element={<ProjectPage />} />
         <Route path="project/:projectId/floor/:floorId" element={<EditorPage />} />
         <Route path="project/:projectId/export" element={<ExportPage />} />
+        <Route path="admin" element={<AdminPage />} />
+        <Route path="audit-logs" element={<AuditLogsPage />} />
       </Route>
       
       <Route path="*" element={<Navigate to="/" replace />} />

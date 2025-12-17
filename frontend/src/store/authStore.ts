@@ -2,10 +2,13 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import api from '../lib/api'
 
-interface User {
+export type UserRole = 'admin' | 'manager' | 'user'
+
+export interface User {
   id: string
   username: string
   email: string
+  role: UserRole
   created_at: string
   is_active: boolean
 }
@@ -22,6 +25,15 @@ interface AuthState {
   logout: () => void
   fetchUser: () => Promise<void>
   clearError: () => void
+  
+  // Permission checking methods
+  isAdmin: () => boolean
+  isManager: () => boolean
+  canAccessAllProjects: () => boolean
+  canManageUsers: () => boolean
+  canViewAuditLogs: () => boolean
+  canAccessProject: (projectOwnerId: string) => boolean
+  canModifyProject: (projectOwnerId: string) => boolean
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -104,7 +116,51 @@ export const useAuthStore = create<AuthState>()(
         }
       },
       
-      clearError: () => set({ error: null })
+      clearError: () => set({ error: null }),
+      
+      // Permission checking methods
+      isAdmin: () => {
+        const { user } = get()
+        return user?.role === 'admin'
+      },
+      
+      isManager: () => {
+        const { user } = get()
+        return user?.role === 'admin' || user?.role === 'manager'
+      },
+      
+      canAccessAllProjects: () => {
+        const { user } = get()
+        return user?.role === 'admin' || user?.role === 'manager'
+      },
+      
+      canManageUsers: () => {
+        const { user } = get()
+        return user?.role === 'admin'
+      },
+      
+      canViewAuditLogs: () => {
+        const { user } = get()
+        return user?.role === 'admin'
+      },
+      
+      canAccessProject: (projectOwnerId: string) => {
+        const { user } = get()
+        if (!user) return false
+        // Admins and managers can access all projects
+        if (user.role === 'admin' || user.role === 'manager') return true
+        // Regular users can only access their own projects
+        return user.id === projectOwnerId
+      },
+      
+      canModifyProject: (projectOwnerId: string) => {
+        const { user } = get()
+        if (!user) return false
+        // Admins can modify any project
+        if (user.role === 'admin') return true
+        // Project owners can modify their own projects
+        return user.id === projectOwnerId
+      }
     }),
     {
       name: 'auth-storage',

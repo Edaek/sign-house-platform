@@ -6,6 +6,20 @@ from bson import ObjectId
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
+__all__ = [
+    'serialize_doc',
+    'create_user_doc',
+    'check_user_password',
+    'user_to_dict',
+    'create_project_doc',
+    'create_template_doc',
+    'create_floorplan_doc',
+    'create_extracted_data_doc',
+    'create_audit_log_doc',
+    'create_project_member_doc'
+]
+
+
 def serialize_doc(doc):
     """Convert MongoDB document to JSON-serializable dict."""
     if doc is None:
@@ -32,12 +46,15 @@ def serialize_doc(doc):
     return result
 
 
-def create_user_doc(username, email, password):
+def create_user_doc(username, email, password, role='user'):
     """Create a user document."""
     return {
         'username': username,
         'email': email,
         'password_hash': generate_password_hash(password, method='pbkdf2:sha256'),
+        'role': role,  # 'admin', 'manager', or 'user'
+        'role_changed_at': None,
+        'role_assigned_by': None,
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow(),
         'is_active': True
@@ -57,6 +74,7 @@ def user_to_dict(user_doc):
         'id': str(user_doc['_id']),
         'username': user_doc['username'],
         'email': user_doc['email'],
+        'role': user_doc.get('role', 'user'),
         'created_at': user_doc['created_at'].isoformat(),
         'is_active': user_doc.get('is_active', True)
     }
@@ -122,4 +140,29 @@ def create_extracted_data_doc(shape_index, shape_type, x, y, width, height, floo
         'floorplan_id': ObjectId(floorplan_id),
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
+    }
+
+
+def create_audit_log_doc(user_id, action, resource_type=None, resource_id=None, details=None, ip_address=None, user_agent=None):
+    """Create an audit log document."""
+    return {
+        'user_id': ObjectId(user_id) if user_id else None,
+        'action': action,
+        'resource_type': resource_type,
+        'resource_id': str(resource_id) if resource_id else None,
+        'details': details or {},
+        'ip_address': ip_address,
+        'user_agent': user_agent,
+        'timestamp': datetime.utcnow()
+    }
+
+
+def create_project_member_doc(project_id, user_id, role='member', added_by=None):
+    """Create a project member document."""
+    return {
+        'project_id': ObjectId(project_id),
+        'user_id': ObjectId(user_id),
+        'role': role,  # 'member' for now (can be extended)
+        'added_by': ObjectId(added_by) if added_by else None,
+        'added_at': datetime.utcnow()
     }
