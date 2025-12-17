@@ -55,7 +55,17 @@ def get_project_full_details(project):
     result['floorplans'] = []
     for fp in floorplans:
         fp_dict = serialize_doc(fp)
-        fp_dict['data_count'] = mongo.db.extracted_data.count_documents({'floorplan_id': fp['_id']})
+        
+        # Get extracted data with display_text
+        extracted = list(mongo.db.extracted_data.find({'floorplan_id': fp['_id']}).sort('shape_index', 1))
+        extracted_with_display = []
+        for e in extracted:
+            e_dict = serialize_doc(e)
+            e_dict['display_text'] = e.get('manual_text') or e.get('extracted_text')
+            extracted_with_display.append(e_dict)
+        
+        fp_dict['extracted_data'] = extracted_with_display
+        fp_dict['data_count'] = len(extracted)
         result['floorplans'].append(fp_dict)
     
     result['floorplan_count'] = len(floorplans)
@@ -354,7 +364,15 @@ def get_floorplans(project_id):
         fp_dict = serialize_doc(fp)
         # Get extracted data
         extracted = list(mongo.db.extracted_data.find({'floorplan_id': fp['_id']}).sort('shape_index', 1))
-        fp_dict['extracted_data'] = [serialize_doc(e) for e in extracted]
+        
+        # Add display_text field (manual_text takes precedence over extracted_text)
+        extracted_with_display = []
+        for e in extracted:
+            e_dict = serialize_doc(e)
+            e_dict['display_text'] = e.get('manual_text') or e.get('extracted_text')
+            extracted_with_display.append(e_dict)
+        
+        fp_dict['extracted_data'] = extracted_with_display
         fp_dict['data_count'] = len(extracted)
         result.append(fp_dict)
     
@@ -391,7 +409,15 @@ def get_floorplan(project_id, floorplan_id):
     
     fp_dict = serialize_doc(floorplan)
     extracted = list(mongo.db.extracted_data.find({'floorplan_id': floorplan['_id']}).sort('shape_index', 1))
-    fp_dict['extracted_data'] = [serialize_doc(e) for e in extracted]
+    
+    # Add display_text field (manual_text takes precedence over extracted_text)
+    extracted_with_display = []
+    for e in extracted:
+        e_dict = serialize_doc(e)
+        e_dict['display_text'] = e.get('manual_text') or e.get('extracted_text')
+        extracted_with_display.append(e_dict)
+    
+    fp_dict['extracted_data'] = extracted_with_display
     fp_dict['data_count'] = len(extracted)
     
     return jsonify({'floorplan': fp_dict}), 200
@@ -439,7 +465,17 @@ def update_floorplan(project_id, floorplan_id):
     floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
     
     fp_dict = serialize_doc(floorplan)
-    fp_dict['data_count'] = mongo.db.extracted_data.count_documents({'floorplan_id': floorplan['_id']})
+    
+    # Get extracted data with display_text
+    extracted = list(mongo.db.extracted_data.find({'floorplan_id': floorplan['_id']}).sort('shape_index', 1))
+    extracted_with_display = []
+    for e in extracted:
+        e_dict = serialize_doc(e)
+        e_dict['display_text'] = e.get('manual_text') or e.get('extracted_text')
+        extracted_with_display.append(e_dict)
+    
+    fp_dict['extracted_data'] = extracted_with_display
+    fp_dict['data_count'] = len(extracted)
     
     return jsonify({
         'message': 'Floorplan updated successfully',
