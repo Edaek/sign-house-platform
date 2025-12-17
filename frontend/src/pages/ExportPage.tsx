@@ -1,0 +1,326 @@
+import { useEffect, useState } from 'react'
+import { useParams, Link } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { 
+  ChevronLeft,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  CheckCircle,
+  AlertTriangle,
+  Table
+} from 'lucide-react'
+import { useProjectStore } from '../store/projectStore'
+import api from '../lib/api'
+import toast from 'react-hot-toast'
+import clsx from 'clsx'
+
+interface ExportPreview {
+  project: {
+    id: string
+    name: string
+    status: string
+  }
+  columns: { name: string; column: number; letter: string }[]
+  data: {
+    floor_number: number
+    floor_name: string
+    shape_index: number
+    text: string
+    confidence: number
+    is_manual: boolean
+  }[]
+  total_items: number
+}
+
+export default function ExportPage() {
+  const { projectId } = useParams<{ projectId: string }>()
+  const { currentProject, fetchProject, isLoading: projectLoading } = useProjectStore()
+  const [preview, setPreview] = useState<ExportPreview | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
+  const [includeMetadata, setIncludeMetadata] = useState(true)
+  
+  useEffect(() => {
+    if (projectId) {
+      fetchProject(projectId)
+      fetchPreview()
+    }
+  }, [projectId])
+  
+  const fetchPreview = async () => {
+    if (!projectId) return
+    
+    setIsLoading(true)
+    try {
+      const response = await api.get(`/export/preview/${projectId}`)
+      setPreview(response.data)
+    } catch (error) {
+      toast.error('Failed to load export preview')
+    }
+    setIsLoading(false)
+  }
+  
+  const handleExport = async () => {
+    if (!projectId) return
+    
+    try {
+      const endpoint = exportFormat === 'excel' 
+        ? `/export/excel/${projectId}`
+        : `/export/csv/${projectId}`
+      
+      const response = await api.post(endpoint, 
+        { include_metadata: includeMetadata },
+        { responseType: 'blob' }
+      )
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `${currentProject?.name || 'export'}.${exportFormat === 'excel' ? 'xlsx' : 'csv'}`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Export downloaded!')
+    } catch {
+      toast.error('Export failed')
+    }
+  }
+  
+  const incompleteFoors = currentProject?.floorplans?.filter(fp => fp.status !== 'completed') || []
+  
+  if (isLoading && !preview) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
+      </div>
+    )
+  }
+  
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-8">
+      {/* Header */}
+      <div className="mb-8">
+        <Link 
+          to={`/project/${projectId}`}
+          className="inline-flex items-center gap-1 text-slate-400 hover:text-white mb-4 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to Project
+        </Link>
+        
+        <h1 className="text-3xl font-display font-bold text-white">Export Data</h1>
+        <p className="text-slate-400 mt-1">
+          Review and export extracted data from {currentProject?.name}
+        </p>
+      </div>
+      
+      {/* Warning for incomplete floors */}
+      {incompleteFoors.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-3"
+        >
+          <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-amber-200 font-medium">Some floors are not completed</p>
+            <p className="text-amber-200/70 text-sm mt-1">
+              {incompleteFoors.length} floor(s) still pending: {incompleteFoors.map(f => f.floor_name).join(', ')}
+            </p>
+          </div>
+        </motion.div>
+      )}
+      
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Export Options */}
+        <div className="lg:col-span-1 space-y-6">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="card p-6"
+          >
+            <h2 className="text-lg font-semibold text-white mb-4">Export Format</h2>
+            
+            <div className="space-y-3">
+              <button
+                onClick={() => setExportFormat('excel')}
+                className={clsx(
+                  'w-full p-4 rounded-lg border-2 text-left transition-all',
+                  exportFormat === 'excel'
+                    ? 'border-sign-500 bg-sign-500/10'
+                    : 'border-slate-700 hover:border-slate-600'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <FileSpreadsheet className={clsx(
+                    'w-6 h-6',
+                    exportFormat === 'excel' ? 'text-sign-400' : 'text-slate-400'
+                  )} />
+                  <div>
+                    <p className="font-medium text-white">Excel (.xlsx)</p>
+                    <p className="text-sm text-slate-400">Uses template if uploaded</p>
+                  </div>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => setExportFormat('csv')}
+                className={clsx(
+                  'w-full p-4 rounded-lg border-2 text-left transition-all',
+                  exportFormat === 'csv'
+                    ? 'border-sign-500 bg-sign-500/10'
+                    : 'border-slate-700 hover:border-slate-600'
+                )}
+              >
+                <div className="flex items-center gap-3">
+                  <FileText className={clsx(
+                    'w-6 h-6',
+                    exportFormat === 'csv' ? 'text-sign-400' : 'text-slate-400'
+                  )} />
+                  <div>
+                    <p className="font-medium text-white">CSV (.csv)</p>
+                    <p className="text-sm text-slate-400">Simple comma-separated values</p>
+                  </div>
+                </div>
+              </button>
+            </div>
+            
+            <div className="mt-6">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeMetadata}
+                  onChange={(e) => setIncludeMetadata(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-sign-500 focus:ring-sign-500"
+                />
+                <span className="text-slate-300">Include position metadata</span>
+              </label>
+            </div>
+            
+            <button
+              onClick={handleExport}
+              className="btn btn-primary w-full mt-6 flex items-center justify-center gap-2"
+            >
+              <Download className="w-5 h-5" />
+              Download {exportFormat === 'excel' ? 'Excel' : 'CSV'}
+            </button>
+          </motion.div>
+          
+          {/* Summary */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+            className="card p-6"
+          >
+            <h2 className="text-lg font-semibold text-white mb-4">Summary</h2>
+            
+            <div className="space-y-3">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Total Items</span>
+                <span className="text-white font-medium">{preview?.total_items || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Floors</span>
+                <span className="text-white font-medium">{currentProject?.floorplans?.length || 0}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Template</span>
+                <span className="text-white font-medium">
+                  {currentProject?.template ? (
+                    <span className="flex items-center gap-1 text-emerald-400">
+                      <CheckCircle className="w-4 h-4" />
+                      Loaded
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">None</span>
+                  )}
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+        
+        {/* Data Preview */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="lg:col-span-2 card overflow-hidden"
+        >
+          <div className="p-4 border-b border-slate-700 flex items-center gap-3">
+            <Table className="w-5 h-5 text-slate-400" />
+            <h2 className="text-lg font-semibold text-white">Data Preview</h2>
+          </div>
+          
+          <div className="overflow-auto max-h-[600px]">
+            <table className="w-full">
+              <thead className="bg-slate-800/50 sticky top-0">
+                <tr>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">#</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Extracted Text</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Confidence</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Source</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/50">
+                {preview?.data.map((item, index) => (
+                  <tr key={index} className="hover:bg-slate-800/30">
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      {item.floor_name}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-400 font-mono">
+                      {item.shape_index + 1}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-white font-mono">
+                      {item.text || <span className="text-slate-500">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <div className="flex items-center gap-2">
+                        <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                          <div 
+                            className={clsx(
+                              'h-full rounded-full',
+                              item.confidence > 80 ? 'bg-emerald-500' :
+                              item.confidence > 50 ? 'bg-amber-500' : 'bg-red-500'
+                            )}
+                            style={{ width: `${item.confidence}%` }}
+                          />
+                        </div>
+                        <span className="text-slate-400 text-xs">{item.confidence}%</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <span className={clsx(
+                        'px-2 py-0.5 rounded text-xs font-medium',
+                        item.is_manual 
+                          ? 'bg-sign-500/20 text-sign-400' 
+                          : 'bg-blue-500/20 text-blue-400'
+                      )}>
+                        {item.is_manual ? 'Manual' : 'OCR'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                
+                {(!preview?.data || preview.data.length === 0) && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-12 text-center text-slate-500">
+                      No data to export. Process floor plans first.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  )
+}
+
