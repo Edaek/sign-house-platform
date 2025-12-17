@@ -126,12 +126,14 @@ export default function Layout() {
         <Outlet />
       </main>
       
-      {/* Footer */}
-      <footer className="py-6 border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 text-center text-slate-500 text-sm">
-          © {new Date().getFullYear()} Sign House. Floor Plan Analysis Tool.
-        </div>
-      </footer>
+      {/* Footer - hidden on editor pages */}
+      {!location.pathname.includes('/floor/') && (
+        <footer className="py-6 border-t border-slate-800">
+          <div className="max-w-7xl mx-auto px-4 text-center text-slate-500 text-sm">
+            © {new Date().getFullYear()} Sign House. Floor Plan Analysis Tool.
+          </div>
+        </footer>
+      )}
     </div>
   )
 }

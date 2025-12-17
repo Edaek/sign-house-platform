@@ -492,7 +492,7 @@ export default function EditorPage() {
   return (
     <div className="h-[calc(100vh-64px)] flex flex-col">
       {/* Top Bar */}
-      <div className="h-14 bg-slate-900 border-b border-slate-700 flex items-center justify-between px-4">
+      <div className="h-14 bg-slate-900 border-b border-slate-700 flex items-center justify-between px-4 sticky top-0 z-40">
         <div className="flex items-center gap-4">
           <Link 
             to={`/project/${projectId}`}

@@ -17,6 +17,7 @@ A web application for extracting text data from floor plans using computer visio
 ## Tech Stack
 
 ### Backend
+
 - **Flask** - Python web framework
 - **Flask-PyMongo** - MongoDB integration
 - **MongoDB** - NoSQL Database
@@ -27,6 +28,7 @@ A web application for extracting text data from floor plans using computer visio
 - **JWT** - Authentication
 
 ### Frontend
+
 - **React 18** - UI library
 - **TypeScript** - Type safety
 - **Vite** - Build tool
@@ -45,11 +47,13 @@ A web application for extracting text data from floor plans using computer visio
 ### Installing Tesseract
 
 **macOS:**
+
 ```bash
 brew install tesseract
 ```
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt-get install tesseract-ocr
 ```
@@ -60,6 +64,7 @@ Download from: https://github.com/UB-Mannheim/tesseract/wiki
 ## Installation
 
 ### 1. Clone the repository
+
 ```bash
 git clone <repository-url>
 cd sign-house-v3
@@ -106,29 +111,35 @@ docker run -d -p 27017:27017 --name mongodb mongo:7.0
 ### Development Mode
 
 **Terminal 1 - Backend:**
+
 ```bash
 cd backend
 source venv/bin/activate
 python run.py
 ```
+
 Backend runs on: http://localhost:5000
 
 **Terminal 2 - Frontend:**
+
 ```bash
 cd frontend
 npm run dev
 ```
+
 Frontend runs on: http://localhost:3000
 
 ### Production Build
 
 **Backend:**
+
 ```bash
 cd backend
 gunicorn -w 4 -b 0.0.0.0:5000 "app:create_app('production')"
 ```
 
 **Frontend:**
+
 ```bash
 cd frontend
 npm run build
@@ -138,17 +149,22 @@ npm run build
 ## Usage Guide
 
 ### 1. Create Account / Login
+
 Register a new account or login with existing credentials.
 
 ### 2. Create a Project
+
 Click "New Project" and give it a name and optional description.
 
 ### 3. Upload Files
+
 - **Excel Template** (optional): Upload an Excel file with your desired column headers
 - **Floor Plan PDF**: Upload your floor plan PDF (can have multiple pages)
 
 ### 4. Process Floor Plans
+
 For each floor:
+
 1. Click "Process" to open the editor
 2. Click "Detect Shapes" to automatically find circles or rectangles
 3. Click "Run OCR" to extract text from all detected shapes
@@ -157,7 +173,9 @@ For each floor:
 6. Click "Mark Complete" to proceed to the next floor
 
 ### 5. Export Data
+
 Once all floors are processed:
+
 1. Go to the Export page
 2. Choose Excel or CSV format
 3. Download your data
@@ -192,11 +210,13 @@ sign-house-v3/
 ## API Endpoints
 
 ### Authentication
+
 - `POST /api/auth/register` - Register new user
 - `POST /api/auth/login` - Login
 - `GET /api/auth/me` - Get current user
 
 ### Projects
+
 - `GET /api/projects` - List projects
 - `POST /api/projects` - Create project
 - `GET /api/projects/:id` - Get project details
@@ -206,12 +226,14 @@ sign-house-v3/
 - `POST /api/projects/:id/floorplan` - Upload floor plan
 
 ### Processing
+
 - `POST /api/processing/detect/:floorplan_id` - Detect shapes
 - `POST /api/processing/ocr/:floorplan_id` - Run OCR
 - `POST /api/processing/ocr-region/:floorplan_id` - OCR manual region
 - `GET /api/processing/image/:floorplan_id` - Get floor plan image
 
 ### Export
+
 - `GET /api/export/preview/:project_id` - Preview export data
 - `POST /api/export/excel/:project_id` - Export to Excel
 - `POST /api/export/csv/:project_id` - Export to CSV
@@ -220,13 +242,13 @@ sign-house-v3/
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `FLASK_CONFIG` | Config environment | `development` |
-| `SECRET_KEY` | Flask secret key | - |
-| `JWT_SECRET_KEY` | JWT signing key | - |
-| `MONGO_URI` | MongoDB connection URI | `mongodb://localhost:27017/signhouse_dev` |
-| `TESSERACT_CMD` | Tesseract path | `/usr/local/bin/tesseract` |
+| Variable         | Description            | Default                                   |
+| ---------------- | ---------------------- | ----------------------------------------- |
+| `FLASK_CONFIG`   | Config environment     | `development`                             |
+| `SECRET_KEY`     | Flask secret key       | -                                         |
+| `JWT_SECRET_KEY` | JWT signing key        | -                                         |
+| `MONGO_URI`      | MongoDB connection URI | `mongodb://localhost:27017/signhouse_dev` |
+| `TESSERACT_CMD`  | Tesseract path         | `/usr/local/bin/tesseract`                |
 
 ## Shape Detection Tips
 
@@ -238,13 +260,17 @@ sign-house-v3/
 ## Troubleshooting
 
 ### Tesseract not found
+
 Ensure Tesseract is installed and in your PATH, or set the `TESSERACT_CMD` environment variable.
 
 ### Database connection error
+
 Verify MongoDB is running and the `MONGO_URI` is correct.
 
 ### PDF processing fails
+
 Install poppler for pdf2image:
+
 - macOS: `brew install poppler`
 - Ubuntu: `apt-get install poppler-utils`
 
