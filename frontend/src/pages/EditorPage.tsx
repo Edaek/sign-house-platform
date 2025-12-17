@@ -15,7 +15,8 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-  Move
+  Move,
+  Loader2
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import api from '../lib/api'
@@ -43,6 +44,7 @@ export default function EditorPage() {
     updateExtractedData,
     deleteExtractedData,
     updateFloorplan,
+    deleteFloorplan,
     isLoading 
   } = useProjectStore()
   
@@ -65,6 +67,10 @@ export default function EditorPage() {
   
   const [isEditingFloorName, setIsEditingFloorName] = useState(false)
   const [editedFloorName, setEditedFloorName] = useState('')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  
+  const [isDetectingShapes, setIsDetectingShapes] = useState(false)
+  const [isRunningOCR, setIsRunningOCR] = useState(false)
   
   const [imageLoaded, setImageLoaded] = useState(false)
   
@@ -323,24 +329,30 @@ export default function EditorPage() {
   
   // Actions
   const handleDetectShapes = async () => {
-    if (!floorId) return
+    if (!floorId || isDetectingShapes) return
     
+    setIsDetectingShapes(true)
     try {
       await detectShapes(floorId, shapeType)
       toast.success('Shapes detected!')
     } catch {
       toast.error('Shape detection failed')
+    } finally {
+      setIsDetectingShapes(false)
     }
   }
   
   const handleRunOCR = async () => {
-    if (!floorId) return
+    if (!floorId || isRunningOCR) return
     
+    setIsRunningOCR(true)
     try {
       await runOCR(floorId)
       toast.success('OCR completed!')
     } catch {
       toast.error('OCR failed')
+    } finally {
+      setIsRunningOCR(false)
     }
   }
   
@@ -402,6 +414,28 @@ export default function EditorPage() {
       }
     } catch {
       toast.error('Failed to update status')
+    }
+  }
+  
+  const handleDeleteFloor = async () => {
+    if (!projectId || !floorId) return
+    
+    try {
+      await deleteFloorplan(projectId, floorId)
+      toast.success('Floor deleted successfully')
+      setShowDeleteConfirm(false)
+      
+      // Navigate to another floor or back to project
+      const remainingFloors = currentProject?.floorplans?.filter(fp => fp.id !== floorId)
+      if (remainingFloors && remainingFloors.length > 0) {
+        // Navigate to first remaining floor
+        navigate(`/project/${projectId}/floor/${remainingFloors[0].id}`)
+      } else {
+        // No floors left, go back to project page
+        navigate(`/project/${projectId}`)
+      }
+    } catch {
+      toast.error('Failed to delete floor')
     }
   }
   
@@ -481,6 +515,13 @@ export default function EditorPage() {
               >
                 <Edit3 className="w-3.5 h-3.5" />
               </button>
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-400/10 rounded transition-colors opacity-0 group-hover:opacity-100"
+                title="Delete floor"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </div>
           )}
         </div>
@@ -502,7 +543,7 @@ export default function EditorPage() {
           
           <div className="flex items-center gap-2 min-w-[120px] justify-center">
             <span className="text-white font-medium text-sm">
-              Floor {(currentIndex ?? 0) + 1}
+              {(currentIndex ?? 0) + 1}
             </span>
             <span className="text-slate-500 text-sm">
               of {currentProject?.floorplans?.length || 0}
@@ -606,6 +647,25 @@ export default function EditorPage() {
               <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
             </div>
           )}
+          
+          {/* Processing Overlay */}
+          {(isDetectingShapes || isRunningOCR) && (
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
+              <div className="bg-slate-800 rounded-lg shadow-xl p-6 flex flex-col items-center gap-4 border border-slate-700">
+                <Loader2 className="w-10 h-10 text-sign-500 animate-spin" />
+                <div className="text-center">
+                  <p className="text-white font-medium mb-1">
+                    {isDetectingShapes ? 'Detecting Shapes...' : 'Running OCR...'}
+                  </p>
+                  <p className="text-slate-400 text-sm">
+                    {isDetectingShapes 
+                      ? 'Analyzing floor plan and identifying shapes' 
+                      : 'Extracting text from detected shapes'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         
         {/* Right Panel */}
@@ -647,20 +707,38 @@ export default function EditorPage() {
             <div className="flex gap-2">
               <button
                 onClick={handleDetectShapes}
-                disabled={isLoading}
+                disabled={isDetectingShapes || isRunningOCR}
                 className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2"
               >
-                <Scan className="w-4 h-4" />
-                Detect Shapes
+                {isDetectingShapes ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Detecting...
+                  </>
+                ) : (
+                  <>
+                    <Scan className="w-4 h-4" />
+                    Detect Shapes
+                  </>
+                )}
               </button>
               
               <button
                 onClick={handleRunOCR}
-                disabled={isLoading || !currentFloorplan?.extracted_data?.length}
+                disabled={isDetectingShapes || isRunningOCR || !currentFloorplan?.extracted_data?.length}
                 className="btn btn-primary flex-1 text-sm flex items-center justify-center gap-2"
               >
-                <Type className="w-4 h-4" />
-                Run OCR
+                {isRunningOCR ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Type className="w-4 h-4" />
+                    Run OCR
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -799,6 +877,45 @@ export default function EditorPage() {
           </div>
         </div>
       </div>
+      
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-slate-800 rounded-lg shadow-xl p-6 max-w-md w-full mx-4 border border-slate-700"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center">
+                <Trash2 className="w-5 h-5 text-red-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white">Delete Floor</h3>
+            </div>
+            
+            <p className="text-slate-300 mb-6">
+              Are you sure you want to delete <span className="font-semibold text-white">{currentFloorplan?.floor_name}</span>? 
+              This will permanently remove the floor and all its extracted data. This action cannot be undone.
+            </p>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteFloor}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-400 transition-colors flex items-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete Floor
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   )
 }

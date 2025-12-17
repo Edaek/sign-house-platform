@@ -445,3 +445,53 @@ def update_floorplan(project_id, floorplan_id):
         'message': 'Floorplan updated successfully',
         'floorplan': fp_dict
     }), 200
+
+
+@projects_bp.route('/<project_id>/floorplans/<floorplan_id>', methods=['DELETE'])
+@jwt_required()
+def delete_floorplan(project_id, floorplan_id):
+    """Delete a floorplan and all related data."""
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    try:
+        floorplan = mongo.db.floorplans.find_one({
+            '_id': ObjectId(floorplan_id),
+            'project_id': ObjectId(project_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+    
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+    
+    # Delete all extracted data for this floorplan
+    mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
+    
+    # Delete the image file if it exists
+    if floorplan.get('image_filepath') and os.path.exists(floorplan['image_filepath']):
+        try:
+            os.remove(floorplan['image_filepath'])
+        except Exception as e:
+            current_app.logger.warning(f"Failed to delete image file: {str(e)}")
+    
+    # Delete the floorplan document
+    mongo.db.floorplans.delete_one({'_id': ObjectId(floorplan_id)})
+    
+    # Update project timestamp
+    mongo.db.projects.update_one(
+        {'_id': ObjectId(project_id)},
+        {'$set': {'updated_at': datetime.utcnow()}}
+    )
+    
+    return jsonify({'message': 'Floorplan deleted successfully'}), 200

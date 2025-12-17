@@ -65,6 +65,7 @@ interface ProjectState {
   
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   updateFloorplan: (projectId: string, floorplanId: string, data: Partial<FloorPlan>) => Promise<void>
+  deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   
   detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
@@ -186,8 +187,38 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     try {
       const response = await api.put(`/projects/${projectId}/floorplans/${floorplanId}`, data)
       set({ currentFloorplan: response.data.floorplan })
+      
+      // Update the floorplan in currentProject.floorplans if it exists
+      set((state) => ({
+        currentProject: state.currentProject ? {
+          ...state.currentProject,
+          floorplans: state.currentProject.floorplans?.map(fp => 
+            fp.id === floorplanId ? response.data.floorplan : fp
+          )
+        } : null
+      }))
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to update floorplan' })
+      throw error
+    }
+  },
+  
+  deleteFloorplan: async (projectId: string, floorplanId: string) => {
+    try {
+      await api.delete(`/projects/${projectId}/floorplans/${floorplanId}`)
+      
+      // Remove from currentProject.floorplans
+      set((state) => ({
+        currentProject: state.currentProject ? {
+          ...state.currentProject,
+          floorplans: state.currentProject.floorplans?.filter(fp => fp.id !== floorplanId),
+          floorplan_count: (state.currentProject.floorplan_count || 1) - 1
+        } : null,
+        currentFloorplan: state.currentFloorplan?.id === floorplanId ? null : state.currentFloorplan
+      }))
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to delete floorplan' })
+      throw error
     }
   },
   
