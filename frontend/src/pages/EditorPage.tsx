@@ -210,7 +210,7 @@ export default function EditorPage() {
   // Handle wheel zoom with passive: false to prevent page scroll
   useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas) return
+    if (!canvas || !imageLoaded) return
     
     const handleWheelEvent = (e: WheelEvent) => {
       e.preventDefault()
@@ -231,7 +231,7 @@ export default function EditorPage() {
     
     canvas.addEventListener('wheel', handleWheelEvent, { passive: false })
     return () => canvas.removeEventListener('wheel', handleWheelEvent)
-  }, [scale])
+  }, [scale, imageLoaded])
   
   // Get canvas coordinates from mouse event
   const getCanvasCoords = (e: React.MouseEvent) => {
