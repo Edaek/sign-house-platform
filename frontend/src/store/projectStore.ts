@@ -18,6 +18,7 @@ interface ExtractedData {
   height: number
   extracted_text: string | null
   confidence: number | null
+  quantity: number  // Quantity multiplier (defaults to 1)
   is_manual: boolean
   manual_text: string | null
   display_text: string | null
@@ -70,7 +71,7 @@ interface ProjectState {
   detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number }) => Promise<ExtractedData>
-  updateExtractedData: (dataId: string, manualText: string) => Promise<void>
+  updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
   deleteExtractedData: (dataId: string) => Promise<void>
   
   clearError: () => void
@@ -286,9 +287,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  updateExtractedData: async (dataId: string, manualText: string) => {
+  updateExtractedData: async (dataId: string, manualText?: string, quantity?: number) => {
     try {
-      const response = await api.put(`/processing/data/${dataId}`, { manual_text: manualText })
+      const payload: { manual_text?: string; quantity?: number } = {}
+      if (manualText !== undefined) payload.manual_text = manualText
+      if (quantity !== undefined) payload.quantity = quantity
+      
+      const response = await api.put(`/processing/data/${dataId}`, payload)
       const updated = response.data.result
       
       set((state) => ({

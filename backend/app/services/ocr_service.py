@@ -221,7 +221,47 @@ class OCRService:
         
         return text
     
-    def extract_text_from_region(self, image_path, x, y, width, height, padding=5, label_mode=False):
+    def parse_quantity(self, text):
+        """Parse quantity multiplier from text (e.g., "S10-84 x2" -> ("S10-84", 2)).
+        
+        Args:
+            text: Text that may contain a quantity multiplier
+            
+        Returns:
+            Tuple of (cleaned_text, quantity)
+            - cleaned_text: Text with multiplier removed
+            - quantity: Integer quantity (defaults to 1 if no multiplier found)
+        """
+        import re
+        
+        if not text:
+            return text, 1
+        
+        # Look for patterns like "x2", "x3", "x10" (case insensitive)
+        # Try multiple patterns:
+        # 1. At the end: "S10-84 x2" or "S10-84x2"
+        # 2. Anywhere in string: "x2 S10-84" (less common but possible)
+        
+        # Pattern 1: x followed by digits at the end
+        match = re.search(r'\s*[xX](\d+)\s*$', text)
+        if match:
+            quantity = int(match.group(1))
+            cleaned_text = text[:match.start()].strip()
+            return cleaned_text, quantity
+        
+        # Pattern 2: x followed by digits anywhere (with word boundaries)
+        match = re.search(r'\b[xX](\d+)\b', text)
+        if match:
+            quantity = int(match.group(1))
+            # Remove the multiplier from the text
+            cleaned_text = text[:match.start()] + text[match.end():]
+            cleaned_text = cleaned_text.strip()
+            return cleaned_text, quantity
+        
+        # No multiplier found, return original text with quantity of 1
+        return text.strip(), 1
+    
+    def extract_text_from_region(self, image_path, x, y, width, height, padding=5, label_mode=False, capture_adjacent=True):
         """Extract text from a specific region of an image.
         
         Args:
@@ -229,6 +269,7 @@ class OCRService:
             x, y, width, height: Region coordinates
             padding: Extra padding around the region
             label_mode: Use specialized preprocessing for label boxes
+            capture_adjacent: If True, search for multipliers around the rectangle (not used anymore)
             
         Returns:
             Tuple of (extracted text, confidence)
@@ -238,7 +279,7 @@ class OCRService:
         if img is None:
             raise FileNotFoundError(f"Could not load image: {image_path}")
         
-        # Apply padding and bounds checking
+        # Apply padding and bounds checking (no expansion)
         x1 = max(0, x - padding)
         y1 = max(0, y - padding)
         x2 = min(img.shape[1], x + width + padding)
@@ -251,6 +292,103 @@ class OCRService:
             return '', 0.0
         
         return self.extract_text(region, label_mode=label_mode)
+    
+    def find_multiplier_near_region(self, image_path, x, y, width, height, search_distance=None):
+        """Search for multiplier text (x2, x3, etc.) near a rectangular region.
+        
+        Args:
+            image_path: Path to the image file
+            x, y, width, height: Region coordinates of the main rectangle
+            search_distance: How far to search (defaults to max(width, height))
+            
+        Returns:
+            Integer quantity (1 if no multiplier found)
+        """
+        import re
+        
+        # Load image
+        img = cv2.imread(image_path)
+        if img is None:
+            return 1
+        
+        # Default search distance
+        if search_distance is None:
+            search_distance = max(width, height)
+        
+        # Define search regions around the rectangle
+        # Search in 4 directions: right, left, top, bottom
+        search_regions = [
+            # Right side
+            {
+                'x': x + width,
+                'y': y,
+                'width': search_distance,
+                'height': height,
+                'name': 'right'
+            },
+            # Left side
+            {
+                'x': max(0, x - search_distance),
+                'y': y,
+                'width': min(search_distance, x),
+                'height': height,
+                'name': 'left'
+            },
+            # Top
+            {
+                'x': x,
+                'y': max(0, y - search_distance),
+                'width': width,
+                'height': min(search_distance, y),
+                'name': 'top'
+            },
+            # Bottom
+            {
+                'x': x,
+                'y': y + height,
+                'width': width,
+                'height': search_distance,
+                'name': 'bottom'
+            }
+        ]
+        
+        multiplier_pattern = re.compile(r'\b[xX](\d+)\b')
+        
+        for region_def in search_regions:
+            # Extract the search region
+            rx, ry, rw, rh = region_def['x'], region_def['y'], region_def['width'], region_def['height']
+            
+            # Bounds check
+            x1 = max(0, rx)
+            y1 = max(0, ry)
+            x2 = min(img.shape[1], rx + rw)
+            y2 = min(img.shape[0], ry + rh)
+            
+            if x2 <= x1 or y2 <= y1:
+                continue
+            
+            # Extract region
+            search_img = img[y1:y2, x1:x2]
+            
+            if search_img.size == 0:
+                continue
+            
+            # Run OCR on this small region
+            try:
+                # Use simple preprocessing for small text regions
+                text, confidence = self.extract_text(search_img, preprocess=True, label_mode=False)
+                
+                # Look for multiplier pattern
+                match = multiplier_pattern.search(text)
+                if match:
+                    quantity = int(match.group(1))
+                    return quantity
+                    
+            except Exception:
+                continue
+        
+        # No multiplier found
+        return 1
     
     def extract_text_from_circle(self, image_path, center_x, center_y, radius, padding=5):
         """Extract text from a circular region.

@@ -144,20 +144,33 @@ def extract_text(floorplan_id):
                 floorplan['image_filepath'],
                 data['x'], data['y'], data['width'], data['height'],
                 padding=0,  # No padding needed for labels (border removed in preprocessing)
-                label_mode=True  # Use specialized label preprocessing
+                label_mode=True,  # Use specialized label preprocessing
+                capture_adjacent=False  # Don't expand region (causes false positives)
             )
+            
+            # Search for multiplier in nearby regions (x2, x3, etc.)
+            quantity = ocr_service.find_multiplier_near_region(
+                floorplan['image_filepath'],
+                data['x'], data['y'], data['width'], data['height']
+            )
+            
+            # Log for debugging
+            if quantity > 1:
+                current_app.logger.info(f"Found multiplier x{quantity} near rectangle at ({data['x']}, {data['y']}): '{text}'")
             
             mongo.db.extracted_data.update_one(
                 {'_id': data['_id']},
                 {'$set': {
                     'extracted_text': text,
                     'confidence': confidence,
+                    'quantity': quantity,
                     'updated_at': datetime.utcnow()
                 }}
             )
             
             data['extracted_text'] = text
             data['confidence'] = confidence
+            data['quantity'] = quantity
             data['display_text'] = data.get('manual_text') or text
             results.append(serialize_doc(data))
         
@@ -218,8 +231,18 @@ def ocr_manual_region(floorplan_id):
             floorplan['image_filepath'],
             int(x), int(y), int(width), int(height),
             padding=0,
-            label_mode=True
+            label_mode=True,
+            capture_adjacent=False
         )
+        
+        # Search for multiplier in nearby regions
+        quantity = ocr_service.find_multiplier_near_region(
+            floorplan['image_filepath'],
+            int(x), int(y), int(width), int(height)
+        )
+        
+        # Log for debugging
+        current_app.logger.info(f"Manual OCR - Text: '{text}' | Quantity: {quantity}")
         
         # Get next shape index
         max_doc = mongo.db.extracted_data.find_one(
@@ -240,6 +263,7 @@ def ocr_manual_region(floorplan_id):
         )
         doc['extracted_text'] = text
         doc['confidence'] = confidence
+        doc['quantity'] = quantity
         doc['is_manual'] = True
         
         result = mongo.db.extracted_data.insert_one(doc)
@@ -283,6 +307,10 @@ def update_extracted_data(data_id):
     if 'manual_text' in data:
         update_fields['manual_text'] = data['manual_text']
         update_fields['is_manual'] = True
+    
+    # Allow manual update of quantity
+    if 'quantity' in data:
+        update_fields['quantity'] = int(data['quantity'])
     
     mongo.db.extracted_data.update_one({'_id': ObjectId(data_id)}, {'$set': update_fields})
     

@@ -113,6 +113,7 @@ def create_extracted_data_doc(shape_index, shape_type, x, y, width, height, floo
         'shape_data': shape_data,
         'extracted_text': None,
         'confidence': None,
+        'quantity': 1,  # Default quantity (no multiplier)
         'is_manual': False,
         'manual_text': None,
         'floorplan_id': ObjectId(floorplan_id),

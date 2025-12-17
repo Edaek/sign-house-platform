@@ -64,6 +64,8 @@ export default function EditorPage() {
   const [selectedShape, setSelectedShape] = useState<string | null>(null)
   const [editingText, setEditingText] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  const [editingQuantity, setEditingQuantity] = useState<string | null>(null)
+  const [editQuantity, setEditQuantity] = useState('')
   
   const [isEditingFloorName, setIsEditingFloorName] = useState(false)
   const [editedFloorName, setEditedFloorName] = useState('')
@@ -375,6 +377,24 @@ export default function EditorPage() {
       toast.success('Text updated')
     } catch {
       toast.error('Failed to update text')
+    }
+  }
+  
+  const handleSaveQuantity = async () => {
+    if (editingQuantity === null) return
+    
+    const quantity = parseInt(editQuantity)
+    if (isNaN(quantity) || quantity < 1) {
+      toast.error('Quantity must be a positive number')
+      return
+    }
+    
+    try {
+      await updateExtractedData(editingQuantity, undefined, quantity)
+      setEditingQuantity(null)
+      toast.success('Quantity updated')
+    } catch {
+      toast.error('Failed to update quantity')
     }
   }
   
@@ -824,6 +844,60 @@ export default function EditorPage() {
                     </p>
                   )}
                 </div>
+                
+                {/* Quantity Field */}
+                <div className="pt-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-slate-400">Quantity</span>
+                    {editingQuantity !== selectedData.id && (
+                      <button
+                        onClick={() => {
+                          setEditingQuantity(selectedData.id)
+                          setEditQuantity(String(selectedData.quantity || 1))
+                        }}
+                        className="p-1 text-slate-400 hover:text-white transition-colors"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  
+                  {editingQuantity === selectedData.id ? (
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={editQuantity}
+                        onChange={(e) => setEditQuantity(e.target.value)}
+                        className="input text-sm py-1.5"
+                        autoFocus
+                      />
+                      <button
+                        onClick={handleSaveQuantity}
+                        className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-400"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setEditingQuantity(null)}
+                        className="p-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="text-white bg-slate-800 rounded-lg px-3 py-2 font-mono text-xs">
+                        {selectedData.quantity || 1}
+                      </span>
+                      {(selectedData.quantity || 1) > 1 && (
+                        <span className="text-xs px-2 py-1 bg-sign-500/20 text-sign-400 rounded">
+                          ×{selectedData.quantity}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -863,6 +937,11 @@ export default function EditorPage() {
                         {data.is_manual && (
                           <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                             manual
+                          </span>
+                        )}
+                        {(data.quantity || 1) > 1 && (
+                          <span className="text-xs px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded font-semibold">
+                            ×{data.quantity}
                           </span>
                         )}
                       </div>

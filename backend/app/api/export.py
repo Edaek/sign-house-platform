@@ -44,6 +44,7 @@ def preview_export(project_id):
                 'floor_name': fp['floor_name'],
                 'shape_index': data['shape_index'],
                 'text': display_text,
+                'quantity': data.get('quantity', 1),
                 'confidence': round((data.get('confidence') or 0) * 100, 1),
                 'is_manual': data.get('is_manual', False)
             })
@@ -101,6 +102,7 @@ def export_to_excel(project_id):
                 'floor_name': fp['floor_name'],
                 'shape_index': item['shape_index'] + 1,
                 'text': display_text,
+                'quantity': item.get('quantity', 1),
                 'confidence': round((item.get('confidence') or 0) * 100, 1),
                 'x': item['x'],
                 'y': item['y'],
@@ -177,7 +179,8 @@ def export_to_csv(project_id):
                 'floor_number': fp['floor_number'],
                 'floor_name': fp['floor_name'],
                 'item_number': item['shape_index'] + 1,
-                'text': display_text
+                'text': display_text,
+                'quantity': item.get('quantity', 1)
             }
             if include_metadata:
                 row['confidence'] = round((item.get('confidence') or 0) * 100, 1)
