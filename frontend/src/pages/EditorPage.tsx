@@ -63,6 +63,9 @@ export default function EditorPage() {
   const [editingText, setEditingText] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   
+  const [isEditingFloorName, setIsEditingFloorName] = useState(false)
+  const [editedFloorName, setEditedFloorName] = useState('')
+  
   const [imageLoaded, setImageLoaded] = useState(false)
   
   // Fetch project and floorplan data
@@ -363,6 +366,23 @@ export default function EditorPage() {
     }
   }
   
+  const handleSaveFloorName = async () => {
+    if (!projectId || !floorId || !editedFloorName.trim()) return
+    
+    try {
+      await updateFloorplan(projectId, floorId, { floor_name: editedFloorName.trim() })
+      setIsEditingFloorName(false)
+      toast.success('Floor name updated')
+    } catch {
+      toast.error('Failed to update floor name')
+    }
+  }
+  
+  const handleCancelFloorNameEdit = () => {
+    setIsEditingFloorName(false)
+    setEditedFloorName('')
+  }
+  
   const handleMarkComplete = async () => {
     if (!projectId || !floorId) return
     
@@ -417,36 +437,90 @@ export default function EditorPage() {
           
           <div className="h-6 w-px bg-slate-700" />
           
-          <h2 className="font-medium text-white">
-            {currentFloorplan?.floor_name}
-          </h2>
+          {isEditingFloorName ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={editedFloorName}
+                onChange={(e) => setEditedFloorName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSaveFloorName()
+                  if (e.key === 'Escape') handleCancelFloorNameEdit()
+                }}
+                className="input text-sm py-1.5 px-3 w-64"
+                autoFocus
+                placeholder="Floor name"
+              />
+              <button
+                onClick={handleSaveFloorName}
+                className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-400 transition-colors"
+                title="Save (Enter)"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleCancelFloorNameEdit}
+                className="p-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-colors"
+                title="Cancel (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 group">
+              <h2 className="font-medium text-white">
+                {currentFloorplan?.floor_name}
+              </h2>
+              <button
+                onClick={() => {
+                  setIsEditingFloorName(true)
+                  setEditedFloorName(currentFloorplan?.floor_name || '')
+                }}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors opacity-0 group-hover:opacity-100"
+                title="Rename floor"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
         
         {/* Floor Navigation */}
-        <div className="flex items-center gap-2">
-          {prevFloor && (
-            <Link
-              to={`/project/${projectId}/floor/${prevFloor.id}`}
-              className="btn btn-ghost text-sm"
-            >
-              <ChevronLeft className="w-4 h-4" />
-              {prevFloor.floor_name}
-            </Link>
-          )}
+        <div className="flex items-center gap-3">
+          <Link
+            to={`/project/${projectId}/floor/${prevFloor?.id || ''}`}
+            className={clsx(
+              "p-2 rounded-lg transition-colors",
+              prevFloor 
+                ? "text-slate-400 hover:bg-slate-800 hover:text-white" 
+                : "text-slate-700 cursor-not-allowed pointer-events-none"
+            )}
+            title={prevFloor ? `Previous: ${prevFloor.floor_name}` : 'No previous floor'}
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </Link>
           
-          <span className="text-slate-400 text-sm px-2">
-            Floor {(currentIndex || 0) + 1} of {currentProject?.floorplans?.length || 0}
-          </span>
+          <div className="flex items-center gap-2 min-w-[120px] justify-center">
+            <span className="text-white font-medium text-sm">
+              Floor {(currentIndex ?? 0) + 1}
+            </span>
+            <span className="text-slate-500 text-sm">
+              of {currentProject?.floorplans?.length || 0}
+            </span>
+          </div>
           
-          {nextFloor && (
-            <Link
-              to={`/project/${projectId}/floor/${nextFloor.id}`}
-              className="btn btn-ghost text-sm"
-            >
-              {nextFloor.floor_name}
-              <ChevronRight className="w-4 h-4" />
-            </Link>
-          )}
+          <Link
+            to={`/project/${projectId}/floor/${nextFloor?.id || ''}`}
+            className={clsx(
+              "p-2 rounded-lg transition-colors",
+              nextFloor 
+                ? "text-slate-400 hover:bg-slate-800 hover:text-white" 
+                : "text-slate-700 cursor-not-allowed pointer-events-none"
+            )}
+            title={nextFloor ? `Next: ${nextFloor.floor_name}` : 'No next floor'}
+          >
+            <ChevronRight className="w-5 h-5" />
+          </Link>
         </div>
         
         <button
