@@ -38,7 +38,7 @@ export default function Layout() {
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
       {/* Header */}
       <header className="h-16 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-700/50 sticky top-0 z-50">
-        <div className="h-full max-w-7xl mx-auto px-4 flex items-center justify-between">
+        <div className="h-full w-full px-4 sm:px-6 lg:px-8 flex items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-3 group">
             <div className="w-10 h-10 bg-gradient-to-br from-sign-500 to-sign-600 rounded-xl flex items-center justify-center shadow-lg shadow-sign-500/20 group-hover:shadow-sign-500/40 transition-shadow">
