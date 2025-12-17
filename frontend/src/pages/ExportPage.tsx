@@ -27,10 +27,27 @@ interface ExportPreview {
     floor_name: string
     shape_index: number
     text: string
+    quantity: number
+    merged_count?: number
     confidence: number
     is_manual: boolean
   }[]
   total_items: number
+  summary?: {
+    text: string
+    total_quantity: number
+    floor_count: number
+    floors: number[]
+    floor_details: {
+      floor_number: number
+      floor_name: string
+      quantity: number
+    }[]
+  }[]
+  summary_stats?: {
+    unique_items: number
+    total_floors: number
+  }
 }
 
 export default function ExportPage() {
@@ -224,6 +241,12 @@ export default function ExportPage() {
                 <span className="text-slate-400">Total Items</span>
                 <span className="text-white font-medium">{preview?.total_items || 0}</span>
               </div>
+              {preview?.summary_stats && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Unique Items</span>
+                  <span className="text-emerald-400 font-medium">{preview.summary_stats.unique_items}</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-slate-400">Floors</span>
                 <span className="text-white font-medium">{currentProject?.floorplans?.length || 0}</span>
@@ -264,6 +287,7 @@ export default function ExportPage() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">#</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Extracted Text</th>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Qty</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Confidence</th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Source</th>
                 </tr>
@@ -278,7 +302,22 @@ export default function ExportPage() {
                       {item.shape_index + 1}
                     </td>
                     <td className="px-4 py-3 text-sm text-white font-mono">
-                      {item.text || <span className="text-slate-500">—</span>}
+                      <div className="flex items-center gap-2">
+                        {item.text || <span className="text-slate-500">—</span>}
+                        {item.merged_count && item.merged_count > 1 && (
+                          <span 
+                            className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-semibold"
+                            title={`${item.merged_count} detections merged`}
+                          >
+                            {item.merged_count} merged
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      <span className="text-white font-mono">
+                        {item.quantity || 1}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-sm">
                       <div className="flex items-center gap-2">
@@ -310,7 +349,7 @@ export default function ExportPage() {
                 
                 {(!preview?.data || preview.data.length === 0) && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-12 text-center text-slate-500">
+                    <td colSpan={6} className="px-4 py-12 text-center text-slate-500">
                       No data to export. Process floor plans first.
                     </td>
                   </tr>
@@ -319,6 +358,76 @@ export default function ExportPage() {
             </table>
           </div>
         </motion.div>
+        
+        {/* Cross-Floor Summary */}
+        {preview?.summary && preview.summary.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="lg:col-span-3 card overflow-hidden"
+          >
+            <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Table className="w-5 h-5 text-slate-400" />
+                <h2 className="text-lg font-semibold text-white">Cross-Floor Summary</h2>
+              </div>
+              <div className="text-sm text-slate-400">
+                {preview.summary_stats?.unique_items || 0} unique items across {preview.summary_stats?.total_floors || 0} floors
+              </div>
+            </div>
+            
+            <div className="overflow-auto max-h-[500px]">
+              <table className="w-full">
+                <thead className="bg-slate-800/50 sticky top-0">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Text</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Total Qty</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floors</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/50">
+                  {preview.summary.map((item, index) => (
+                    <tr key={index} className="hover:bg-slate-800/30">
+                      <td className="px-4 py-3 text-sm text-white font-mono">
+                        {item.text || <span className="text-slate-500">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        <span className="text-emerald-400 font-semibold">
+                          {item.total_quantity}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-slate-300">{item.floor_count} floor{item.floor_count !== 1 ? 's' : ''}</span>
+                          <span className="text-slate-500">•</span>
+                          <span className="text-slate-400 font-mono text-xs">
+                            {item.floors.join(', ')}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        <div className="flex flex-wrap gap-2">
+                          {item.floor_details.map((detail, idx) => (
+                            <span
+                              key={idx}
+                              className="inline-flex items-center gap-1.5 px-2 py-1 bg-slate-700/50 rounded text-xs"
+                            >
+                              <span className="text-slate-300">{detail.floor_name}</span>
+                              <span className="text-slate-500">:</span>
+                              <span className="text-emerald-400 font-semibold">×{detail.quantity}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        )}
       </div>
     </div>
   )

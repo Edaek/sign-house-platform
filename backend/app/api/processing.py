@@ -172,16 +172,72 @@ def extract_text(floorplan_id):
             data['confidence'] = confidence
             data['quantity'] = quantity
             data['display_text'] = data.get('manual_text') or text
-            results.append(serialize_doc(data))
+            results.append(data)
+        
+        # Group OCR results by identical text
+        grouping_result = ocr_service.group_ocr_results(results)
+        grouped_results = grouping_result['grouped']
+        deleted_ids = grouping_result['deleted_ids']
+        merge_info = grouping_result['merge_info']
+        
+        # Update grouped records in database with new quantities and add to in-memory objects
+        for result in grouped_results:
+            result_id = result['_id']
+            if str(result_id) in merge_info:
+                # This result was merged with others
+                info = merge_info[str(result_id)]
+                
+                # Update database
+                mongo.db.extracted_data.update_one(
+                    {'_id': result_id},
+                    {'$set': {
+                        'quantity': info['total_quantity'],
+                        'merged_count': info['merged_count'],
+                        'original_shape_indices': info['original_indices'],
+                        'all_bounding_boxes': info['all_bounding_boxes'],
+                        'updated_at': datetime.utcnow()
+                    }}
+                )
+                
+                # Also update the in-memory object so it's included in the response
+                result['merged_count'] = info['merged_count']
+                result['original_shape_indices'] = info['original_indices']
+                result['all_bounding_boxes'] = info['all_bounding_boxes']
+                
+                current_app.logger.info(
+                    f"Merged {info['merged_count']} items with text '{result.get('extracted_text')}' "
+                    f"into one with total quantity {info['total_quantity']}"
+                )
+        
+        # Delete duplicate records from database
+        if deleted_ids:
+            mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
+            current_app.logger.info(f"Deleted {len(deleted_ids)} duplicate OCR results")
+        
+        # Prepare response with serialized grouped results
+        response_results = [serialize_doc(data) for data in grouped_results]
+        for result in response_results:
+            result['display_text'] = result.get('manual_text') or result.get('extracted_text')
         
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
             {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
         )
         
+        # Include grouping info in response
+        total_merged = sum(info['merged_count'] for info in merge_info.values())
+        message = f'OCR completed for {len(response_results)} unique items'
+        if len(deleted_ids) > 0:
+            message += f' ({total_merged} original detections grouped)'
+        
         return jsonify({
-            'message': f'OCR completed for {len(results)} shapes',
-            'results': results
+            'message': message,
+            'results': response_results,
+            'grouping_info': {
+                'total_unique': len(response_results),
+                'total_original': len(results),
+                'merged_count': len(deleted_ids)
+            }
         }), 200
         
     except Exception as e:

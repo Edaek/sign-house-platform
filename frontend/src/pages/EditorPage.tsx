@@ -159,23 +159,36 @@ export default function EditorPage() {
         ctx.lineWidth = isSelected ? 3 / scale : 2 / scale
         ctx.fillStyle = isSelected ? 'rgba(237, 117, 29, 0.1)' : 'rgba(59, 157, 246, 0.1)'
         
-        if (shape.shape_type === 'circle' && shape.shape_data?.radius) {
-          const { center_x, center_y, radius } = shape.shape_data
-          ctx.beginPath()
-          ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
-          ctx.fill()
-          ctx.stroke()
-        } else {
-          ctx.beginPath()
-          ctx.rect(shape.x, shape.y, shape.width, shape.height)
-          ctx.fill()
-          ctx.stroke()
-        }
+        // If this shape has merged bounding boxes, draw all of them
+        const boxesToDraw = shape.all_bounding_boxes || [{
+          x: shape.x,
+          y: shape.y,
+          width: shape.width,
+          height: shape.height,
+          shape_type: shape.shape_type,
+          shape_data: shape.shape_data
+        }]
         
-        // Draw shape number
+        boxesToDraw.forEach((box) => {
+          if (box.shape_type === 'circle' && box.shape_data?.radius) {
+            const { center_x, center_y, radius } = box.shape_data
+            ctx.beginPath()
+            ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.stroke()
+          } else {
+            ctx.beginPath()
+            ctx.rect(box.x, box.y, box.width, box.height)
+            ctx.fill()
+            ctx.stroke()
+          }
+        })
+        
+        // Draw shape number on the first box
+        const firstBox = boxesToDraw[0]
         ctx.fillStyle = isSelected ? '#ed751d' : '#3b9df6'
         ctx.font = `bold ${14 / scale}px sans-serif`
-        ctx.fillText(`${index + 1}`, shape.x + 4, shape.y + 16)
+        ctx.fillText(`${index + 1}`, firstBox.x + 4, firstBox.y + 16)
       })
     }
     
@@ -937,6 +950,14 @@ export default function EditorPage() {
                         {data.is_manual && (
                           <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                             manual
+                          </span>
+                        )}
+                        {(data.merged_count && data.merged_count > 1) && (
+                          <span 
+                            className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-semibold"
+                            title={`${data.merged_count} detections merged`}
+                          >
+                            {data.merged_count} merged
                           </span>
                         )}
                         {(data.quantity || 1) > 1 && (

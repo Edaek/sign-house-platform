@@ -16,9 +16,28 @@ interface ExtractedData {
   y: number
   width: number
   height: number
+  shape_data?: {
+    radius?: number
+    center_x?: number
+    center_y?: number
+  }
   extracted_text: string | null
   confidence: number | null
   quantity: number  // Quantity multiplier (defaults to 1)
+  merged_count?: number  // Number of items merged (undefined or 1 = not merged)
+  original_shape_indices?: number[]  // Array of shape indices that were merged
+  all_bounding_boxes?: Array<{
+    x: number
+    y: number
+    width: number
+    height: number
+    shape_type: string
+    shape_data?: {
+      radius?: number
+      center_x?: number
+      center_y?: number
+    }
+  }>  // All bounding boxes for merged items
   is_manual: boolean
   manual_text: string | null
   display_text: string | null

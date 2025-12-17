@@ -480,4 +480,98 @@ class OCRService:
                 })
         
         return locations
+    
+    def group_ocr_results(self, results):
+        """Group OCR results by identical text, summing quantities.
+        
+        Args:
+            results: List of extracted data dictionaries with keys:
+                     - _id: Database ID
+                     - extracted_text: OCR text
+                     - manual_text: Manual override text (optional)
+                     - quantity: Current quantity
+                     - confidence: OCR confidence
+                     - Other fields preserved from first occurrence
+        
+        Returns:
+            Dictionary with:
+                - grouped: List of grouped results (keeping first occurrence)
+                - deleted_ids: List of IDs that should be deleted (duplicates)
+                - merge_info: Dictionary mapping kept ID to number of items merged
+        """
+        from collections import defaultdict
+        
+        # Dictionary to track groups by text (case-insensitive)
+        groups = defaultdict(list)
+        
+        # Group results by their display text
+        for result in results:
+            # Use manual_text if available, otherwise extracted_text
+            display_text = result.get('manual_text') or result.get('extracted_text') or ''
+            # Normalize: strip whitespace and convert to lowercase for grouping
+            normalized_text = display_text.strip().lower()
+            
+            # Skip empty texts
+            if not normalized_text:
+                groups['__empty__'].append(result)
+            else:
+                groups[normalized_text].append(result)
+        
+        grouped_results = []
+        deleted_ids = []
+        merge_info = {}
+        
+        # Process each group
+        for normalized_text, group_items in groups.items():
+            if len(group_items) == 1:
+                # No duplicates, keep as is
+                grouped_results.append(group_items[0])
+            else:
+                # Multiple items with same text - merge them
+                # Keep the first occurrence
+                primary = group_items[0]
+                duplicates = group_items[1:]
+                
+                # Sum all quantities
+                total_quantity = primary.get('quantity', 1)
+                for dup in duplicates:
+                    total_quantity += dup.get('quantity', 1)
+                
+                # Collect all bounding boxes for canvas display
+                all_boxes = []
+                for item in group_items:
+                    box = {
+                        'x': item.get('x'),
+                        'y': item.get('y'),
+                        'width': item.get('width'),
+                        'height': item.get('height'),
+                        'shape_type': item.get('shape_type')
+                    }
+                    # Add shape_data if it exists (for circles)
+                    if item.get('shape_data'):
+                        box['shape_data'] = item.get('shape_data')
+                    all_boxes.append(box)
+                
+                # Update primary with merged quantity
+                primary['quantity'] = total_quantity
+                
+                # Track merge metadata
+                merge_info[str(primary['_id'])] = {
+                    'merged_count': len(group_items),
+                    'total_quantity': total_quantity,
+                    'original_indices': [item.get('shape_index', 0) for item in group_items],
+                    'all_bounding_boxes': all_boxes
+                }
+                
+                # Mark duplicates for deletion
+                for dup in duplicates:
+                    deleted_ids.append(dup['_id'])
+                
+                grouped_results.append(primary)
+        
+        return {
+            'grouped': grouped_results,
+            'deleted_ids': deleted_ids,
+            'merge_info': merge_info
+        }
 

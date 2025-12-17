@@ -32,6 +32,8 @@ def preview_export(project_id):
     }).sort('floor_number', 1))
     
     all_data = []
+    summary_groups = {}  # For cross-floor summary
+    
     for fp in floorplans:
         extracted = list(mongo.db.extracted_data.find({
             'floorplan_id': fp['_id']
@@ -39,15 +41,54 @@ def preview_export(project_id):
         
         for data in extracted:
             display_text = data.get('manual_text') or data.get('extracted_text') or ''
+            quantity = data.get('quantity', 1)
+            merged_count = data.get('merged_count', 1)
+            
+            # Add to per-floor data
             all_data.append({
                 'floor_number': fp['floor_number'],
                 'floor_name': fp['floor_name'],
                 'shape_index': data['shape_index'],
                 'text': display_text,
-                'quantity': data.get('quantity', 1),
+                'quantity': quantity,
+                'merged_count': merged_count,
                 'confidence': round((data.get('confidence') or 0) * 100, 1),
                 'is_manual': data.get('is_manual', False)
             })
+            
+            # Group for cross-floor summary
+            normalized_text = display_text.strip().lower()
+            if normalized_text:  # Skip empty text
+                if normalized_text not in summary_groups:
+                    summary_groups[normalized_text] = {
+                        'text': display_text,  # Keep original case from first occurrence
+                        'total_quantity': 0,
+                        'floors': set(),
+                        'floor_details': []
+                    }
+                
+                summary_groups[normalized_text]['total_quantity'] += quantity
+                summary_groups[normalized_text]['floors'].add(fp['floor_number'])
+                summary_groups[normalized_text]['floor_details'].append({
+                    'floor_number': fp['floor_number'],
+                    'floor_name': fp['floor_name'],
+                    'quantity': quantity
+                })
+    
+    # Convert summary groups to list and sort
+    summary = []
+    for normalized_text, group_data in summary_groups.items():
+        floors_list = sorted(list(group_data['floors']))
+        summary.append({
+            'text': group_data['text'],
+            'total_quantity': group_data['total_quantity'],
+            'floor_count': len(floors_list),
+            'floors': floors_list,
+            'floor_details': group_data['floor_details']
+        })
+    
+    # Sort summary by text
+    summary.sort(key=lambda x: x['text'].lower())
     
     # Get template columns if available
     columns = []
@@ -59,7 +100,12 @@ def preview_export(project_id):
         'project': serialize_doc(project),
         'columns': columns,
         'data': all_data,
-        'total_items': len(all_data)
+        'total_items': len(all_data),
+        'summary': summary,
+        'summary_stats': {
+            'unique_items': len(summary),
+            'total_floors': len(floorplans)
+        }
     }), 200
 
 

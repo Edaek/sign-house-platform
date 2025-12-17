@@ -114,6 +114,9 @@ def create_extracted_data_doc(shape_index, shape_type, x, y, width, height, floo
         'extracted_text': None,
         'confidence': None,
         'quantity': 1,  # Default quantity (no multiplier)
+        'merged_count': 1,  # Number of items merged (1 = not merged)
+        'original_shape_indices': None,  # Array of shape indices that were merged
+        'all_bounding_boxes': None,  # Array of all bounding boxes for merged items
         'is_manual': False,
         'manual_text': None,
         'floorplan_id': ObjectId(floorplan_id),
