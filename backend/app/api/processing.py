@@ -139,10 +139,12 @@ def extract_text(floorplan_id):
         
         results = []
         for data in extracted_data:
-            # Extract text from the shape region
+            # Extract text from the shape region (use label_mode for red-bordered labels)
             text, confidence = ocr_service.extract_text_from_region(
                 floorplan['image_filepath'],
-                data['x'], data['y'], data['width'], data['height']
+                data['x'], data['y'], data['width'], data['height'],
+                padding=0,  # No padding needed for labels (border removed in preprocessing)
+                label_mode=True  # Use specialized label preprocessing
             )
             
             mongo.db.extracted_data.update_one(
@@ -211,9 +213,12 @@ def ocr_manual_region(floorplan_id):
     
     try:
         ocr_service = OCRService()
+        # Use label_mode for better accuracy on red-bordered labels
         text, confidence = ocr_service.extract_text_from_region(
             floorplan['image_filepath'],
-            int(x), int(y), int(width), int(height)
+            int(x), int(y), int(width), int(height),
+            padding=0,
+            label_mode=True
         )
         
         # Get next shape index

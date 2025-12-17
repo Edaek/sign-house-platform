@@ -17,17 +17,23 @@ class OCRService:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
         
         # Default OCR configuration
-        self.config = '--oem 3 --psm 6'  # LSTM OCR Engine, assume uniform block of text
+        # PSM 7 = single line of text (better for labels)
+        # PSM 6 = uniform block of text
+        self.config = '--oem 3 --psm 7'  # LSTM OCR Engine, single line
     
-    def preprocess_for_ocr(self, image):
+    def preprocess_for_ocr(self, image, label_mode=False):
         """Preprocess image for better OCR results.
         
         Args:
             image: Input image (numpy array)
+            label_mode: If True, use specialized preprocessing for label boxes
             
         Returns:
             Preprocessed image
         """
+        if label_mode:
+            return self._preprocess_label(image)
+        
         # Convert to grayscale if needed
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -54,12 +60,74 @@ class OCRService:
         
         return denoised
     
-    def extract_text(self, image, preprocess=True):
+    def _preprocess_label(self, image):
+        """Specialized preprocessing for label boxes with red borders.
+        
+        Args:
+            image: Input image (numpy array)
+            
+        Returns:
+            Preprocessed image optimized for label OCR
+        """
+        # Make a copy
+        img = image.copy()
+        
+        # Get dimensions
+        h, w = img.shape[:2]
+        
+        # Remove red borders by cropping inward (borders are ~2-4px thick)
+        margin = max(3, min(w, h) // 15)  # Crop 3px or ~7% of smallest dimension
+        if h > margin * 2 and w > margin * 2:
+            img = img[margin:h-margin, margin:w-margin]
+            h, w = img.shape[:2]
+        
+        # Convert to HSV for better color handling
+        if len(img.shape) == 3:
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            
+            # Mask out red text/lines (convert to black)
+            lower_red1 = np.array([0, 40, 40])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([170, 40, 40])
+            upper_red2 = np.array([180, 255, 255])
+            
+            red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Make red areas black (so they'll be seen as text)
+            gray[red_mask > 0] = 0
+        else:
+            gray = img.copy()
+        
+        # Scale up significantly for better OCR (labels are small ~30px height)
+        scale_factor = max(4, 100 / h)  # Scale to at least 100px height
+        scaled = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor, 
+                           interpolation=cv2.INTER_CUBIC)
+        
+        # Apply slight Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(scaled, (3, 3), 0)
+        
+        # Use Otsu's thresholding for clean binary image
+        _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Morphological operations to clean up text
+        kernel = np.ones((2, 2), np.uint8)
+        # Close small gaps in characters
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+        
+        return binary
+    
+    def extract_text(self, image, preprocess=True, label_mode=False):
         """Extract text from an image.
         
         Args:
             image: Input image (numpy array or PIL Image)
             preprocess: Whether to preprocess the image
+            label_mode: Use specialized preprocessing for label boxes
             
         Returns:
             Tuple of (extracted text, confidence)
@@ -69,7 +137,7 @@ class OCRService:
             image = np.array(image)
         
         if preprocess:
-            image = self.preprocess_for_ocr(image)
+            image = self.preprocess_for_ocr(image, label_mode=label_mode)
         
         # Get detailed OCR data
         data = pytesseract.image_to_data(image, config=self.config, output_type=pytesseract.Output.DICT)
@@ -88,15 +156,79 @@ class OCRService:
         extracted_text = ' '.join(texts)
         avg_confidence = sum(confidences) / len(confidences) / 100 if confidences else 0
         
+        # Post-process: clean up common OCR errors in labels
+        if label_mode:
+            extracted_text = self._clean_label_text(extracted_text)
+        
         return extracted_text, avg_confidence
     
-    def extract_text_from_region(self, image_path, x, y, width, height, padding=5):
+    def _clean_label_text(self, text):
+        """Clean up common OCR errors in label text.
+        
+        Args:
+            text: Raw OCR text
+            
+        Returns:
+            Cleaned text
+        """
+        import re
+        
+        # Remove common artifacts from borders
+        text = text.strip('|])[}')
+        
+        # Remove extra spaces first
+        text = ' '.join(text.split())
+        
+        # STEP 1: Common single character OCR mistakes (do this first)
+        replacements = {
+            '$': 'S',  # Dollar sign -> S
+            'i': '1',  # lowercase i -> 1
+            'l': '1',  # lowercase L -> 1
+            'I': '1',  # uppercase I -> 1 (in number context)
+            'O': '0',  # Letter O -> zero
+            '|': '',   # Remove pipes
+            ']': '',   # Remove brackets
+            ')': '',   # Remove parentheses
+            '(': '',   # Remove parentheses
+        }
+        
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        
+        # Clean up spaces after character removal
+        text = ' '.join(text.split())
+        
+        # STEP 2: Pattern-based fixes for common label formats
+        
+        # Fix "510-XXX" -> "S10-XXX" (5 at start -> S)
+        text = re.sub(r'^5(\d)', r'S\1', text)
+        
+        # Fix "9X-X" -> "SX-X" (9 at start -> S)
+        text = re.sub(r'^9(\d)', r'S\1', text)
+        
+        # Fix missing S at start of label pattern like "X-X" or "XX-XXX"
+        if re.match(r'^\d+-\d+', text):
+            text = 'S' + text
+        
+        # Fix "S0 1-1" -> "S1-1" (space between 0 and 1)
+        text = re.sub(r'S0\s+1', 'S1', text)
+        
+        # Fix "S 1-1" -> "S1-1" (space after S before number)
+        text = re.sub(r'S\s+(\d)', r'S\1', text)
+        
+        # Final cleanup: remove extra spaces
+        text = ' '.join(text.split())
+        
+        return text
+    
+    def extract_text_from_region(self, image_path, x, y, width, height, padding=5, label_mode=False):
         """Extract text from a specific region of an image.
         
         Args:
             image_path: Path to the image file
             x, y, width, height: Region coordinates
             padding: Extra padding around the region
+            label_mode: Use specialized preprocessing for label boxes
             
         Returns:
             Tuple of (extracted text, confidence)
@@ -118,7 +250,7 @@ class OCRService:
         if region.size == 0:
             return '', 0.0
         
-        return self.extract_text(region)
+        return self.extract_text(region, label_mode=label_mode)
     
     def extract_text_from_circle(self, image_path, center_x, center_y, radius, padding=5):
         """Extract text from a circular region.
@@ -140,12 +272,13 @@ class OCRService:
         
         return self.extract_text_from_region(image_path, x, y, width, height, padding)
     
-    def batch_extract(self, image_path, regions):
+    def batch_extract(self, image_path, regions, label_mode=False):
         """Extract text from multiple regions.
         
         Args:
             image_path: Path to the image file
             regions: List of region dictionaries with x, y, width, height
+            label_mode: Use specialized preprocessing for label boxes
             
         Returns:
             List of tuples (extracted text, confidence)
@@ -159,7 +292,7 @@ class OCRService:
         
         for region in regions:
             x, y, w, h = region['x'], region['y'], region['width'], region['height']
-            padding = region.get('padding', 5)
+            padding = region.get('padding', 0)  # Default 0 for labels (borders already removed)
             
             # Apply padding and bounds checking
             x1 = max(0, x - padding)
@@ -173,7 +306,7 @@ class OCRService:
             if roi.size == 0:
                 results.append(('', 0.0))
             else:
-                results.append(self.extract_text(roi))
+                results.append(self.extract_text(roi, label_mode=label_mode))
         
         return results
     
