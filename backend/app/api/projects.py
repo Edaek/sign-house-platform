@@ -265,6 +265,84 @@ def upload_template(project_id):
     }), 201
 
 
+@projects_bp.route('/<project_id>/template/mapping', methods=['PUT'])
+@jwt_required()
+def save_template_mapping(project_id):
+    """Save floor-to-column mapping for a template."""
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Check if template exists
+    template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
+    if not template:
+        return jsonify({'error': 'No template found for this project'}), 404
+    
+    data = request.get_json()
+    if not data or 'floor_mapping' not in data:
+        return jsonify({'error': 'floor_mapping is required'}), 400
+    
+    floor_mapping = data['floor_mapping']
+    
+    # Validate floor_mapping is a dict
+    if not isinstance(floor_mapping, dict):
+        return jsonify({'error': 'floor_mapping must be an object'}), 400
+    
+    # Update template with floor mapping
+    mongo.db.templates.update_one(
+        {'_id': template['_id']},
+        {'$set': {
+            'floor_mapping': floor_mapping,
+            'updated_at': datetime.utcnow()
+        }}
+    )
+    
+    # Get updated template
+    template = mongo.db.templates.find_one({'_id': template['_id']})
+    
+    return jsonify({
+        'message': 'Floor mapping saved successfully',
+        'template': serialize_doc(template)
+    }), 200
+
+
+@projects_bp.route('/<project_id>/template/mapping', methods=['GET'])
+@jwt_required()
+def get_template_mapping(project_id):
+    """Get floor-to-column mapping for a template."""
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Check if template exists
+    template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
+    if not template:
+        return jsonify({'error': 'No template found for this project'}), 404
+    
+    return jsonify({
+        'floor_mapping': template.get('floor_mapping', {}),
+        'columns': template.get('columns', [])
+    }), 200
+
+
 @projects_bp.route('/<project_id>/floorplan', methods=['POST'])
 @jwt_required()
 def upload_floorplan(project_id):

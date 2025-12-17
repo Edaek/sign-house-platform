@@ -8,10 +8,12 @@ import {
   FileText,
   CheckCircle,
   AlertTriangle,
-  Table
+  Table,
+  ArrowRight,
+  Save
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
-import api from '../lib/api'
+import api, { saveTemplateMapping, getTemplateMapping } from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
@@ -57,13 +59,86 @@ export default function ExportPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
   const [includeMetadata, setIncludeMetadata] = useState(true)
+  const [floorMapping, setFloorMapping] = useState<Record<string, string>>({})
+  const [showMappingUI, setShowMappingUI] = useState(false)
+  const [isSavingMapping, setIsSavingMapping] = useState(false)
   
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
       fetchPreview()
+      loadTemplateMapping()
     }
   }, [projectId])
+  
+  useEffect(() => {
+    // Show mapping UI if template exists but no mapping configured
+    if (currentProject?.template && Object.keys(floorMapping).length === 0 && exportFormat === 'excel') {
+      setShowMappingUI(true)
+    }
+  }, [currentProject?.template, floorMapping, exportFormat])
+  
+  const loadTemplateMapping = async () => {
+    if (!projectId) return
+    
+    try {
+      const response = await getTemplateMapping(projectId)
+      if (response.floor_mapping) {
+        setFloorMapping(response.floor_mapping)
+      }
+    } catch (error) {
+      // Template might not exist or no mapping yet, that's okay
+      console.log('No template mapping found')
+    }
+  }
+  
+  const handleSaveMapping = async () => {
+    if (!projectId) return
+    
+    setIsSavingMapping(true)
+    try {
+      await saveTemplateMapping(projectId, floorMapping)
+      toast.success('Floor mapping saved!')
+      setShowMappingUI(false)
+    } catch (error) {
+      toast.error('Failed to save floor mapping')
+    }
+    setIsSavingMapping(false)
+  }
+  
+  const handleFloorMappingChange = (floorNumber: string, columnName: string) => {
+    setFloorMapping(prev => ({
+      ...prev,
+      [floorNumber]: columnName
+    }))
+  }
+  
+  // Get available floor columns from template (filter out non-floor columns)
+  const getFloorColumns = () => {
+    if (!preview?.columns) return []
+    
+    // Filter columns that look like floor columns (contain 'F' or 'Floor')
+    return preview.columns.filter(col => 
+      col.name.includes('/F') || col.name.includes('Floor') || col.name.match(/\d+F/i)
+    )
+  }
+  
+  // Get unique floors from data
+  const getUniqueFloors = () => {
+    if (!preview?.data) return []
+    
+    const floors = new Map()
+    preview.data.forEach(item => {
+      if (!floors.has(item.floor_number)) {
+        floors.set(item.floor_number, item.floor_name)
+      }
+    })
+    
+    return Array.from(floors.entries()).map(([number, name]) => ({
+      floor_number: number,
+      floor_name: name as string
+    }))
+  }
   
   const fetchPreview = async () => {
     if (!projectId) return
@@ -220,12 +295,106 @@ export default function ExportPage() {
             
             <button
               onClick={handleExport}
-              className="btn btn-primary w-full mt-6 flex items-center justify-center gap-2"
+              disabled={currentProject?.template && exportFormat === 'excel' && Object.keys(floorMapping).length === 0}
+              className="btn btn-primary w-full mt-6 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download className="w-5 h-5" />
               Download {exportFormat === 'excel' ? 'Excel' : 'CSV'}
             </button>
+            
+            {currentProject?.template && exportFormat === 'excel' && Object.keys(floorMapping).length === 0 && (
+              <p className="text-xs text-amber-400 mt-2 text-center">
+                Configure floor mapping first
+              </p>
+            )}
           </motion.div>
+          
+          {/* Floor Mapping Configuration */}
+          {currentProject?.template && exportFormat === 'excel' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="card p-6"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Floor Mapping</h2>
+                {Object.keys(floorMapping).length > 0 && (
+                  <span className="text-xs text-emerald-400 flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" />
+                    Configured
+                  </span>
+                )}
+              </div>
+              
+              <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+                Map your extracted floors to template columns
+              </p>
+              
+              {!showMappingUI && Object.keys(floorMapping).length > 0 ? (
+                <div className="space-y-2">
+                  {Object.entries(floorMapping).map(([floor, column]) => {
+                    const floorData = getUniqueFloors().find(f => f.floor_number.toString() === floor)
+                    return (
+                      <div key={floor} className="flex items-center gap-2 text-sm">
+                        <span className="text-slate-700 dark:text-slate-300 font-medium">{floorData?.floor_name}</span>
+                        <ArrowRight className="w-3 h-3 text-slate-400" />
+                        <span className="text-sign-400 font-mono">{column}</span>
+                      </div>
+                    )
+                  })}
+                  <button
+                    onClick={() => setShowMappingUI(true)}
+                    className="text-sm text-sign-400 hover:text-sign-300 mt-3"
+                  >
+                    Edit mapping
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-3 mb-4">
+                    {getUniqueFloors().map(floor => (
+                      <div key={floor.floor_number} className="space-y-1">
+                        <label className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                          {floor.floor_name}
+                        </label>
+                        <select
+                          value={floorMapping[floor.floor_number] || ''}
+                          onChange={(e) => handleFloorMappingChange(floor.floor_number.toString(), e.target.value)}
+                          className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-sign-500 focus:border-transparent"
+                        >
+                          <option value="">Select column...</option>
+                          {getFloorColumns().map(col => (
+                            <option key={col.name} value={col.name}>
+                              {col.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <button
+                    onClick={handleSaveMapping}
+                    disabled={isSavingMapping || Object.keys(floorMapping).length === 0}
+                    className="btn btn-secondary w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <Save className="w-4 h-4" />
+                    {isSavingMapping ? 'Saving...' : 'Save Mapping'}
+                  </button>
+                  
+                  {Object.keys(floorMapping).length > 0 && (
+                    <button
+                      onClick={() => setShowMappingUI(false)}
+                      className="text-sm text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 w-full mt-2"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </>
+              )}
+            </motion.div>
+          )}
           
           {/* Summary */}
           <motion.div

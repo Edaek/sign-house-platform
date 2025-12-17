@@ -52,8 +52,10 @@ class ExcelService:
         # Read the first row as headers
         for cell in sheet[1]:
             if cell.value:
+                # Normalize column name by removing newlines and extra spaces
+                normalized_name = ' '.join(str(cell.value).split())
                 columns.append({
-                    'name': str(cell.value),
+                    'name': normalized_name,
                     'column': cell.column,
                     'letter': get_column_letter(cell.column)
                 })
@@ -188,6 +190,125 @@ class ExcelService:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(data)
+        
+        return output_path
+    
+    def export_with_template_mapping(self, data, output_path, template_path, floor_mapping, sign_column='Sign No.'):
+        """Export data to template by matching Sign No. and updating floor columns.
+        
+        Args:
+            data: List of dictionaries with extracted data (floor_number, text, quantity)
+            output_path: Path for the output file
+            template_path: Path to the template file
+            floor_mapping: Dict mapping floor numbers to column names (e.g., {"1": "21/F", "2": "8/F"})
+            sign_column: Name of the column containing sign identifiers (default: "Sign No.")
+            
+        Returns:
+            Path to the created file
+        """
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        
+        # Load template
+        workbook = load_workbook(template_path)
+        sheet = workbook.active
+        
+        # Parse template columns from the loaded workbook
+        # Normalize column names by removing newlines and extra spaces
+        column_map = {}
+        original_names = {}  # Keep track of original names for matching
+        for cell in sheet[1]:
+            if cell.value:
+                original_name = str(cell.value)
+                normalized_name = ' '.join(original_name.split())  # Remove newlines and extra spaces
+                column_map[normalized_name] = cell.column
+                original_names[normalized_name] = original_name
+        
+        # Find Sign No. column (with normalization)
+        if sign_column not in column_map:
+            raise ValueError(f"Column '{sign_column}' not found in template. Available columns: {list(column_map.keys())}")
+        
+        sign_col_idx = column_map[sign_column]
+        
+        # Group data by sign text
+        sign_data = {}
+        for item in data:
+            sign_text = item.get('text', '').strip()
+            floor_num = str(item.get('floor_number', ''))
+            quantity = item.get('quantity', 0)
+            
+            if not sign_text:
+                continue
+                
+            if sign_text not in sign_data:
+                sign_data[sign_text] = {}
+            
+            # Map floor number to floor column using floor_mapping
+            if floor_num in floor_mapping:
+                floor_col_name = floor_mapping[floor_num]
+                # Normalize floor column name to match template columns
+                normalized_floor_col = ' '.join(floor_col_name.split())
+                
+                if normalized_floor_col in column_map:
+                    if normalized_floor_col in sign_data[sign_text]:
+                        sign_data[sign_text][normalized_floor_col] += quantity
+                    else:
+                        sign_data[sign_text][normalized_floor_col] = quantity
+        
+        # Build index of existing rows by Sign No.
+        existing_rows = {}
+        for row_idx in range(2, sheet.max_row + 1):
+            cell_value = sheet.cell(row=row_idx, column=sign_col_idx).value
+            if cell_value:
+                existing_rows[str(cell_value).strip()] = row_idx
+        
+        # Track which signs we've updated
+        updated_signs = set()
+        
+        # Update existing rows
+        for sign_text, floor_quantities in sign_data.items():
+            if sign_text in existing_rows:
+                row_idx = existing_rows[sign_text]
+                updated_signs.add(sign_text)
+                
+                # Update quantities for each floor column
+                for floor_col_name, quantity in floor_quantities.items():
+                    # Floor column names are already normalized
+                    if floor_col_name in column_map:
+                        col_idx = column_map[floor_col_name]
+                        cell = sheet.cell(row=row_idx, column=col_idx)
+                        
+                        # Add to existing value if present
+                        existing_value = cell.value
+                        if existing_value and isinstance(existing_value, (int, float)):
+                            cell.value = existing_value + quantity
+                        else:
+                            cell.value = quantity
+                        
+                        cell.alignment = self.cell_style['alignment']
+        
+        # Append new rows for signs not found in template
+        next_row = sheet.max_row + 1
+        for sign_text, floor_quantities in sign_data.items():
+            if sign_text not in updated_signs:
+                # Write sign number
+                sheet.cell(row=next_row, column=sign_col_idx, value=sign_text)
+                
+                # Write quantities for each floor
+                for floor_col_name, quantity in floor_quantities.items():
+                    # Floor column names are already normalized
+                    if floor_col_name in column_map:
+                        col_idx = column_map[floor_col_name]
+                        sheet.cell(row=next_row, column=col_idx, value=quantity)
+                
+                next_row += 1
+        
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Save workbook
+        workbook.save(output_path)
+        workbook.close()
         
         return output_path
     

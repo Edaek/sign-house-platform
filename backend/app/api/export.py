@@ -163,18 +163,45 @@ def export_to_excel(project_id):
         # Use template if available
         template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
         template_path = template.get('filepath') if template else None
+        floor_mapping = template.get('floor_mapping', {}) if template else {}
+        
+        # Debug logging
+        current_app.logger.info(f'Template path: {template_path}')
+        current_app.logger.info(f'Floor mapping: {floor_mapping}')
+        current_app.logger.info(f'Data count: {len(all_data)}')
         
         # Create export file
         output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'exports')
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f'export_{project_id}_{project["name"]}.xlsx')
         
-        excel_service.export_data(
-            all_data,
-            output_path,
-            template_path=template_path,
-            column_mapping=column_mapping
-        )
+        # Sanitize project name for filename
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', project["name"]).strip().replace(' ', '_')
+        output_path = os.path.join(output_dir, f'export_{project_id}_{safe_name}.xlsx')
+        
+        # Use template mapping if both template and floor mapping are available
+        if template_path and floor_mapping:
+            excel_service.export_with_template_mapping(
+                all_data,
+                output_path,
+                template_path,
+                floor_mapping
+            )
+        elif template_path:
+            # Template exists but no floor mapping - return error with helpful message
+            return jsonify({
+                'error': 'Floor mapping not configured',
+                'message': 'Please configure floor-to-column mapping before exporting',
+                'template_columns': template.get('columns', [])
+            }), 400
+        else:
+            # No template - use default export
+            excel_service.export_data(
+                all_data,
+                output_path,
+                template_path=None,
+                column_mapping=column_mapping
+            )
         
         return send_file(
             output_path,
@@ -184,6 +211,9 @@ def export_to_excel(project_id):
         )
         
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        current_app.logger.error(f'Export failed: {str(e)}\n{error_trace}')
         return jsonify({'error': f'Export failed: {str(e)}'}), 500
 
 
