@@ -21,7 +21,6 @@ import clsx from 'clsx'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const navigate = useNavigate()
   const { currentProject, fetchProject, uploadTemplate, uploadFloorplan, isLoading } = useProjectStore()
   const [uploadingTemplate, setUploadingTemplate] = useState(false)
   const [uploadingFloorplan, setUploadingFloorplan] = useState(false)

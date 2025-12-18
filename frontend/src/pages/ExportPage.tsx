@@ -54,7 +54,7 @@ interface ExportPreview {
 
 export default function ExportPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { currentProject, fetchProject, isLoading: projectLoading } = useProjectStore()
+  const { currentProject, fetchProject } = useProjectStore()
   const [preview, setPreview] = useState<ExportPreview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
@@ -295,7 +295,7 @@ export default function ExportPage() {
             
             <button
               onClick={handleExport}
-              disabled={currentProject?.template && exportFormat === 'excel' && Object.keys(floorMapping).length === 0}
+              disabled={!!(currentProject?.template && exportFormat === 'excel' && Object.keys(floorMapping).length === 0)}
               className="btn btn-primary w-full mt-6 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Download className="w-5 h-5" />

@@ -173,10 +173,12 @@ export default function EditorPage() {
         boxesToDraw.forEach((box) => {
           if (box.shape_type === 'circle' && box.shape_data?.radius) {
             const { center_x, center_y, radius } = box.shape_data
-            ctx.beginPath()
-            ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
-            ctx.fill()
-            ctx.stroke()
+            if (radius) {
+              ctx.beginPath()
+              ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
+              ctx.fill()
+              ctx.stroke()
+            }
           } else {
             ctx.beginPath()
             ctx.rect(box.x, box.y, box.width, box.height)
