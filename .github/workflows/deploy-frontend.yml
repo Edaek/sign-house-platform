@@ -39,6 +39,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
+      - name: Debug - List source files
+        run: |
+          echo "Checking for vite-env.d.ts:"
+          ls -la src/*.d.ts || echo "No .d.ts files found"
+          echo "Checking lib directory:"
+          ls -la src/lib/ || echo "No lib directory"
+      
       - name: Build frontend
         run: npm run build
         env:
