@@ -20,6 +20,7 @@ COPY . .
 # Create upload directories
 RUN mkdir -p uploads/pdfs uploads/templates uploads/images uploads/exports
 
-EXPOSE 5000
+EXPOSE 8000
 
-CMD ["python", "run.py"]
+# Use Gunicorn for production with multiple workers
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "run:app"]

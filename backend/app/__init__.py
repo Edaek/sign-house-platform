@@ -27,7 +27,16 @@ def create_app(config_name=None):
     # Initialize extensions
     mongo.init_app(app)
     jwt.init_app(app)
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    
+    # Configure CORS with dynamic origins from config
+    allowed_origins = app.config.get('ALLOWED_ORIGINS', ['*'])
+    CORS(app, 
+         resources={r"/api/*": {
+             "origins": allowed_origins,
+             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization"],
+             "supports_credentials": True
+         }})
     
     # Create indexes
     with app.app_context():

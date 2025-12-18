@@ -27,6 +27,9 @@ class Config:
     
     # Tesseract Configuration
     TESSERACT_CMD = os.environ.get('TESSERACT_CMD', '/usr/local/bin/tesseract')
+    
+    # CORS Configuration
+    ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
 
 
 class DevelopmentConfig(Config):
