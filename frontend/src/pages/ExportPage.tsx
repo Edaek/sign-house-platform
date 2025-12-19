@@ -398,7 +398,7 @@ export default function ExportPage() {
   const [preview, setPreview] = useState<ExportPreview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
-  const [includeMetadata, setIncludeMetadata] = useState(true)
+  const [includeMetadata, _setIncludeMetadata] = useState(true)
   const [floorMapping, setFloorMapping] = useState<Record<string, string>>({})
   const [showSummary, setShowSummary] = useState(false)
   
