@@ -3,6 +3,7 @@ from flask import Flask
 from flask_pymongo import PyMongo
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
+from flasgger import Swagger
 
 from config import config
 
@@ -38,6 +39,44 @@ def create_app(config_name=None):
              "supports_credentials": True
          }})
     
+    # Configure Swagger/OpenAPI documentation
+    swagger_config = {
+        "headers": [],
+        "specs": [
+            {
+                "endpoint": 'apispec',
+                "route": '/apispec.json',
+                "rule_filter": lambda rule: True,
+                "model_filter": lambda tag: True,
+            }
+        ],
+        "static_url_path": "/flasgger_static",
+        "swagger_ui": True,
+        "specs_route": "/api-docs/"
+    }
+    
+    swagger_template = {
+        "info": {
+            "title": "Sign House API",
+            "description": "API for Sign House - OCR and floorplan processing system",
+            "version": "3.0.0",
+            "contact": {
+                "name": "Sign House",
+            }
+        },
+        "securityDefinitions": {
+            "Bearer": {
+                "type": "apiKey",
+                "name": "Authorization",
+                "in": "header",
+                "description": "JWT Authorization header using the Bearer scheme. Example: 'Authorization: Bearer {token}'"
+            }
+        },
+        "security": [{"Bearer": []}]
+    }
+    
+    Swagger(app, config=swagger_config, template=swagger_template)
+    
     # Create indexes
     with app.app_context():
         # Users indexes
@@ -60,12 +99,14 @@ def create_app(config_name=None):
         mongo.db.project_members.create_index('project_id')
     
     # Register blueprints
+    from app.api.health import health_bp
     from app.api.auth import auth_bp
     from app.api.projects import projects_bp
     from app.api.processing import processing_bp
     from app.api.export import export_bp
     from app.api.admin import admin_bp
     
+    app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(projects_bp, url_prefix='/api/projects')
     app.register_blueprint(processing_bp, url_prefix='/api/processing')

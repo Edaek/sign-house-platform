@@ -64,7 +64,74 @@ def register():
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
-    """Login user and return JWT token."""
+    """
+    User login endpoint
+    ---
+    tags:
+      - Authentication
+    parameters:
+      - name: body
+        in: body
+        required: true
+        description: Login credentials
+        schema:
+          type: object
+          required:
+            - username
+            - password
+          properties:
+            username:
+              type: string
+              description: Username or email
+              example: admin
+            password:
+              type: string
+              description: User password
+              example: password123
+    responses:
+      200:
+        description: Login successful
+        schema:
+          type: object
+          properties:
+            access_token:
+              type: string
+              description: JWT access token
+            user:
+              type: object
+              properties:
+                id:
+                  type: string
+                username:
+                  type: string
+                email:
+                  type: string
+                role:
+                  type: string
+                is_active:
+                  type: boolean
+      400:
+        description: Missing data
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+      401:
+        description: Invalid credentials
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+      403:
+        description: Account deactivated
+        schema:
+          type: object
+          properties:
+            error:
+              type: string
+    """
     data = request.get_json()
     
     if not data:
