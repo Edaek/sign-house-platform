@@ -16,7 +16,9 @@ __all__ = [
     'create_floorplan_doc',
     'create_extracted_data_doc',
     'create_audit_log_doc',
-    'create_project_member_doc'
+    'create_project_member_doc',
+    'create_dictionary_entry_doc',
+    'dictionary_entry_to_dict'
 ]
 
 
@@ -165,4 +167,29 @@ def create_project_member_doc(project_id, user_id, role='member', added_by=None)
         'role': role,  # 'member' for now (can be extended)
         'added_by': ObjectId(added_by) if added_by else None,
         'added_at': datetime.utcnow()
+    }
+
+
+def create_dictionary_entry_doc(english, chinese, created_by=None):
+    """Create a dictionary entry document for English-Chinese translation pairs."""
+    return {
+        'english': english.strip() if english else '',
+        'chinese': chinese.strip() if chinese else '',
+        'created_by': ObjectId(created_by) if created_by else None,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow()
+    }
+
+
+def dictionary_entry_to_dict(entry_doc):
+    """Convert dictionary entry document to dict."""
+    if not entry_doc:
+        return None
+    return {
+        'id': str(entry_doc['_id']),
+        'english': entry_doc.get('english', ''),
+        'chinese': entry_doc.get('chinese', ''),
+        'created_by': str(entry_doc['created_by']) if entry_doc.get('created_by') else None,
+        'created_at': entry_doc['created_at'].isoformat() if entry_doc.get('created_at') else None,
+        'updated_at': entry_doc['updated_at'].isoformat() if entry_doc.get('updated_at') else None
     }

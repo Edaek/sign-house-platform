@@ -327,3 +327,144 @@ def mark_complete(project_id):
         'message': 'Project marked as completed',
         'project': serialize_doc(project)
     }), 200
+
+
+@export_bp.route('/template-data/<project_id>', methods=['GET'])
+@jwt_required()
+def get_template_data(project_id):
+    """Get template data merged with OCR extracted data."""
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Get template
+    template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
+    if not template:
+        return jsonify({'error': 'No template uploaded for this project'}), 404
+    
+    template_path = template.get('filepath')
+    if not template_path or not os.path.exists(template_path):
+        return jsonify({'error': 'Template file not found'}), 404
+    
+    try:
+        excel_service = ExcelService()
+        
+        # Read template data
+        template_data = excel_service.read_template_data(template_path)
+        
+        # Get OCR extracted data
+        floorplans = list(mongo.db.floorplans.find({
+            'project_id': ObjectId(project_id)
+        }).sort('floor_number', 1))
+        
+        ocr_data = []
+        for fp in floorplans:
+            extracted = list(mongo.db.extracted_data.find({
+                'floorplan_id': fp['_id']
+            }).sort('shape_index', 1))
+            
+            for item in extracted:
+                display_text = item.get('manual_text') or item.get('extracted_text') or ''
+                ocr_data.append({
+                    'floor_number': fp['floor_number'],
+                    'floor_name': fp['floor_name'],  # Include floor name for auto-matching
+                    'text': display_text,
+                    'quantity': item.get('quantity', 1)
+                })
+        
+        # Get floor mapping (optional - auto-matching will work without it)
+        floor_mapping = template.get('floor_mapping', {})
+        
+        # Merge OCR data into template (auto-matches floor names to columns)
+        template_data = excel_service.merge_with_ocr_data(
+            template_data,
+            ocr_data,
+            floor_mapping  # Pass mapping as optional override
+        )
+        
+        return jsonify({
+            'template': serialize_doc(template),
+            'data': template_data
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        current_app.logger.error(f'Failed to read template data: {str(e)}\n{error_trace}')
+        return jsonify({'error': f'Failed to read template: {str(e)}'}), 500
+
+
+@export_bp.route('/template-data/<project_id>', methods=['PUT'])
+@jwt_required()
+def update_template_data(project_id):
+    """Update cells in the template file."""
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Get template
+    template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
+    if not template:
+        return jsonify({'error': 'No template uploaded for this project'}), 404
+    
+    template_path = template.get('filepath')
+    if not template_path or not os.path.exists(template_path):
+        return jsonify({'error': 'Template file not found'}), 404
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    try:
+        excel_service = ExcelService()
+        
+        # Support both single cell and batch updates
+        if 'updates' in data:
+            # Batch update
+            updates = data['updates']
+            if not isinstance(updates, list):
+                return jsonify({'error': 'updates must be an array'}), 400
+            
+            results = excel_service.update_cells_batch(template_path, updates)
+            return jsonify({
+                'message': f'Updated {len(results)} cells',
+                'cells': results
+            }), 200
+        else:
+            # Single cell update
+            row = data.get('row')
+            col = data.get('col')
+            value = data.get('value')
+            
+            if row is None or col is None:
+                return jsonify({'error': 'row and col are required'}), 400
+            
+            result = excel_service.update_cell(template_path, row, col, value)
+            return jsonify({
+                'message': 'Cell updated',
+                'cell': result
+            }), 200
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        current_app.logger.error(f'Failed to update template: {str(e)}\n{error_trace}')
+        return jsonify({'error': f'Failed to update template: {str(e)}'}), 500

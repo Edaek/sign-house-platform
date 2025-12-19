@@ -8,7 +8,8 @@ import {
   Menu,
   X,
   Users,
-  FileText
+  FileText,
+  Book
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '../store/authStore'
@@ -35,6 +36,7 @@ export default function Layout() {
   
   const navItems = [
     { path: '/', icon: Home, label: isManager() ? 'All Projects' : 'Dashboard' },
+    { path: '/dictionary', icon: Book, label: 'Dictionary' },
   ]
   
   // Add admin-only navigation items

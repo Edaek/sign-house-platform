@@ -9,6 +9,7 @@ import EditorPage from './pages/EditorPage'
 import ExportPage from './pages/ExportPage'
 import AdminPage from './pages/AdminPage'
 import AuditLogsPage from './pages/AuditLogsPage'
+import DictionaryPage from './pages/DictionaryPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -37,6 +38,7 @@ function App() {
         <Route path="project/:projectId/export" element={<ExportPage />} />
         <Route path="admin" element={<AdminPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
+        <Route path="dictionary" element={<DictionaryPage />} />
       </Route>
       
       <Route path="*" element={<Navigate to="/" replace />} />

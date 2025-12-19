@@ -47,5 +47,69 @@ export const getTemplateMapping = async (projectId: string) => {
   return response.data
 }
 
+// Template data functions (for editable preview)
+export interface TemplateCell {
+  col: number
+  letter: string
+  value: string | number
+}
+
+export interface TemplateRow {
+  row: number
+  cells: TemplateCell[]
+}
+
+export interface TemplateColumn {
+  name: string
+  column: number
+  letter: string
+}
+
+export interface TemplateData {
+  columns: TemplateColumn[]
+  rows: TemplateRow[]
+  total_rows: number
+  total_columns: number
+  ocr_cells: { row: number; col: number }[]
+}
+
+export interface TemplateDataResponse {
+  template: {
+    id: string
+    filename: string
+    filepath: string
+    columns: TemplateColumn[]
+    floor_mapping?: Record<string, string>
+  }
+  data: TemplateData
+}
+
+export const getTemplateData = async (projectId: string): Promise<TemplateDataResponse> => {
+  const response = await api.get(`/export/template-data/${projectId}`)
+  return response.data
+}
+
+export interface CellUpdate {
+  row: number
+  col: number
+  value: string | number
+}
+
+export const updateTemplateCell = async (projectId: string, row: number, col: number, value: string | number) => {
+  const response = await api.put(`/export/template-data/${projectId}`, {
+    row,
+    col,
+    value,
+  })
+  return response.data
+}
+
+export const updateTemplateCells = async (projectId: string, updates: CellUpdate[]) => {
+  const response = await api.put(`/export/template-data/${projectId}`, {
+    updates,
+  })
+  return response.data
+}
+
 export default api
 

@@ -6,4 +6,5 @@ export { default as EditorPage } from './EditorPage'
 export { default as ExportPage } from './ExportPage'
 export { default as AdminPage } from './AdminPage'
 export { default as AuditLogsPage } from './AuditLogsPage'
+export { default as DictionaryPage } from './DictionaryPage'
 

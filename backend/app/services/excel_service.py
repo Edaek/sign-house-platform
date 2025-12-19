@@ -362,4 +362,326 @@ class ExcelService:
         workbook.close()
         
         return output_path
+    
+    def read_template_data(self, template_path):
+        """Read all data from a template file.
+        
+        Args:
+            template_path: Path to the Excel template file
+            
+        Returns:
+            Dict with columns (header info) and rows (all data rows)
+        """
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        
+        workbook = load_workbook(template_path)
+        sheet = workbook.active
+        
+        # Read columns from first row
+        columns = []
+        for cell in sheet[1]:
+            if cell.value:
+                normalized_name = ' '.join(str(cell.value).split())
+                columns.append({
+                    'name': normalized_name,
+                    'column': cell.column,
+                    'letter': get_column_letter(cell.column)
+                })
+            else:
+                # Include empty columns to preserve structure
+                columns.append({
+                    'name': '',
+                    'column': cell.column,
+                    'letter': get_column_letter(cell.column)
+                })
+        
+        # Read all data rows (starting from row 2), skip empty rows
+        rows = []
+        for row_idx in range(2, sheet.max_row + 1):
+            row_data = {
+                'row': row_idx,
+                'cells': []
+            }
+            has_data = False  # Track if row has any non-empty values
+            
+            for col_idx in range(1, len(columns) + 1):
+                cell = sheet.cell(row=row_idx, column=col_idx)
+                cell_value = cell.value
+                # Convert to appropriate type for JSON
+                if cell_value is None:
+                    cell_value = ''
+                elif isinstance(cell_value, (int, float)):
+                    has_data = True  # Numbers count as data
+                else:
+                    cell_value = str(cell_value)
+                    if cell_value.strip():  # Non-empty string
+                        has_data = True
+                
+                row_data['cells'].append({
+                    'col': col_idx,
+                    'letter': get_column_letter(col_idx),
+                    'value': cell_value
+                })
+            
+            # Only include rows that have at least one non-empty cell
+            if has_data:
+                rows.append(row_data)
+        
+        workbook.close()
+        
+        return {
+            'columns': columns,
+            'rows': rows,
+            'total_rows': len(rows),
+            'total_columns': len(columns)
+        }
+    
+    def _extract_floor_number(self, text):
+        """Extract floor number from a string like 'Floor 21', '21/F', '21F', 'L21', etc.
+        
+        Args:
+            text: String containing floor information
+            
+        Returns:
+            Extracted floor number as string, or None if not found
+        """
+        import re
+        if not text:
+            return None
+        
+        text = str(text).strip()
+        
+        # Try various patterns to extract floor number
+        patterns = [
+            r'(\d+)/F',           # "21/F" -> "21"
+            r'(\d+)F\b',          # "21F" -> "21"
+            r'Floor\s*(\d+)',     # "Floor 21" -> "21"
+            r'F(\d+)\b',          # "F21" -> "21"
+            r'L(\d+)\b',          # "L21" -> "21"
+            r'^(\d+)$',           # Just "21" -> "21"
+            r'\b(\d+)\b',         # Any number in the string
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def _find_matching_column(self, floor_name, column_map, floor_mapping=None):
+        """Find the matching column for a floor name.
+        
+        Args:
+            floor_name: Name of the floor (e.g., "Floor 1", "21/F")
+            column_map: Dict of column names to indices
+            floor_mapping: Optional explicit mapping from floor numbers to column names
+            
+        Returns:
+            Column name if found, None otherwise
+        """
+        # First try exact match
+        normalized_floor = ' '.join(str(floor_name).split())
+        if normalized_floor in column_map:
+            return normalized_floor
+        
+        # Try explicit floor mapping if provided
+        if floor_mapping:
+            floor_num = self._extract_floor_number(floor_name)
+            if floor_num and floor_num in floor_mapping:
+                mapped_col = floor_mapping[floor_num]
+                normalized_mapped = ' '.join(mapped_col.split())
+                if normalized_mapped in column_map:
+                    return normalized_mapped
+        
+        # Try flexible matching based on floor number
+        floor_num = self._extract_floor_number(floor_name)
+        if floor_num:
+            for col_name in column_map.keys():
+                col_num = self._extract_floor_number(col_name)
+                if col_num and col_num == floor_num:
+                    return col_name
+        
+        return None
+    
+    def merge_with_ocr_data(self, template_data, ocr_data, floor_mapping=None, sign_column='Sign No.'):
+        """Merge OCR extracted data into template data structure.
+        
+        Args:
+            template_data: Dict from read_template_data()
+            ocr_data: List of extracted data items with floor_name, text, quantity
+            floor_mapping: Optional dict mapping floor numbers to column names (for manual override)
+            sign_column: Name of the column containing sign identifiers
+            
+        Returns:
+            Updated template_data with OCR values merged in and ocr_cells tracking
+        """
+        columns = template_data['columns']
+        rows = template_data['rows']
+        
+        # Build column name to index mapping
+        column_map = {}
+        for col in columns:
+            if col['name']:
+                normalized_name = ' '.join(col['name'].split())
+                column_map[normalized_name] = col['column'] - 1  # 0-based index for cells array
+        
+        # Find sign column index
+        sign_col_idx = column_map.get(sign_column)
+        if sign_col_idx is None:
+            # Return unmodified if sign column not found
+            template_data['ocr_cells'] = []
+            return template_data
+        
+        # Group OCR data by sign text
+        sign_data = {}
+        for item in ocr_data:
+            sign_text = item.get('text', '').strip()
+            floor_name = item.get('floor_name', '')
+            quantity = item.get('quantity', 1)
+            
+            if not sign_text:
+                continue
+            
+            if sign_text not in sign_data:
+                sign_data[sign_text] = {}
+            
+            # Find matching column for this floor (auto-match or use explicit mapping)
+            matched_col = self._find_matching_column(floor_name, column_map, floor_mapping)
+            
+            if matched_col:
+                if matched_col in sign_data[sign_text]:
+                    sign_data[sign_text][matched_col] += quantity
+                else:
+                    sign_data[sign_text][matched_col] = quantity
+        
+        # Track which cells were populated by OCR
+        ocr_cells = []
+        
+        # Build index of existing rows by Sign No.
+        row_sign_map = {}
+        for row in rows:
+            if sign_col_idx < len(row['cells']):
+                cell_value = row['cells'][sign_col_idx]['value']
+                if cell_value:
+                    row_sign_map[str(cell_value).strip()] = row
+        
+        # Merge OCR data into template
+        for sign_text, floor_quantities in sign_data.items():
+            if sign_text in row_sign_map:
+                row = row_sign_map[sign_text]
+                
+                for floor_col_name, quantity in floor_quantities.items():
+                    if floor_col_name in column_map:
+                        col_idx = column_map[floor_col_name]
+                        if col_idx < len(row['cells']):
+                            # Update cell value
+                            existing = row['cells'][col_idx]['value']
+                            if existing and isinstance(existing, (int, float)):
+                                row['cells'][col_idx]['value'] = existing + quantity
+                            else:
+                                row['cells'][col_idx]['value'] = quantity
+                            
+                            # Track this as an OCR-populated cell
+                            ocr_cells.append({
+                                'row': row['row'],
+                                'col': col_idx + 1  # 1-based for consistency
+                            })
+        
+        template_data['ocr_cells'] = ocr_cells
+        return template_data
+    
+    def update_cell(self, template_path, row, col, value):
+        """Update a single cell in the template file.
+        
+        Args:
+            template_path: Path to the Excel template file
+            row: Row number (1-based)
+            col: Column number (1-based)
+            value: New cell value
+            
+        Returns:
+            Updated cell info
+        """
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        
+        workbook = load_workbook(template_path)
+        sheet = workbook.active
+        
+        cell = sheet.cell(row=row, column=col)
+        
+        # Try to convert to number if possible
+        if value is not None and value != '':
+            try:
+                # Try integer first
+                value = int(value)
+            except (ValueError, TypeError):
+                try:
+                    # Try float
+                    value = float(value)
+                except (ValueError, TypeError):
+                    # Keep as string
+                    pass
+        
+        cell.value = value
+        
+        workbook.save(template_path)
+        workbook.close()
+        
+        return {
+            'row': row,
+            'col': col,
+            'letter': get_column_letter(col),
+            'value': value
+        }
+    
+    def update_cells_batch(self, template_path, updates):
+        """Update multiple cells in the template file at once.
+        
+        Args:
+            template_path: Path to the Excel template file
+            updates: List of dicts with row, col, value
+            
+        Returns:
+            List of updated cell info
+        """
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template not found: {template_path}")
+        
+        workbook = load_workbook(template_path)
+        sheet = workbook.active
+        
+        results = []
+        for update in updates:
+            row = update['row']
+            col = update['col']
+            value = update['value']
+            
+            cell = sheet.cell(row=row, column=col)
+            
+            # Try to convert to number if possible
+            if value is not None and value != '':
+                try:
+                    value = int(value)
+                except (ValueError, TypeError):
+                    try:
+                        value = float(value)
+                    except (ValueError, TypeError):
+                        pass
+            
+            cell.value = value
+            
+            results.append({
+                'row': row,
+                'col': col,
+                'letter': get_column_letter(col),
+                'value': value
+            })
+        
+        workbook.save(template_path)
+        workbook.close()
+        
+        return results
 

@@ -97,6 +97,9 @@ def create_app(config_name=None):
         mongo.db.project_members.create_index([('project_id', 1), ('user_id', 1)], unique=True)
         mongo.db.project_members.create_index('user_id')
         mongo.db.project_members.create_index('project_id')
+        # Dictionary indexes
+        mongo.db.dictionary.create_index('english')
+        mongo.db.dictionary.create_index('chinese')
     
     # Register blueprints
     from app.api.health import health_bp
@@ -105,6 +108,7 @@ def create_app(config_name=None):
     from app.api.processing import processing_bp
     from app.api.export import export_bp
     from app.api.admin import admin_bp
+    from app.api.dictionary import dictionary_bp
     
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -112,5 +116,6 @@ def create_app(config_name=None):
     app.register_blueprint(processing_bp, url_prefix='/api/processing')
     app.register_blueprint(export_bp, url_prefix='/api/export')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
+    app.register_blueprint(dictionary_bp, url_prefix='/api/dictionary')
     
     return app
