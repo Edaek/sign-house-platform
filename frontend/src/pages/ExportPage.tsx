@@ -23,7 +23,8 @@ import api, {
   getTemplateData, 
   updateTemplateCell,
   TemplateData,
-  TemplateDataResponse
+  TemplateDataResponse,
+  TemplateRow
 } from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
@@ -407,7 +408,7 @@ function TemplatePreview({
   }
 
   // Helper to get cell value by column index for a row
-  const getCellValue = (rowData: typeof templateData.rows[0], colIdx: number): string => {
+  const getCellValue = (rowData: TemplateRow, colIdx: number): string => {
     const cell = rowData.cells.find(c => c.col === colIdx)
     return cell ? String(cell.value || '') : ''
   }
