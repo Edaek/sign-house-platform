@@ -22,16 +22,16 @@ import clsx from 'clsx'
 interface DictionaryEntry {
   id: string
   english: string
-  chinese: string
+  chinese: string[]  // Array of Chinese translations
   created_at: string | null
   updated_at: string | null
 }
 
 interface DictionaryStats {
   total: number
-  with_both: number
-  english_only: number
-  chinese_only: number
+  with_chinese: number
+  no_chinese: number
+  total_translations: number
 }
 
 export default function DictionaryPage() {
@@ -46,12 +46,14 @@ export default function DictionaryPage() {
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editEnglish, setEditEnglish] = useState('')
-  const [editChinese, setEditChinese] = useState('')
+  const [editChinese, setEditChinese] = useState<string[]>([])
+  const [newChineseInput, setNewChineseInput] = useState('')
   
   // New entry state
   const [showAddForm, setShowAddForm] = useState(false)
   const [newEnglish, setNewEnglish] = useState('')
-  const [newChinese, setNewChinese] = useState('')
+  const [newChineseList, setNewChineseList] = useState<string[]>([])
+  const [newChineseInputField, setNewChineseInputField] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   
   // Bulk import state
@@ -100,9 +102,23 @@ export default function DictionaryPage() {
     fetchEntries()
   }
   
+  // Add Chinese to new entry list
+  const handleAddNewChinese = () => {
+    const value = newChineseInputField.trim()
+    if (value && !newChineseList.includes(value)) {
+      setNewChineseList([...newChineseList, value])
+      setNewChineseInputField('')
+    }
+  }
+  
+  // Remove Chinese from new entry list
+  const handleRemoveNewChinese = (index: number) => {
+    setNewChineseList(newChineseList.filter((_, i) => i !== index))
+  }
+  
   const handleAdd = async () => {
-    if (!newEnglish.trim() && !newChinese.trim()) {
-      toast.error('Please enter at least one value')
+    if (!newEnglish.trim()) {
+      toast.error('English word is required')
       return
     }
     
@@ -110,11 +126,12 @@ export default function DictionaryPage() {
     try {
       await api.post('/dictionary', {
         english: newEnglish,
-        chinese: newChinese
+        chinese: newChineseList
       })
       toast.success('Entry added successfully')
       setNewEnglish('')
-      setNewChinese('')
+      setNewChineseList([])
+      setNewChineseInputField('')
       setShowAddForm(false)
       fetchEntries()
       fetchStats()
@@ -128,14 +145,29 @@ export default function DictionaryPage() {
   const handleEdit = (entry: DictionaryEntry) => {
     setEditingId(entry.id)
     setEditEnglish(entry.english)
-    setEditChinese(entry.chinese)
+    setEditChinese([...entry.chinese])
+    setNewChineseInput('')
+  }
+  
+  // Add Chinese to edit list
+  const handleAddEditChinese = () => {
+    const value = newChineseInput.trim()
+    if (value && !editChinese.includes(value)) {
+      setEditChinese([...editChinese, value])
+      setNewChineseInput('')
+    }
+  }
+  
+  // Remove Chinese from edit list
+  const handleRemoveEditChinese = (index: number) => {
+    setEditChinese(editChinese.filter((_, i) => i !== index))
   }
   
   const handleSaveEdit = async () => {
     if (!editingId) return
     
-    if (!editEnglish.trim() && !editChinese.trim()) {
-      toast.error('Please enter at least one value')
+    if (!editEnglish.trim()) {
+      toast.error('English word is required')
       return
     }
     
@@ -146,7 +178,11 @@ export default function DictionaryPage() {
       })
       toast.success('Entry updated successfully')
       setEditingId(null)
+      setEditEnglish('')
+      setEditChinese([])
+      setNewChineseInput('')
       fetchEntries()
+      fetchStats()
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to update entry')
     }
@@ -155,7 +191,8 @@ export default function DictionaryPage() {
   const handleCancelEdit = () => {
     setEditingId(null)
     setEditEnglish('')
-    setEditChinese('')
+    setEditChinese([])
+    setNewChineseInput('')
   }
   
   const handleDelete = async (id: string) => {
@@ -181,15 +218,16 @@ export default function DictionaryPage() {
     
     setIsImporting(true)
     try {
-      // Parse bulk data (format: english,chinese per line)
+      // Parse bulk data (format: English,Chinese1,Chinese2,... per line)
       const lines = bulkData.trim().split('\n')
       const entries = lines.map(line => {
-        const parts = line.split(',').map(p => p.trim())
+        const parts = line.split(',').map(p => p.trim()).filter(p => p)
+        if (parts.length === 0) return null
         return {
           english: parts[0] || '',
-          chinese: parts[1] || ''
+          chinese: parts.slice(1)  // All parts after the first are Chinese translations
         }
-      }).filter(e => e.english || e.chinese)
+      }).filter((e): e is { english: string; chinese: string[] } => e !== null && !!e.english)
       
       if (entries.length === 0) {
         toast.error('No valid entries found')
@@ -198,7 +236,8 @@ export default function DictionaryPage() {
       }
       
       const response = await api.post('/dictionary/bulk', { entries })
-      toast.success(`Imported ${response.data.created} entries (${response.data.skipped} skipped)`)
+      const message = `Created ${response.data.created}, updated ${response.data.updated}, skipped ${response.data.skipped}`
+      toast.success(message)
       setBulkData('')
       setShowBulkImport(false)
       fetchEntries()
@@ -227,6 +266,37 @@ export default function DictionaryPage() {
     }
   }
   
+  // Render Chinese tags
+  const renderChineseTags = (chineseList: string[], isEditing: boolean = false, onRemove?: (index: number) => void) => {
+    if (!chineseList || chineseList.length === 0) {
+      return <span className="text-slate-400 dark:text-slate-500 italic">(no translations)</span>
+    }
+    
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {chineseList.map((cn, idx) => (
+          <span 
+            key={idx}
+            className={clsx(
+              'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-sm',
+              'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+            )}
+          >
+            {cn}
+            {isEditing && onRemove && (
+              <button
+                onClick={() => onRemove(idx)}
+                className="ml-0.5 hover:text-red-600 dark:hover:text-red-400"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+    )
+  }
+  
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       {/* Header */}
@@ -238,7 +308,7 @@ export default function DictionaryPage() {
           </h1>
         </div>
         <p className="text-slate-600 dark:text-slate-400">
-          Manage English-Chinese translation pairs for template auto-fill
+          English-first dictionary with multiple Chinese translations per word
         </p>
       </div>
       
@@ -247,19 +317,19 @@ export default function DictionaryPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
             <div className="text-2xl font-bold text-slate-900 dark:text-white">{stats.total}</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">Total Entries</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">English Words</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats.with_both}</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">Complete Pairs</div>
+            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{stats.total_translations}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">Chinese Translations</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
-            <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{stats.english_only}</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">English Only</div>
+            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats.with_chinese}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">With Translations</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
-            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{stats.chinese_only}</div>
-            <div className="text-sm text-slate-500 dark:text-slate-400">Chinese Only</div>
+            <div className="text-2xl font-bold text-slate-500 dark:text-slate-400">{stats.no_chinese}</div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">Pending Translations</div>
           </div>
         </div>
       )}
@@ -328,35 +398,75 @@ export default function DictionaryPage() {
           className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-4 mb-6 border border-emerald-200 dark:border-emerald-800"
         >
           <h3 className="font-semibold text-emerald-800 dark:text-emerald-200 mb-3">Add New Entry</h3>
-          <div className="flex flex-col md:flex-row gap-3">
-            <input
-              type="text"
-              placeholder="English"
-              value={newEnglish}
-              onChange={(e) => setNewEnglish(e.target.value)}
-              className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
-            />
-            <input
-              type="text"
-              placeholder="Chinese (中文)"
-              value={newChinese}
-              onChange={(e) => setNewChinese(e.target.value)}
-              className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
-            />
-            <div className="flex gap-2">
+          <div className="space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">English Word</label>
+              <input
+                type="text"
+                placeholder="Enter English word"
+                value={newEnglish}
+                onChange={(e) => setNewEnglish(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">Chinese Translations</label>
+              <div className="flex gap-2 mb-2">
+                <input
+                  type="text"
+                  placeholder="Add Chinese translation"
+                  value={newChineseInputField}
+                  onChange={(e) => setNewChineseInputField(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleAddNewChinese()
+                    }
+                  }}
+                  className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                />
+                <button
+                  onClick={handleAddNewChinese}
+                  type="button"
+                  className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+              {newChineseList.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {newChineseList.map((cn, idx) => (
+                    <span 
+                      key={idx}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-sm bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                    >
+                      {cn}
+                      <button
+                        onClick={() => handleRemoveNewChinese(idx)}
+                        className="ml-0.5 hover:text-red-600 dark:hover:text-red-400"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2 pt-2">
               <button
                 onClick={handleAdd}
                 disabled={isAdding}
                 className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50"
               >
                 {isAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                Save
+                Save Entry
               </button>
               <button
                 onClick={() => {
                   setShowAddForm(false)
                   setNewEnglish('')
-                  setNewChinese('')
+                  setNewChineseList([])
+                  setNewChineseInputField('')
                 }}
                 className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
               >
@@ -377,12 +487,12 @@ export default function DictionaryPage() {
         >
           <h3 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">Bulk Import</h3>
           <p className="text-sm text-blue-600 dark:text-blue-400 mb-3">
-            Enter one entry per line in the format: English,Chinese
+            Format: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">English,Chinese1,Chinese2,Chinese3</code> (one entry per line)
           </p>
           <textarea
             value={bulkData}
             onChange={(e) => setBulkData(e.target.value)}
-            placeholder="Exit Sign,出口標誌&#10;Fire Extinguisher,滅火器&#10;Emergency Exit,緊急出口"
+            placeholder="Exit,出口,退出&#10;Fire,火,火災&#10;Emergency,緊急,急救"
             rows={6}
             className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:text-white font-mono text-sm"
           />
@@ -428,13 +538,13 @@ export default function DictionaryPage() {
               <table className="w-full">
                 <thead className="bg-slate-50 dark:bg-slate-700/50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/3">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/4">
                       English
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/3">
-                      Chinese (中文)
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                      Chinese Translations (中文翻譯)
                     </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-24">
                       Actions
                     </th>
                   </tr>
@@ -452,29 +562,39 @@ export default function DictionaryPage() {
                             autoFocus
                           />
                         ) : (
-                          <span className={clsx(
-                            'text-slate-900 dark:text-white',
-                            !entry.english && 'text-slate-400 dark:text-slate-500 italic'
-                          )}>
-                            {entry.english || '(empty)'}
+                          <span className="text-slate-900 dark:text-white font-medium">
+                            {entry.english}
                           </span>
                         )}
                       </td>
                       <td className="px-6 py-4">
                         {editingId === entry.id ? (
-                          <input
-                            type="text"
-                            value={editChinese}
-                            onChange={(e) => setEditChinese(e.target.value)}
-                            className="w-full px-2 py-1 border border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-sign-500 dark:bg-slate-700 dark:text-white"
-                          />
+                          <div className="space-y-2">
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                placeholder="Add translation"
+                                value={newChineseInput}
+                                onChange={(e) => setNewChineseInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    handleAddEditChinese()
+                                  }
+                                }}
+                                className="flex-1 px-2 py-1 border border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-sign-500 dark:bg-slate-700 dark:text-white text-sm"
+                              />
+                              <button
+                                onClick={handleAddEditChinese}
+                                className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
+                            {renderChineseTags(editChinese, true, handleRemoveEditChinese)}
+                          </div>
                         ) : (
-                          <span className={clsx(
-                            'text-slate-900 dark:text-white',
-                            !entry.chinese && 'text-slate-400 dark:text-slate-500 italic'
-                          )}>
-                            {entry.chinese || '(empty)'}
-                          </span>
+                          renderChineseTags(entry.chinese)
                         )}
                       </td>
                       <td className="px-6 py-4 text-right">
@@ -554,4 +674,3 @@ export default function DictionaryPage() {
     </div>
   )
 }
-

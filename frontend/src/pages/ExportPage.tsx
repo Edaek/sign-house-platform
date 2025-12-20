@@ -13,7 +13,9 @@ import {
   RefreshCw,
   ChevronDown,
   ChevronUp,
-  Info
+  Info,
+  Book,
+  Settings
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import api, { 
@@ -61,7 +63,7 @@ interface ExportPreview {
   }
 }
 
-// Editable cell component
+// Regular Editable cell component
 function EditableCell({ 
   value, 
   row, 
@@ -153,15 +155,197 @@ function EditableCell({
   )
 }
 
+// Dictionary-aware cell component - shows dropdown when partner column has value
+function DictionaryCell({ 
+  value, 
+  row, 
+  col, 
+  isOcrCell, 
+  onSave,
+  partnerValue,
+  lookupDirection
+}: { 
+  value: string | number
+  row: number
+  col: number
+  isOcrCell: boolean
+  onSave: (row: number, col: number, value: string | number) => Promise<void>
+  partnerValue: string  // Value from the partner column (English or Chinese)
+  lookupDirection: 'en_to_cn' | 'cn_to_en'  // Which direction to look up
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(String(value))
+  const [isSaving, setIsSaving] = useState(false)
+  const [suggestions, setSuggestions] = useState<string[]>([])
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Check if we should show dictionary suggestions
+  const isEmpty = !value || String(value).trim() === ''
+  const hasPartner = partnerValue && partnerValue.trim() !== ''
+  const shouldShowSuggestions = isEmpty && hasPartner
+
+  // Fetch dictionary suggestions when partner value changes
+  useEffect(() => {
+    if (shouldShowSuggestions && partnerValue) {
+      setIsLoadingSuggestions(true)
+      const param = lookupDirection === 'en_to_cn' ? 'english' : 'chinese'
+      api.get(`/dictionary/lookup?${param}=${encodeURIComponent(partnerValue)}`)
+        .then(res => {
+          if (res.data.found) {
+            if (lookupDirection === 'en_to_cn') {
+              // Looking up Chinese for English word
+              setSuggestions(res.data.chinese || [])
+            } else {
+              // Looking up English for Chinese word - might have multiple matches
+              if (res.data.matches) {
+                setSuggestions(res.data.matches.map((m: { english: string }) => m.english))
+              } else {
+                setSuggestions([res.data.primary])
+              }
+            }
+          } else {
+            setSuggestions([])
+          }
+        })
+        .catch(() => setSuggestions([]))
+        .finally(() => setIsLoadingSuggestions(false))
+    } else {
+      setSuggestions([])
+    }
+  }, [partnerValue, lookupDirection, shouldShowSuggestions])
+
+  useEffect(() => {
+    setEditValue(String(value))
+  }, [value])
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
+  const handleSave = async (newValue?: string) => {
+    const saveValue = newValue ?? editValue
+    if (saveValue === String(value)) {
+      setIsEditing(false)
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      await onSave(row, col, saveValue)
+      setEditValue(saveValue)
+      setIsEditing(false)
+    } catch {
+      toast.error('Failed to save')
+      setEditValue(String(value))
+    }
+    setIsSaving(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave()
+    } else if (e.key === 'Escape') {
+      setEditValue(String(value))
+      setIsEditing(false)
+    }
+  }
+
+  const handleSelectSuggestion = async (suggestion: string) => {
+    await handleSave(suggestion)
+  }
+
+  // Show dropdown with suggestions when cell is empty but has dictionary matches
+  if (shouldShowSuggestions && suggestions.length > 0) {
+    return (
+      <div className="relative">
+        <select
+          value=""
+          onChange={(e) => handleSelectSuggestion(e.target.value)}
+          disabled={isSaving}
+          className="w-full px-2 py-1.5 text-sm bg-amber-500/10 border border-amber-500/40 rounded text-amber-300 cursor-pointer hover:bg-amber-500/20 appearance-none"
+        >
+          <option value="" disabled>
+            {suggestions.length === 1 ? suggestions[0] : `Select (${suggestions.length} options)`}
+          </option>
+          {suggestions.map((s, idx) => (
+            <option key={idx} value={s} className="bg-slate-800 text-white">
+              {s}
+            </option>
+          ))}
+        </select>
+        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-amber-400 pointer-events-none" />
+        {isSaving && (
+          <Loader2 className="absolute right-6 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-amber-500" />
+        )}
+      </div>
+    )
+  }
+
+  // Show loading state while fetching suggestions
+  if (shouldShowSuggestions && isLoadingSuggestions) {
+    return (
+      <div className="px-2 py-1.5 min-h-[32px] text-sm flex items-center gap-2 text-slate-400">
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <span className="text-xs">Looking up...</span>
+      </div>
+    )
+  }
+
+  // Editing mode
+  if (isEditing) {
+    return (
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={() => handleSave()}
+          onKeyDown={handleKeyDown}
+          disabled={isSaving}
+          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-sign-500 rounded focus:outline-none"
+        />
+        {isSaving && (
+          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-500" />
+        )}
+      </div>
+    )
+  }
+
+  // Default display mode
+  return (
+    <div
+      onClick={() => setIsEditing(true)}
+      className={clsx(
+        'px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm',
+        isOcrCell 
+          ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 font-semibold text-emerald-300' 
+          : 'hover:bg-slate-700/50'
+      )}
+      title={isOcrCell ? 'OCR populated - Click to edit' : 'Click to edit'}
+    >
+      {value !== '' ? value : <span className="text-slate-500">—</span>}
+    </div>
+  )
+}
+
 // Template Preview Component - Full Width
 function TemplatePreview({ 
   projectId, 
   hasTemplate,
-  floorMapping
+  floorMapping,
+  englishColIdx,
+  chineseColIdx
 }: { 
   projectId: string
   hasTemplate: boolean
   floorMapping: Record<string, string>
+  englishColIdx: number | null
+  chineseColIdx: number | null
 }) {
   const [templateData, setTemplateData] = useState<TemplateData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -222,6 +406,12 @@ function TemplatePreview({
     return ocrCellSet.has(`${row}-${col}`)
   }
 
+  // Helper to get cell value by column index for a row
+  const getCellValue = (rowData: typeof templateData.rows[0], colIdx: number): string => {
+    const cell = rowData.cells.find(c => c.col === colIdx)
+    return cell ? String(cell.value || '') : ''
+  }
+
   if (!hasTemplate) {
     return null
   }
@@ -261,7 +451,7 @@ function TemplatePreview({
   }
 
   return (
-    <div className="overflow-auto" style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}>
+    <div className="overflow-auto" style={{ height: 'calc(100vh - 320px)', minHeight: '400px' }}>
       <table className="w-full border-collapse text-sm">
         <thead className="bg-slate-800 sticky top-0 z-10">
           <tr>
@@ -271,11 +461,20 @@ function TemplatePreview({
             {templateData.columns.map((col) => (
               <th 
                 key={col.column}
-                className="px-3 py-2 text-left text-xs font-medium text-slate-300 border-b border-slate-700 whitespace-nowrap min-w-[100px]"
+                className={clsx(
+                  "px-3 py-2 text-left text-xs font-medium border-b border-slate-700 whitespace-nowrap min-w-[100px]",
+                  col.column === englishColIdx ? "bg-blue-900/30 text-blue-300" :
+                  col.column === chineseColIdx ? "bg-purple-900/30 text-purple-300" :
+                  "text-slate-300"
+                )}
               >
                 <div className="flex flex-col gap-0.5">
                   <span className="text-slate-500 text-[10px]">{col.letter}</span>
-                  <span className="truncate">{col.name || '—'}</span>
+                  <span className="truncate flex items-center gap-1">
+                    {col.name || '—'}
+                    {col.column === englishColIdx && <span className="text-[9px] px-1 bg-blue-500/30 rounded">EN</span>}
+                    {col.column === chineseColIdx && <span className="text-[9px] px-1 bg-purple-500/30 rounded">中</span>}
+                  </span>
                 </div>
               </th>
             ))}
@@ -287,20 +486,57 @@ function TemplatePreview({
               <td className="px-2 py-1 text-xs text-slate-500 border-r border-slate-700 bg-slate-900/50 sticky left-0 font-mono">
                 {row.row}
               </td>
-              {row.cells.map((cell) => (
-                <td 
-                  key={`${row.row}-${cell.col}`}
-                  className="px-1 py-0.5 text-slate-200"
-                >
-                  <EditableCell
-                    value={cell.value}
-                    row={row.row}
-                    col={cell.col}
-                    isOcrCell={isOcrCell(row.row, cell.col)}
-                    onSave={handleCellSave}
-                  />
-                </td>
-              ))}
+              {row.cells.map((cell) => {
+                // Check if this cell should use dictionary lookup
+                const isEnglishCol = cell.col === englishColIdx
+                const isChineseCol = cell.col === chineseColIdx
+                const isDictionaryColumn = isEnglishCol || isChineseCol
+                
+                // Get partner value for dictionary lookup
+                let partnerValue = ''
+                let lookupDirection: 'en_to_cn' | 'cn_to_en' = 'en_to_cn'
+                
+                if (isEnglishCol && chineseColIdx !== null) {
+                  // This is English column, look up from Chinese
+                  partnerValue = getCellValue(row, chineseColIdx)
+                  lookupDirection = 'cn_to_en'
+                } else if (isChineseCol && englishColIdx !== null) {
+                  // This is Chinese column, look up from English
+                  partnerValue = getCellValue(row, englishColIdx)
+                  lookupDirection = 'en_to_cn'
+                }
+
+                return (
+                  <td 
+                    key={`${row.row}-${cell.col}`}
+                    className={clsx(
+                      "px-1 py-0.5 text-slate-200",
+                      isEnglishCol && "bg-blue-900/10",
+                      isChineseCol && "bg-purple-900/10"
+                    )}
+                  >
+                    {isDictionaryColumn && englishColIdx !== null && chineseColIdx !== null ? (
+                      <DictionaryCell
+                        value={cell.value}
+                        row={row.row}
+                        col={cell.col}
+                        isOcrCell={isOcrCell(row.row, cell.col)}
+                        onSave={handleCellSave}
+                        partnerValue={partnerValue}
+                        lookupDirection={lookupDirection}
+                      />
+                    ) : (
+                      <EditableCell
+                        value={cell.value}
+                        row={row.row}
+                        col={cell.col}
+                        isOcrCell={isOcrCell(row.row, cell.col)}
+                        onSave={handleCellSave}
+                      />
+                    )}
+                  </td>
+                )
+              })}
             </tr>
           ))}
         </tbody>
@@ -402,6 +638,12 @@ export default function ExportPage() {
   const [floorMapping, setFloorMapping] = useState<Record<string, string>>({})
   const [showSummary, setShowSummary] = useState(false)
   
+  // Dictionary column configuration
+  const [showDictConfig, setShowDictConfig] = useState(false)
+  const [englishColIdx, setEnglishColIdx] = useState<number | null>(null)
+  const [chineseColIdx, setChineseColIdx] = useState<number | null>(null)
+  const [templateColumns, setTemplateColumns] = useState<{ name: string; column: number }[]>([])
+  
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
@@ -409,6 +651,26 @@ export default function ExportPage() {
       loadTemplateMapping()
     }
   }, [projectId])
+  
+  // Load template columns for dictionary config
+  useEffect(() => {
+    if (projectId && currentProject?.template) {
+      getTemplateData(projectId).then(res => {
+        setTemplateColumns(res.data.columns.map(c => ({ name: c.name, column: c.column })))
+        
+        // Auto-detect English/Chinese columns by name
+        res.data.columns.forEach(col => {
+          const name = col.name?.toLowerCase() || ''
+          if (name.includes('english') || name.includes('eng') || name === 'en') {
+            setEnglishColIdx(col.column)
+          }
+          if (name.includes('chinese') || name.includes('中文') || name === 'cn' || name.includes('chn')) {
+            setChineseColIdx(col.column)
+          }
+        })
+      }).catch(() => {})
+    }
+  }, [projectId, currentProject?.template])
   
   const loadTemplateMapping = async () => {
     if (!projectId) return
@@ -466,6 +728,7 @@ export default function ExportPage() {
   
   const incompleteFoors = currentProject?.floorplans?.filter(fp => fp.status !== 'completed') || []
   const hasTemplate = !!currentProject?.template
+  const hasDictConfig = englishColIdx !== null && chineseColIdx !== null
   
   if (isLoading && !preview) {
     return (
@@ -573,6 +836,77 @@ export default function ExportPage() {
         </div>
       )}
       
+      {/* Dictionary Column Config */}
+      {hasTemplate && (
+        <div className="flex-shrink-0 px-4 py-2 bg-slate-800/50 border-b border-slate-700 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Book className="w-4 h-4 text-amber-400" />
+            <span className="text-sm text-white font-medium">Dictionary Auto-Fill</span>
+            {hasDictConfig ? (
+              <span className="text-xs text-emerald-400 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />
+                Active
+              </span>
+            ) : (
+              <span className="text-xs text-slate-400">Configure columns to enable</span>
+            )}
+          </div>
+          
+          <button
+            onClick={() => setShowDictConfig(!showDictConfig)}
+            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
+          >
+            <Settings className="w-4 h-4" />
+            {showDictConfig ? 'Hide' : 'Configure'}
+          </button>
+        </div>
+      )}
+      
+      {/* Dictionary Config Panel */}
+      {hasTemplate && showDictConfig && (
+        <motion.div
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 'auto', opacity: 1 }}
+          className="flex-shrink-0 px-4 py-3 bg-slate-900/70 border-b border-slate-700"
+        >
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-blue-300">English Column:</label>
+              <select
+                value={englishColIdx ?? ''}
+                onChange={(e) => setEnglishColIdx(e.target.value ? Number(e.target.value) : null)}
+                className="px-2 py-1 text-sm bg-blue-900/30 border border-blue-500/40 rounded text-blue-200"
+              >
+                <option value="">Not set</option>
+                {templateColumns.filter(c => c.name).map(c => (
+                  <option key={c.column} value={c.column}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-purple-300">Chinese Column:</label>
+              <select
+                value={chineseColIdx ?? ''}
+                onChange={(e) => setChineseColIdx(e.target.value ? Number(e.target.value) : null)}
+                className="px-2 py-1 text-sm bg-purple-900/30 border border-purple-500/40 rounded text-purple-200"
+              >
+                <option value="">Not set</option>
+                {templateColumns.filter(c => c.name).map(c => (
+                  <option key={c.column} value={c.column}>{c.name}</option>
+                ))}
+              </select>
+            </div>
+            
+            {hasDictConfig && (
+              <span className="text-xs text-slate-400">
+                Empty cells will show dropdown with dictionary suggestions
+              </span>
+            )}
+          </div>
+        </motion.div>
+      )}
+      
       {/* Main Content - Full Width Template Preview */}
       <div className="flex-1 overflow-hidden">
         <motion.div
@@ -609,6 +943,8 @@ export default function ExportPage() {
               projectId={projectId!} 
               hasTemplate={hasTemplate}
               floorMapping={floorMapping}
+              englishColIdx={englishColIdx}
+              chineseColIdx={chineseColIdx}
             />
           ) : (
             <OcrDataPreview preview={preview} />

@@ -1,36 +1,67 @@
-"""Dictionary service for English-Chinese translation lookups and template auto-fill."""
+"""Dictionary service for English-Chinese translation lookups and template auto-fill.
+
+This is an English-first dictionary where each English word can have multiple
+Chinese translations stored as an array.
+"""
 from app import mongo
 
 
 def lookup_english(chinese):
     """
-    Look up the English translation for a Chinese term.
+    Look up the English word for a Chinese term.
+    Returns the first matching English word (for auto-fill).
     
     Args:
         chinese: Chinese text to look up
         
     Returns:
-        English translation if found, None otherwise
+        First matching English word if found, None otherwise
     """
     if not chinese or not chinese.strip():
         return None
     
-    entry = mongo.db.dictionary.find_one({'chinese': chinese.strip()})
+    chinese = chinese.strip()
+    
+    # Find entries where chinese array contains this term
+    entry = mongo.db.dictionary.find_one({'chinese': chinese})
     if entry and entry.get('english'):
         return entry['english']
     
     return None
 
 
+def lookup_english_all(chinese):
+    """
+    Look up all English words for a Chinese term.
+    Returns all matching English words (for dropdown selection).
+    
+    Args:
+        chinese: Chinese text to look up
+        
+    Returns:
+        List of matching English words, empty list if not found
+    """
+    if not chinese or not chinese.strip():
+        return []
+    
+    chinese = chinese.strip()
+    
+    # Find all entries where chinese array contains this term
+    entries = list(mongo.db.dictionary.find({'chinese': chinese}))
+    
+    return [entry.get('english') for entry in entries if entry.get('english')]
+
+
 def lookup_chinese(english):
     """
-    Look up the Chinese translation for an English term.
+    Look up the Chinese translations for an English word.
+    Returns the first Chinese translation (for auto-fill).
     
     Args:
         english: English text to look up
         
     Returns:
-        Chinese translation if found, None otherwise
+        First Chinese translation if found, None otherwise
     """
     if not english or not english.strip():
         return None
@@ -39,10 +70,45 @@ def lookup_chinese(english):
     entry = mongo.db.dictionary.find_one({
         'english': {'$regex': f'^{english.strip()}$', '$options': 'i'}
     })
-    if entry and entry.get('chinese'):
-        return entry['chinese']
+    
+    if entry:
+        chinese = entry.get('chinese', [])
+        # Handle both array and legacy string format
+        if isinstance(chinese, list) and len(chinese) > 0:
+            return chinese[0]  # Return first translation
+        elif isinstance(chinese, str) and chinese:
+            return chinese
     
     return None
+
+
+def lookup_chinese_all(english):
+    """
+    Look up all Chinese translations for an English word.
+    
+    Args:
+        english: English text to look up
+        
+    Returns:
+        List of Chinese translations, empty list if not found
+    """
+    if not english or not english.strip():
+        return []
+    
+    # Case-insensitive lookup for English
+    entry = mongo.db.dictionary.find_one({
+        'english': {'$regex': f'^{english.strip()}$', '$options': 'i'}
+    })
+    
+    if entry:
+        chinese = entry.get('chinese', [])
+        # Handle both array and legacy string format
+        if isinstance(chinese, list):
+            return chinese
+        elif isinstance(chinese, str) and chinese:
+            return [chinese]
+    
+    return []
 
 
 def lookup_translation(text):
@@ -53,10 +119,11 @@ def lookup_translation(text):
         text: Text to look up (either English or Chinese)
         
     Returns:
-        Tuple of (english, chinese) - one will be the original, one will be the lookup result
+        Tuple of (english, chinese_list) - one will be the original, 
+        one will be the lookup result (as list for chinese)
     """
     if not text or not text.strip():
-        return None, None
+        return None, []
     
     text = text.strip()
     
@@ -66,11 +133,11 @@ def lookup_translation(text):
     if has_chinese:
         # Text is Chinese, look up English
         english = lookup_english(text)
-        return english, text
+        return english, [text]
     else:
         # Text is English, look up Chinese
-        chinese = lookup_chinese(text)
-        return text, chinese
+        chinese_list = lookup_chinese_all(text)
+        return text, chinese_list
 
 
 def fill_template_gaps(rows, english_col_name, chinese_col_name, columns):
@@ -128,7 +195,7 @@ def fill_template_gaps(rows, english_col_name, chinese_col_name, columns):
         
         # Fill missing value
         if english_val and not chinese_val:
-            # Have English, need Chinese
+            # Have English, need Chinese - get first translation
             chinese = lookup_chinese(english_val)
             if chinese:
                 if chinese_col_idx < len(cells):
@@ -138,7 +205,7 @@ def fill_template_gaps(rows, english_col_name, chinese_col_name, columns):
                 stats['not_found'] += 1
                 
         elif chinese_val and not english_val:
-            # Have Chinese, need English
+            # Have Chinese, need English - get first match
             english = lookup_english(chinese_val)
             if english:
                 if english_col_idx < len(cells):
@@ -213,7 +280,7 @@ def fill_template_file_gaps(template_path, english_col_name, chinese_col_name):
         
         # Fill missing value
         if english_val and not chinese_val:
-            # Have English, need Chinese
+            # Have English, need Chinese - get first translation
             chinese = lookup_chinese(english_val)
             if chinese:
                 chinese_cell.value = chinese
@@ -222,7 +289,7 @@ def fill_template_file_gaps(template_path, english_col_name, chinese_col_name):
                 stats['not_found'] += 1
                 
         elif chinese_val and not english_val:
-            # Have Chinese, need English
+            # Have Chinese, need English - get first match
             english = lookup_english(chinese_val)
             if english:
                 english_cell.value = english
@@ -239,10 +306,12 @@ def fill_template_file_gaps(template_path, english_col_name, chinese_col_name):
 
 def get_all_entries_dict():
     """
-    Get all dictionary entries as a lookup dictionary.
+    Get all dictionary entries as lookup dictionaries.
     
     Returns:
         Tuple of (english_to_chinese, chinese_to_english) dictionaries
+        - english_to_chinese: maps lowercase english to list of chinese translations
+        - chinese_to_english: maps each chinese term to its english word
     """
     entries = list(mongo.db.dictionary.find({}))
     
@@ -251,11 +320,19 @@ def get_all_entries_dict():
     
     for entry in entries:
         english = entry.get('english', '').strip()
-        chinese = entry.get('chinese', '').strip()
+        chinese = entry.get('chinese', [])
         
-        if english and chinese:
+        # Handle legacy string format
+        if isinstance(chinese, str):
+            chinese = [chinese] if chinese else []
+        
+        if english:
             english_to_chinese[english.lower()] = chinese
-            chinese_to_english[chinese] = english
+            
+            # Map each Chinese translation back to this English word
+            for cn in chinese:
+                if cn:
+                    chinese_to_english[cn] = english
     
     return english_to_chinese, chinese_to_english
 
@@ -270,6 +347,8 @@ def batch_lookup(texts, direction='auto'):
         
     Returns:
         Dictionary mapping original texts to their translations
+        - For en_to_cn: returns first Chinese translation
+        - For cn_to_en: returns first English match
     """
     if not texts:
         return {}
@@ -285,7 +364,8 @@ def batch_lookup(texts, direction='auto'):
         text_str = str(text).strip()
         
         if direction == 'en_to_cn':
-            results[text] = english_to_chinese.get(text_str.lower())
+            chinese_list = english_to_chinese.get(text_str.lower(), [])
+            results[text] = chinese_list[0] if chinese_list else None
         elif direction == 'cn_to_en':
             results[text] = chinese_to_english.get(text_str)
         else:
@@ -294,7 +374,48 @@ def batch_lookup(texts, direction='auto'):
             if has_chinese:
                 results[text] = chinese_to_english.get(text_str)
             else:
-                results[text] = english_to_chinese.get(text_str.lower())
+                chinese_list = english_to_chinese.get(text_str.lower(), [])
+                results[text] = chinese_list[0] if chinese_list else None
     
     return results
 
+
+def batch_lookup_all(texts, direction='auto'):
+    """
+    Perform batch lookups for multiple texts, returning all translations.
+    
+    Args:
+        texts: List of texts to look up
+        direction: 'en_to_cn', 'cn_to_en', or 'auto'
+        
+    Returns:
+        Dictionary mapping original texts to their translation lists
+    """
+    if not texts:
+        return {}
+    
+    results = {}
+    english_to_chinese, chinese_to_english = get_all_entries_dict()
+    
+    for text in texts:
+        if not text or not str(text).strip():
+            results[text] = []
+            continue
+        
+        text_str = str(text).strip()
+        
+        if direction == 'en_to_cn':
+            results[text] = english_to_chinese.get(text_str.lower(), [])
+        elif direction == 'cn_to_en':
+            english = chinese_to_english.get(text_str)
+            results[text] = [english] if english else []
+        else:
+            # Auto-detect
+            has_chinese = any('\u4e00' <= char <= '\u9fff' for char in text_str)
+            if has_chinese:
+                english = chinese_to_english.get(text_str)
+                results[text] = [english] if english else []
+            else:
+                results[text] = english_to_chinese.get(text_str.lower(), [])
+    
+    return results

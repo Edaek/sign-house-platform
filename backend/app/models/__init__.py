@@ -170,11 +170,25 @@ def create_project_member_doc(project_id, user_id, role='member', added_by=None)
     }
 
 
-def create_dictionary_entry_doc(english, chinese, created_by=None):
-    """Create a dictionary entry document for English-Chinese translation pairs."""
+def create_dictionary_entry_doc(english, chinese_list, created_by=None):
+    """Create a dictionary entry document for English-Chinese translation pairs.
+    
+    Args:
+        english: The English word (primary key)
+        chinese_list: A list of Chinese translations, or a single string
+        created_by: User ID who created the entry
+    """
+    # Normalize chinese to a list
+    if isinstance(chinese_list, str):
+        chinese_list = [chinese_list.strip()] if chinese_list.strip() else []
+    elif chinese_list is None:
+        chinese_list = []
+    else:
+        chinese_list = [c.strip() for c in chinese_list if c and c.strip()]
+    
     return {
         'english': english.strip() if english else '',
-        'chinese': chinese.strip() if chinese else '',
+        'chinese': chinese_list,  # Array of Chinese translations
         'created_by': ObjectId(created_by) if created_by else None,
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
@@ -185,10 +199,16 @@ def dictionary_entry_to_dict(entry_doc):
     """Convert dictionary entry document to dict."""
     if not entry_doc:
         return None
+    
+    # Handle both old format (string) and new format (array) for backwards compatibility
+    chinese = entry_doc.get('chinese', [])
+    if isinstance(chinese, str):
+        chinese = [chinese] if chinese else []
+    
     return {
         'id': str(entry_doc['_id']),
         'english': entry_doc.get('english', ''),
-        'chinese': entry_doc.get('chinese', ''),
+        'chinese': chinese,  # Always return as array
         'created_by': str(entry_doc['created_by']) if entry_doc.get('created_by') else None,
         'created_at': entry_doc['created_at'].isoformat() if entry_doc.get('created_at') else None,
         'updated_at': entry_doc['updated_at'].isoformat() if entry_doc.get('updated_at') else None
