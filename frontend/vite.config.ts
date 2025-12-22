@@ -3,8 +3,8 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  // Only use base path for production (GitHub Pages)
-  base: mode === 'production' ? '/sign-house-v3/' : '/',
+  // Using custom domain, so root path for all modes
+  base: '/',
   server: {
     port: 3000,
     proxy: {
