@@ -13,6 +13,7 @@ from app.models import (
 )
 from app.services.pdf_service import PDFService
 from app.services.excel_service import ExcelService
+from app.services.ocr_service import OCRService
 from app.services.audit_service import log_action
 from app.utils.permissions import (
     require_project_access,
@@ -390,11 +391,51 @@ def upload_floorplan(project_id, _user=None, _project=None):
         return jsonify({'error': f'Failed to process PDF: {str(e)}'}), 400
     
     # Create floorplan records for each page
+    # Initialize OCR service for title extraction (with error handling)
+    ocr_service = None
+    try:
+        ocr_service = OCRService()
+    except Exception as e:
+        current_app.logger.warning(f"Failed to initialize OCR service for title extraction: {str(e)}")
+    
     floorplans = []
+    
     for page_info in pages:
+        # Try to extract title from the lower-right corner
+        extracted_title = None
+        
+        if ocr_service:
+            try:
+                extracted_title = ocr_service.extract_title_from_floorplan(
+                    page_info['image_path'],
+                    x_start_pct=current_app.config.get('TITLE_REGION_X_START', 60),
+                    y_start_pct=current_app.config.get('TITLE_REGION_Y_START', 85),
+                    width_pct=current_app.config.get('TITLE_REGION_WIDTH', 40),
+                    height_pct=current_app.config.get('TITLE_REGION_HEIGHT', 15)
+                )
+                
+                if extracted_title:
+                    current_app.logger.info(
+                        f"Extracted title for page {page_info['page_number']}: '{extracted_title}'"
+                    )
+                else:
+                    current_app.logger.debug(
+                        f"No title extracted for page {page_info['page_number']}, using default"
+                    )
+            except Exception as e:
+                current_app.logger.warning(
+                    f"Failed to extract title for page {page_info['page_number']}: {str(e)}"
+                )
+        
+        # Use extracted title if available, otherwise use default floor name
+        if extracted_title:
+            floor_name = extracted_title
+        else:
+            floor_name = f"Floor {page_info['page_number']}"
+        
         floorplan_doc = create_floorplan_doc(
             floor_number=page_info['page_number'],
-            floor_name=f"Floor {page_info['page_number']}",
+            floor_name=floor_name,
             pdf_filename=filename,
             pdf_filepath=filepath,
             image_filepath=page_info['image_path'],

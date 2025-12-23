@@ -481,6 +481,238 @@ class OCRService:
         
         return locations
     
+    def extract_title_from_floorplan(self, image_path, x_start_pct=60, y_start_pct=85, 
+                                     width_pct=40, height_pct=15):
+        """Extract title/sheet information from lower right corner of a floor plan.
+        
+        This method targets the title block typically found in the lower-right corner
+        of architectural drawings containing information like "Sheet Title & Sign No."
+        
+        It tries multiple strategies to find the best title:
+        1. Look for "Sheet Title & Sign No:" field and extract the value
+        2. Look for "Dwg. No." or "Drawing No." field
+        3. Extract from specified region and clean up
+        
+        Args:
+            image_path: Path to the floor plan image file
+            x_start_pct: Percentage from left where title region starts (default 60%)
+            y_start_pct: Percentage from top where title region starts (default 85%)
+            width_pct: Width of title region as percentage of image (default 40%)
+            height_pct: Height of title region as percentage of image (default 15%)
+            
+        Returns:
+            Cleaned title text string, or None if extraction fails
+        """
+        import re
+        
+        # Load image
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+        
+        img_height, img_width = img.shape[:2]
+        
+        # Try multiple regions to find the best extraction
+        # These regions are optimized for standard architectural title blocks
+        regions_to_try = [
+            # Region 1: Target the Sheet Title & Sign No field specifically
+            {
+                'x_pct': 84, 'y_pct': 78, 'w_pct': 15, 'h_pct': 6,
+                'name': 'sheet_title_primary', 'ocr_mode': 6
+            },
+            # Region 2: Slightly larger to catch multi-line titles
+            {
+                'x_pct': 83, 'y_pct': 77, 'w_pct': 16, 'h_pct': 7,
+                'name': 'sheet_title_extended', 'ocr_mode': 6
+            },
+            # Region 3: Include the label + value
+            {
+                'x_pct': 84, 'y_pct': 76, 'w_pct': 15, 'h_pct': 8,
+                'name': 'sheet_title_with_label', 'ocr_mode': 6
+            },
+            # Region 4: User-specified default region (fallback)
+            {
+                'x_pct': x_start_pct, 'y_pct': y_start_pct, 
+                'w_pct': width_pct, 'h_pct': height_pct,
+                'name': 'user_default', 'ocr_mode': 6
+            },
+        ]
+        
+        best_title = None
+        best_score = 0  # Score based on match quality
+        
+        for region_config in regions_to_try:
+            x_start = int(img_width * (region_config['x_pct'] / 100))
+            y_start = int(img_height * (region_config['y_pct'] / 100))
+            region_width = int(img_width * (region_config['w_pct'] / 100))
+            region_height = int(img_height * (region_config['h_pct'] / 100))
+            
+            # Ensure we don't go out of bounds
+            x_end = min(x_start + region_width, img_width)
+            y_end = min(y_start + region_height, img_height)
+            
+            if x_end <= x_start or y_end <= y_start:
+                continue
+            
+            # Extract the region
+            title_region = img[y_start:y_end, x_start:x_end]
+            
+            if title_region.size == 0:
+                continue
+            
+            try:
+                # Set OCR mode
+                original_config = self.config
+                self.config = f'--oem 3 --psm {region_config["ocr_mode"]}'
+                
+                # Extract text from this region
+                text, confidence = self.extract_text(title_region, preprocess=True, label_mode=False)
+                
+                # Restore original config
+                self.config = original_config
+                
+                if not text:
+                    continue
+                
+                # Strategy 1: Look for "Sheet Title & Sign No:" pattern (HIGHEST PRIORITY)
+                # This is the most specific and preferred pattern
+                sheet_patterns = [
+                    r'Sheet\s+Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
+                    r'Sheet\s+Title\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
+                    r'Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
+                ]
+                
+                for pattern in sheet_patterns:
+                    match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
+                    if match:
+                        title = match.group(1).strip()
+                        # Replace newlines with spaces for multi-line titles
+                        title = re.sub(r'\s+', ' ', title)
+                        # Clean and validate
+                        cleaned = self._clean_title_text(title)
+                        if cleaned and self._validate_title_text(cleaned):
+                            # Found the sheet title field - this is the best match
+                            # Give it a high score (100)
+                            if 100 > best_score:
+                                best_title = cleaned
+                                best_score = 100
+                
+                # Strategy 2: Look for "Dwg. No." pattern (MEDIUM PRIORITY)
+                if best_score < 50:  # Only if we haven't found sheet title
+                    dwg_match = re.search(r'(?:Dwg\.?\s*No\.?|Drawing\s*No\.?)\s*[:.]?\s*([A-Za-z0-9\-_]+)', text, re.IGNORECASE)
+                    if dwg_match:
+                        title = dwg_match.group(1).strip()
+                        cleaned = self._clean_title_text(title)
+                        if cleaned and self._validate_title_text(cleaned):
+                            if 50 > best_score:
+                                best_title = cleaned
+                                best_score = 50
+                
+                # Strategy 3: If this region has good text, save as potential fallback (LOW PRIORITY)
+                if best_score < 10:
+                    cleaned_text = self._clean_title_text(text)
+                    if cleaned_text and self._validate_title_text(cleaned_text) and len(cleaned_text) < 80:
+                        if 10 > best_score:
+                            best_title = cleaned_text
+                            best_score = 10
+                        
+            except Exception:
+                continue
+        
+        return best_title
+    
+    def _clean_title_text(self, text):
+        """Clean extracted title text by removing artifacts and normalizing.
+        
+        Args:
+            text: Raw OCR text from title block
+            
+        Returns:
+            Cleaned text string
+        """
+        import re
+        
+        if not text:
+            return ''
+        
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        
+        # Remove common border artifacts
+        text = text.strip('|[](){}/_\\-=+*#')
+        
+        # Remove multiple consecutive dashes/underscores (common OCR artifacts)
+        text = re.sub(r'[-_]{3,}', '', text)
+        text = re.sub(r'[.]{3,}', '', text)
+        
+        # Replace problematic filename characters with safe alternatives
+        unsafe_chars = {
+            '/': '-',
+            '\\': '-',
+            ':': '-',
+            '*': '',
+            '?': '',
+            '"': '',
+            '<': '',
+            '>': '',
+            '|': '-'
+        }
+        
+        for unsafe, safe in unsafe_chars.items():
+            text = text.replace(unsafe, safe)
+        
+        # Clean up any resulting double spaces or dashes
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'-+', '-', text)
+        
+        # Final trim
+        text = text.strip('- _')
+        
+        return text
+    
+    def _validate_title_text(self, text):
+        """Validate that extracted title text is usable.
+        
+        Args:
+            text: Cleaned text to validate
+            
+        Returns:
+            True if text is valid, False otherwise
+        """
+        import re
+        
+        if not text:
+            return False
+        
+        # Minimum length check (at least 3 characters)
+        if len(text) < 3:
+            return False
+        
+        # Maximum length check (reasonable filename length)
+        if len(text) > 100:
+            return False
+        
+        # Check if text is mostly artifacts (more than 50% special chars)
+        special_char_count = len(re.findall(r'[^a-zA-Z0-9\s-]', text))
+        if len(text) > 0 and (special_char_count / len(text)) > 0.5:
+            return False
+        
+        # Reject if text is only numbers (likely page number, not title)
+        if text.replace(' ', '').replace('-', '').isdigit():
+            return False
+        
+        # Reject common OCR garbage patterns
+        garbage_patterns = [
+            r'^[.\-_|]+$',  # Only dots, dashes, underscores, pipes
+            r'^\s*$',       # Only whitespace
+        ]
+        
+        for pattern in garbage_patterns:
+            if re.match(pattern, text):
+                return False
+        
+        return True
+    
     def group_ocr_results(self, results):
         """Group OCR results by identical text, summing quantities.
         
