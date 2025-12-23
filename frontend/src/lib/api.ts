@@ -139,6 +139,17 @@ export interface SignTableResponse {
   }
 }
 
+// Sign table cell update response
+export interface SignTableCellUpdateResponse {
+  message: string
+  row_number: number
+  field: string
+  value: string
+  sign_auto_filled?: string
+  chinese_auto_filled?: string
+  dictionary_updated?: boolean
+}
+
 export const getSignTableData = async (projectId: string): Promise<SignTableResponse> => {
   const response = await api.get(`/export/sign-table/${projectId}`)
   return response.data
@@ -149,7 +160,7 @@ export const updateSignTableCell = async (
   rowNumber: number,
   field: 'sign' | 'english' | 'chinese',
   value: string
-) => {
+): Promise<SignTableCellUpdateResponse> => {
   const response = await api.put(`/export/sign-table/${projectId}`, {
     row_number: rowNumber,
     field,
@@ -161,6 +172,7 @@ export const updateSignTableCell = async (
 // Dictionary search for autocomplete
 export interface DictionarySearchResult {
   english: string
+  sign: string
   chinese: string[]
   match_type: 'prefix' | 'contains'
 }
@@ -183,6 +195,7 @@ export interface AddToDictionaryResponse {
   entry: {
     id: string
     english: string
+    sign: string
     chinese: string[]
   }
 }

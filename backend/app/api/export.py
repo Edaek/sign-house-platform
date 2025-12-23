@@ -6,7 +6,7 @@ from bson import ObjectId
 from app import mongo
 from app.models import serialize_doc, create_sign_table_doc, create_sign_row, sign_table_to_dict
 from app.services.excel_service import ExcelService
-from app.services.dictionary_service import lookup_chinese
+from app.services.dictionary_service import lookup_chinese, lookup_entry
 
 export_bp = Blueprint('export', __name__)
 
@@ -656,7 +656,8 @@ def update_sign_table(project_id):
             "value": "new value"
         }
     
-    When the english field is updated, chinese is auto-filled from dictionary.
+    When the english field is updated, both sign and chinese are auto-filled from dictionary.
+    When the sign field is updated and there's an English value, the dictionary entry is also updated.
     """
     user_id = get_jwt_identity()
     
@@ -697,19 +698,56 @@ def update_sign_table(project_id):
     # Find and update the row
     rows = sign_table.get('rows', [])
     updated = False
+    sign_auto_filled = None
     chinese_auto_filled = None
+    dictionary_updated = False
+    current_english = None
     
     for row in rows:
         if row['row_number'] == row_number:
+            current_english = row.get('english', '')
             row[field] = value
             updated = True
             
-            # Auto-fill Chinese when English is updated
+            # Auto-fill Sign and Chinese when English is updated
             if field == 'english' and value:
-                chinese_translation = lookup_chinese(value)
-                if chinese_translation:
-                    row['chinese'] = chinese_translation
-                    chinese_auto_filled = chinese_translation
+                sign_lookup, chinese_list = lookup_entry(value)
+                
+                # Auto-fill sign if found
+                if sign_lookup:
+                    row['sign'] = sign_lookup
+                    sign_auto_filled = sign_lookup
+                
+                # Auto-fill chinese with first translation if found
+                if chinese_list and len(chinese_list) > 0:
+                    row['chinese'] = chinese_list[0]
+                    chinese_auto_filled = chinese_list[0]
+            
+            # Update dictionary when Sign is edited and there's an English value
+            if field == 'sign' and current_english:
+                # Find the dictionary entry for this English word
+                dict_entry = mongo.db.dictionary.find_one({
+                    'english': {'$regex': f'^{current_english}$', '$options': 'i'}
+                })
+                
+                if dict_entry:
+                    # Update existing entry's sign
+                    mongo.db.dictionary.update_one(
+                        {'_id': dict_entry['_id']},
+                        {'$set': {'sign': value, 'updated_at': datetime.utcnow()}}
+                    )
+                    dictionary_updated = True
+                elif value:
+                    # Create new dictionary entry with English and Sign
+                    from app.models import create_dictionary_entry_doc
+                    new_entry = create_dictionary_entry_doc(
+                        english=current_english,
+                        chinese_list=[],
+                        created_by=user_id,
+                        sign=value
+                    )
+                    mongo.db.dictionary.insert_one(new_entry)
+                    dictionary_updated = True
             
             break
     
@@ -732,7 +770,13 @@ def update_sign_table(project_id):
         'value': value
     }
     
+    if sign_auto_filled:
+        response['sign_auto_filled'] = sign_auto_filled
+    
     if chinese_auto_filled:
         response['chinese_auto_filled'] = chinese_auto_filled
+    
+    if dictionary_updated:
+        response['dictionary_updated'] = True
     
     return jsonify(response), 200

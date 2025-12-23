@@ -173,13 +173,14 @@ def create_project_member_doc(project_id, user_id, role='member', added_by=None)
     }
 
 
-def create_dictionary_entry_doc(english, chinese_list, created_by=None):
-    """Create a dictionary entry document for English-Chinese translation pairs.
+def create_dictionary_entry_doc(english, chinese_list, created_by=None, sign=''):
+    """Create a dictionary entry document for English-Sign-Chinese translation entries.
     
     Args:
         english: The English word (primary key)
         chinese_list: A list of Chinese translations, or a single string
         created_by: User ID who created the entry
+        sign: The sign name/code corresponding to this English word
     """
     # Normalize chinese to a list
     if isinstance(chinese_list, str):
@@ -191,6 +192,7 @@ def create_dictionary_entry_doc(english, chinese_list, created_by=None):
     
     return {
         'english': english.strip() if english else '',
+        'sign': sign.strip() if sign else '',  # Sign name/code for this English word
         'chinese': chinese_list,  # Array of Chinese translations
         'created_by': ObjectId(created_by) if created_by else None,
         'created_at': datetime.utcnow(),
@@ -211,6 +213,7 @@ def dictionary_entry_to_dict(entry_doc):
     return {
         'id': str(entry_doc['_id']),
         'english': entry_doc.get('english', ''),
+        'sign': entry_doc.get('sign', ''),  # Sign name/code for this English word
         'chinese': chinese,  # Always return as array
         'created_by': str(entry_doc['created_by']) if entry_doc.get('created_by') else None,
         'created_at': entry_doc['created_at'].isoformat() if entry_doc.get('created_at') else None,

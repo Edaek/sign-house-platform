@@ -22,6 +22,7 @@ import clsx from 'clsx'
 interface DictionaryEntry {
   id: string
   english: string
+  sign: string  // Sign name/code
   chinese: string[]  // Array of Chinese translations
   created_at: string | null
   updated_at: string | null
@@ -46,12 +47,14 @@ export default function DictionaryPage() {
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editEnglish, setEditEnglish] = useState('')
+  const [editSign, setEditSign] = useState('')
   const [editChinese, setEditChinese] = useState<string[]>([])
   const [newChineseInput, setNewChineseInput] = useState('')
   
   // New entry state
   const [showAddForm, setShowAddForm] = useState(false)
   const [newEnglish, setNewEnglish] = useState('')
+  const [newSign, setNewSign] = useState('')
   const [newChineseList, setNewChineseList] = useState<string[]>([])
   const [newChineseInputField, setNewChineseInputField] = useState('')
   const [isAdding, setIsAdding] = useState(false)
@@ -126,10 +129,12 @@ export default function DictionaryPage() {
     try {
       await api.post('/dictionary', {
         english: newEnglish,
+        sign: newSign,
         chinese: newChineseList
       })
       toast.success('Entry added successfully')
       setNewEnglish('')
+      setNewSign('')
       setNewChineseList([])
       setNewChineseInputField('')
       setShowAddForm(false)
@@ -145,6 +150,7 @@ export default function DictionaryPage() {
   const handleEdit = (entry: DictionaryEntry) => {
     setEditingId(entry.id)
     setEditEnglish(entry.english)
+    setEditSign(entry.sign || '')
     setEditChinese([...entry.chinese])
     setNewChineseInput('')
   }
@@ -174,11 +180,13 @@ export default function DictionaryPage() {
     try {
       await api.put(`/dictionary/${editingId}`, {
         english: editEnglish,
+        sign: editSign,
         chinese: editChinese
       })
       toast.success('Entry updated successfully')
       setEditingId(null)
       setEditEnglish('')
+      setEditSign('')
       setEditChinese([])
       setNewChineseInput('')
       fetchEntries()
@@ -191,6 +199,7 @@ export default function DictionaryPage() {
   const handleCancelEdit = () => {
     setEditingId(null)
     setEditEnglish('')
+    setEditSign('')
     setEditChinese([])
     setNewChineseInput('')
   }
@@ -218,16 +227,17 @@ export default function DictionaryPage() {
     
     setIsImporting(true)
     try {
-      // Parse bulk data (format: English,Chinese1,Chinese2,... per line)
+      // Parse bulk data (format: English,Sign,Chinese1,Chinese2,... per line)
       const lines = bulkData.trim().split('\n')
       const entries = lines.map(line => {
-        const parts = line.split(',').map(p => p.trim()).filter(p => p)
-        if (parts.length === 0) return null
+        const parts = line.split(',').map(p => p.trim())
+        if (parts.length === 0 || !parts[0]) return null
         return {
           english: parts[0] || '',
-          chinese: parts.slice(1)  // All parts after the first are Chinese translations
+          sign: parts[1] || '',
+          chinese: parts.slice(2).filter(p => p)  // All parts after the second are Chinese translations
         }
-      }).filter((e): e is { english: string; chinese: string[] } => e !== null && !!e.english)
+      }).filter((e): e is { english: string; sign: string; chinese: string[] } => e !== null && !!e.english)
       
       if (entries.length === 0) {
         toast.error('No valid entries found')
@@ -251,13 +261,14 @@ export default function DictionaryPage() {
   
   const handleExport = async () => {
     try {
-      const response = await api.get('/dictionary/export')
-      const dataStr = JSON.stringify(response.data.entries, null, 2)
-      const blob = new Blob([dataStr], { type: 'application/json' })
+      const response = await api.get('/dictionary/export', {
+        responseType: 'blob'
+      })
+      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'dictionary-export.json'
+      a.download = 'dictionary-export.csv'
       a.click()
       URL.revokeObjectURL(url)
       toast.success('Dictionary exported successfully')
@@ -308,7 +319,7 @@ export default function DictionaryPage() {
           </h1>
         </div>
         <p className="text-slate-600 dark:text-slate-400">
-          English-first dictionary with multiple Chinese translations per word
+          English-Sign-Chinese dictionary with multiple Chinese translations per word
         </p>
       </div>
       
@@ -399,15 +410,27 @@ export default function DictionaryPage() {
         >
           <h3 className="font-semibold text-emerald-800 dark:text-emerald-200 mb-3">Add New Entry</h3>
           <div className="space-y-3">
-            <div>
-              <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">English Word</label>
-              <input
-                type="text"
-                placeholder="Enter English word"
-                value={newEnglish}
-                onChange={(e) => setNewEnglish(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
-              />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">English Word</label>
+                <input
+                  type="text"
+                  placeholder="Enter English word"
+                  value={newEnglish}
+                  onChange={(e) => setNewEnglish(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">Sign Name/Code</label>
+                <input
+                  type="text"
+                  placeholder="Enter sign name (optional)"
+                  value={newSign}
+                  onChange={(e) => setNewSign(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">Chinese Translations</label>
@@ -465,6 +488,7 @@ export default function DictionaryPage() {
                 onClick={() => {
                   setShowAddForm(false)
                   setNewEnglish('')
+                  setNewSign('')
                   setNewChineseList([])
                   setNewChineseInputField('')
                 }}
@@ -485,14 +509,14 @@ export default function DictionaryPage() {
           animate={{ opacity: 1, y: 0 }}
           className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 mb-6 border border-blue-200 dark:border-blue-800"
         >
-          <h3 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">Bulk Import</h3>
+          <h3 className="font-semibold text-blue-800 dark:text-blue-200 mb-2">Bulk Import (CSV)</h3>
           <p className="text-sm text-blue-600 dark:text-blue-400 mb-3">
-            Format: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">English,Chinese1,Chinese2,Chinese3</code> (one entry per line)
+            Format: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">English,Sign,Chinese1,Chinese2,Chinese3</code> (one entry per line)
           </p>
           <textarea
             value={bulkData}
             onChange={(e) => setBulkData(e.target.value)}
-            placeholder="Exit,出口,退出&#10;Fire,火,火災&#10;Emergency,緊急,急救"
+            placeholder="Exit,EXIT-001,出口,退出&#10;Fire,FIRE-001,火,火災&#10;Emergency,EMERG-001,緊急,急救"
             rows={6}
             className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:text-white font-mono text-sm"
           />
@@ -538,8 +562,11 @@ export default function DictionaryPage() {
               <table className="w-full">
                 <thead className="bg-slate-50 dark:bg-slate-700/50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/4">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/5">
                       English
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-blue-500 dark:text-blue-400 uppercase tracking-wider w-1/5">
+                      Sign
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                       Chinese Translations (中文翻譯)
@@ -564,6 +591,21 @@ export default function DictionaryPage() {
                         ) : (
                           <span className="text-slate-900 dark:text-white font-medium">
                             {entry.english}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
+                        {editingId === entry.id ? (
+                          <input
+                            type="text"
+                            value={editSign}
+                            onChange={(e) => setEditSign(e.target.value)}
+                            placeholder="Sign name"
+                            className="w-full px-2 py-1 border border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:text-white"
+                          />
+                        ) : (
+                          <span className="text-blue-600 dark:text-blue-400">
+                            {entry.sign || <span className="text-slate-400 dark:text-slate-500 italic">—</span>}
                           </span>
                         )}
                       </td>

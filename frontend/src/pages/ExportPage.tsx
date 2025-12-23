@@ -20,7 +20,7 @@ import {
   searchDictionary,
   addToDictionary,
   SignTable,
-  SignRow,
+  SignTableCellUpdateResponse,
   DictionarySearchResult
 } from '../lib/api'
 import api from '../lib/api'
@@ -37,7 +37,7 @@ function EditableCell({
   value: string
   rowNumber: number
   field: 'sign'
-  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<SignTableCellUpdateResponse>
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
@@ -117,12 +117,14 @@ function EnglishAutocompleteCell({
   value, 
   rowNumber,
   onSave,
+  onSignUpdate,
   onChineseUpdate,
   onChineseOptions
 }: { 
   value: string
   rowNumber: number
-  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<SignTableCellUpdateResponse>
+  onSignUpdate: (rowNumber: number, sign: string) => void
   onChineseUpdate: (rowNumber: number, chinese: string) => void
   onChineseOptions: (rowNumber: number, options: string[]) => void
 }) {
@@ -186,8 +188,13 @@ function EnglishAutocompleteCell({
     
     setIsSaving(true)
     try {
-      // Save the English value
+      // Save the English value - backend will auto-fill sign and chinese
       await onSave(rowNumber, 'english', suggestion.english)
+      
+      // If sign was available from suggestion, update local state immediately
+      if (suggestion.sign) {
+        onSignUpdate(rowNumber, suggestion.sign)
+      }
       
       // Auto-fill and save Chinese from the suggestion
       if (suggestion.chinese && suggestion.chinese.length > 0) {
@@ -304,7 +311,14 @@ function EnglishAutocompleteCell({
                   idx === selectedIndex ? 'bg-blue-600/30' : 'hover:bg-slate-700'
                 )}
               >
-                <div className="font-medium text-white">{suggestion.english}</div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-white">{suggestion.english}</span>
+                  {suggestion.sign && (
+                    <span className="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-300 rounded">
+                      {suggestion.sign}
+                    </span>
+                  )}
+                </div>
                 {suggestion.chinese.length > 0 && (
                   <div className="text-xs text-slate-400 mt-0.5">
                     {suggestion.chinese.join(', ')}
@@ -349,7 +363,7 @@ function ChineseEditableCell({
   rowNumber: number
   englishValue: string
   knownTranslations: string[]  // Known Chinese translations for this English word
-  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<SignTableCellUpdateResponse>
   onSaveToDictionary: (rowNumber: number, english: string, chinese: string) => Promise<void>
 }) {
   const [isEditing, setIsEditing] = useState(false)
@@ -488,7 +502,7 @@ function ChineseSelectCell({
   options: string[]
   rowNumber: number
   englishValue: string
-  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<SignTableCellUpdateResponse>
   onSaveToDictionary: (rowNumber: number, english: string, chinese: string) => Promise<void>
 }) {
   const [isSaving, setIsSaving] = useState(false)
@@ -723,6 +737,10 @@ function SignTablePreview({
       const newRows = prev.rows.map(row => {
         if (row.row_number === rowNumber) {
           const updated = { ...row, [field]: value }
+          // If Sign was auto-filled, update it too
+          if (result.sign_auto_filled) {
+            updated.sign = result.sign_auto_filled
+          }
           // If Chinese was auto-filled, update it too
           if (result.chinese_auto_filled) {
             updated.chinese = result.chinese_auto_filled
@@ -738,6 +756,27 @@ function SignTablePreview({
     if (field === 'english') {
       refetchChineseOptions(rowNumber, value)
     }
+    
+    // Show notification if dictionary was updated
+    if (result.dictionary_updated) {
+      toast.success('Dictionary updated with Sign')
+    }
+    
+    return result
+  }
+
+  const handleSignUpdate = (rowNumber: number, sign: string) => {
+    // Update Sign in local state when auto-filled from English selection
+    setSignTable(prev => {
+      if (!prev) return prev
+      const newRows = prev.rows.map(row => {
+        if (row.row_number === rowNumber) {
+          return { ...row, sign }
+        }
+        return row
+      })
+      return { ...prev, rows: newRows }
+    })
   }
 
   const handleChineseUpdate = (rowNumber: number, chinese: string) => {
@@ -846,8 +885,7 @@ function SignTablePreview({
     )
   }
 
-  // Fixed columns + dynamic floorplan columns
-  const fixedColumns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
+  // Dynamic floorplan columns
   const floorColumns = signTable.floorplan_columns
 
   return (
@@ -912,6 +950,7 @@ function SignTablePreview({
                   value={row.english}
                   rowNumber={row.row_number}
                   onSave={handleCellSave}
+                  onSignUpdate={handleSignUpdate}
                   onChineseUpdate={handleChineseUpdate}
                   onChineseOptions={handleChineseOptions}
                 />
@@ -1070,7 +1109,7 @@ export default function ExportPage() {
         <Search className="w-4 h-4 text-blue-400" />
         <span className="text-blue-200">
           Click on <span className="text-blue-300 font-medium">English</span> cells to search the dictionary. 
-          <span className="text-purple-300 ml-1">Chinese</span> auto-fills from matches.
+          <span className="text-slate-300 ml-1">Sign</span> and <span className="text-purple-300">Chinese</span> auto-fill from matches.
         </span>
       </div>
       

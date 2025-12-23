@@ -65,6 +65,7 @@ def create_entry():
     Request body:
     {
         "english": "Exit",
+        "sign": "EXIT-001",  # Optional sign name/code
         "chinese": ["出口", "退出"]  # Can be array or single string
     }
     """
@@ -76,6 +77,7 @@ def create_entry():
             return jsonify({'error': 'No data provided'}), 400
         
         english = data.get('english', '').strip() if data.get('english') else ''
+        sign = data.get('sign', '').strip() if data.get('sign') else ''
         chinese = data.get('chinese', [])
         
         # Normalize chinese to list
@@ -96,7 +98,7 @@ def create_entry():
             return jsonify({'error': f'An entry for "{english}" already exists'}), 409
         
         # Create entry
-        entry_doc = create_dictionary_entry_doc(english, chinese, user_id)
+        entry_doc = create_dictionary_entry_doc(english, chinese, user_id, sign)
         result = mongo.db.dictionary.insert_one(entry_doc)
         entry_doc['_id'] = result.inserted_id
         
@@ -106,7 +108,7 @@ def create_entry():
             action='dictionary_entry_created',
             resource_type='dictionary',
             resource_id=str(result.inserted_id),
-            details={'english': english, 'chinese': chinese}
+            details={'english': english, 'sign': sign, 'chinese': chinese}
         )
         
         return jsonify({
@@ -142,6 +144,7 @@ def update_entry(entry_id):
     Request body:
     {
         "english": "Exit",
+        "sign": "EXIT-001",
         "chinese": ["出口", "退出"]
     }
     """
@@ -158,6 +161,7 @@ def update_entry(entry_id):
             return jsonify({'error': 'Dictionary entry not found'}), 404
         
         english = data.get('english', '').strip() if data.get('english') else ''
+        sign = data.get('sign', '').strip() if data.get('sign') else ''
         chinese = data.get('chinese', [])
         
         # Normalize chinese to list
@@ -186,6 +190,7 @@ def update_entry(entry_id):
             {
                 '$set': {
                     'english': english,
+                    'sign': sign,
                     'chinese': chinese,
                     'updated_at': datetime.utcnow()
                 }
@@ -200,8 +205,10 @@ def update_entry(entry_id):
             resource_id=entry_id,
             details={
                 'old_english': entry.get('english'),
+                'old_sign': entry.get('sign'),
                 'old_chinese': entry.get('chinese'),
                 'new_english': english,
+                'new_sign': sign,
                 'new_chinese': chinese
             }
         )
@@ -484,13 +491,13 @@ def bulk_import():
     Request body:
     {
         "entries": [
-            {"english": "Exit", "chinese": ["出口", "退出"]},
-            {"english": "Fire", "chinese": "火"}
+            {"english": "Exit", "sign": "EXIT-001", "chinese": ["出口", "退出"]},
+            {"english": "Fire", "sign": "FIRE-001", "chinese": "火"}
         ]
     }
     
-    Format: Each entry has english (required) and chinese (array or string).
-    If an English word already exists, the Chinese translations are merged.
+    Format: Each entry has english (required), sign (optional), and chinese (array or string).
+    If an English word already exists, the Chinese translations are merged and sign is updated.
     """
     try:
         user_id = get_jwt_identity()
@@ -517,6 +524,7 @@ def bulk_import():
         
         for idx, entry_data in enumerate(entries):
             english = entry_data.get('english', '').strip() if entry_data.get('english') else ''
+            sign = entry_data.get('sign', '').strip() if entry_data.get('sign') else ''
             chinese = entry_data.get('chinese', [])
             
             # Normalize chinese to list
@@ -544,20 +552,27 @@ def bulk_import():
                 # Add new translations that don't exist
                 new_translations = [c for c in chinese if c not in current_chinese]
                 
+                # Build update operations
+                update_ops = {'$set': {'updated_at': datetime.utcnow()}}
+                
                 if new_translations:
+                    update_ops['$push'] = {'chinese': {'$each': new_translations}}
+                
+                # Update sign if provided and different
+                if sign and sign != existing.get('sign', ''):
+                    update_ops['$set']['sign'] = sign
+                
+                if new_translations or (sign and sign != existing.get('sign', '')):
                     mongo.db.dictionary.update_one(
                         {'_id': existing['_id']},
-                        {
-                            '$push': {'chinese': {'$each': new_translations}},
-                            '$set': {'updated_at': datetime.utcnow()}
-                        }
+                        update_ops
                     )
                     updated_count += 1
                 else:
                     skipped_count += 1
             else:
                 # Create new entry
-                entry_doc = create_dictionary_entry_doc(english, chinese, user_id)
+                entry_doc = create_dictionary_entry_doc(english, chinese, user_id, sign)
                 mongo.db.dictionary.insert_one(entry_doc)
                 created_count += 1
         
@@ -595,7 +610,7 @@ def search():
     - q: Search query (searches in English words)
     - limit: Maximum results to return (default 10, max 50)
     
-    Returns matching English words with their Chinese translations.
+    Returns matching English words with their sign and Chinese translations.
     Prioritizes exact prefix matches, then contains matches.
     """
     try:
@@ -625,11 +640,13 @@ def search():
             english = entry.get('english', '')
             if english.lower() not in seen_english:
                 seen_english.add(english.lower())
+                sign = entry.get('sign', '')
                 chinese = entry.get('chinese', [])
                 if isinstance(chinese, str):
                     chinese = [chinese] if chinese else []
                 results.append({
                     'english': english,
+                    'sign': sign,
                     'chinese': chinese,
                     'match_type': 'prefix'
                 })
@@ -648,11 +665,13 @@ def search():
                 english = entry.get('english', '')
                 if english.lower() not in seen_english:
                     seen_english.add(english.lower())
+                    sign = entry.get('sign', '')
                     chinese = entry.get('chinese', [])
                     if isinstance(chinese, str):
                         chinese = [chinese] if chinese else []
                     results.append({
                         'english': english,
+                        'sign': sign,
                         'chinese': chinese,
                         'match_type': 'contains'
                     })
@@ -673,7 +692,7 @@ def lookup():
     """Look up a translation.
     
     Query params:
-    - english: Look up Chinese translations for an English word
+    - english: Look up sign and Chinese translations for an English word
     - chinese: Look up English word(s) for a Chinese term
     
     When looking up by Chinese, returns all matching English words (for dropdown selection).
@@ -686,7 +705,7 @@ def lookup():
             return jsonify({'error': 'Provide either english or chinese parameter'}), 400
         
         if english:
-            # Look up Chinese translations for English word
+            # Look up sign and Chinese translations for English word
             entry = mongo.db.dictionary.find_one({'english': {'$regex': f'^{english}$', '$options': 'i'}})
             if entry:
                 chinese_list = entry.get('chinese', [])
@@ -695,6 +714,7 @@ def lookup():
                 return jsonify({
                     'found': True,
                     'english': entry.get('english'),
+                    'sign': entry.get('sign', ''),
                     'chinese': chinese_list
                 }), 200
         
@@ -707,6 +727,7 @@ def lookup():
                 matches = [
                     {
                         'english': e.get('english'),
+                        'sign': e.get('sign', ''),
                         'chinese': e.get('chinese', []) if isinstance(e.get('chinese'), list) else [e.get('chinese', '')]
                     }
                     for e in entries
@@ -714,6 +735,7 @@ def lookup():
                 return jsonify({
                     'found': True,
                     'primary': matches[0]['english'],  # First match is the default
+                    'primary_sign': matches[0]['sign'],  # Sign of the primary match
                     'matches': matches,
                     'chinese': chinese
                 }), 200
@@ -835,24 +857,187 @@ def fill_template_gaps(project_id):
 @dictionary_bp.route('/export', methods=['GET'])
 @jwt_required()
 def export_dictionary():
-    """Export all dictionary entries as JSON."""
+    """Export all dictionary entries as CSV.
+    
+    CSV format: English,Sign,Chinese (Chinese translations joined with semicolon)
+    """
     try:
+        import csv
+        import io
+        from flask import Response
+        
         entries = list(mongo.db.dictionary.find({}).sort('english', 1))
         
-        export_data = []
+        # Create CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header
+        writer.writerow(['English', 'Sign', 'Chinese'])
+        
+        # Write data rows
         for entry in entries:
+            english = entry.get('english', '')
+            sign = entry.get('sign', '')
             chinese = entry.get('chinese', [])
             if isinstance(chinese, str):
                 chinese = [chinese] if chinese else []
-            export_data.append({
-                'english': entry.get('english', ''),
-                'chinese': chinese
-            })
+            # Join Chinese translations with semicolon
+            chinese_str = ';'.join(chinese)
+            writer.writerow([english, sign, chinese_str])
+        
+        # Create response with CSV content
+        csv_content = output.getvalue()
+        output.close()
+        
+        return Response(
+            csv_content,
+            mimetype='text/csv',
+            headers={
+                'Content-Disposition': 'attachment; filename=dictionary-export.csv',
+                'Content-Type': 'text/csv; charset=utf-8'
+            }
+        )
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@dictionary_bp.route('/import-csv', methods=['POST'])
+@jwt_required()
+def import_csv():
+    """Import dictionary entries from CSV file.
+    
+    Expected CSV format:
+    English,Sign,Chinese1,Chinese2,Chinese3,...
+    
+    Or with semicolon-separated Chinese:
+    English,Sign,Chinese
+    Exit,EXIT-001,出口;退出
+    
+    If an English word already exists, Chinese translations are merged and sign is updated.
+    """
+    try:
+        import csv
+        import io
+        
+        user_id = get_jwt_identity()
+        
+        # Check if file was uploaded
+        if 'file' not in request.files:
+            # Try to get CSV data from request body
+            csv_data = request.get_data(as_text=True)
+            if not csv_data:
+                return jsonify({'error': 'No CSV file or data provided'}), 400
+        else:
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected'}), 400
+            csv_data = file.read().decode('utf-8')
+        
+        # Parse CSV
+        reader = csv.reader(io.StringIO(csv_data))
+        rows = list(reader)
+        
+        if len(rows) < 2:
+            return jsonify({'error': 'CSV must have a header row and at least one data row'}), 400
+        
+        # Skip header row
+        header = rows[0]
+        data_rows = rows[1:]
+        
+        if len(data_rows) > 1000:
+            return jsonify({'error': 'Maximum 1000 entries per import'}), 400
+        
+        created_count = 0
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+        
+        for idx, row in enumerate(data_rows):
+            if len(row) < 1:
+                skipped_count += 1
+                continue
+            
+            english = row[0].strip() if row[0] else ''
+            sign = row[1].strip() if len(row) > 1 and row[1] else ''
+            
+            # Collect Chinese translations from remaining columns
+            chinese = []
+            if len(row) > 2:
+                # Check if third column contains semicolon-separated values
+                third_col = row[2].strip() if row[2] else ''
+                if ';' in third_col:
+                    # Semicolon-separated format
+                    chinese = [c.strip() for c in third_col.split(';') if c.strip()]
+                else:
+                    # Multiple columns format
+                    for i in range(2, len(row)):
+                        val = row[i].strip() if row[i] else ''
+                        if val:
+                            chinese.append(val)
+            
+            if not english:
+                errors.append(f'Row {idx + 2}: English word is required')
+                skipped_count += 1
+                continue
+            
+            # Check if English word already exists
+            existing = mongo.db.dictionary.find_one({'english': {'$regex': f'^{english}$', '$options': 'i'}})
+            
+            if existing:
+                # Merge Chinese translations
+                current_chinese = existing.get('chinese', [])
+                if isinstance(current_chinese, str):
+                    current_chinese = [current_chinese] if current_chinese else []
+                
+                # Add new translations that don't exist
+                new_translations = [c for c in chinese if c not in current_chinese]
+                
+                # Build update operations
+                update_ops = {'$set': {'updated_at': datetime.utcnow()}}
+                
+                if new_translations:
+                    update_ops['$push'] = {'chinese': {'$each': new_translations}}
+                
+                # Update sign if provided and different
+                if sign and sign != existing.get('sign', ''):
+                    update_ops['$set']['sign'] = sign
+                
+                if new_translations or (sign and sign != existing.get('sign', '')):
+                    mongo.db.dictionary.update_one(
+                        {'_id': existing['_id']},
+                        update_ops
+                    )
+                    updated_count += 1
+                else:
+                    skipped_count += 1
+            else:
+                # Create new entry
+                entry_doc = create_dictionary_entry_doc(english, chinese, user_id, sign)
+                mongo.db.dictionary.insert_one(entry_doc)
+                created_count += 1
+        
+        # Log action
+        log_action(
+            user_id=user_id,
+            action='dictionary_csv_import',
+            resource_type='dictionary',
+            details={
+                'total_rows': len(data_rows),
+                'created': created_count,
+                'updated': updated_count,
+                'skipped': skipped_count
+            }
+        )
         
         return jsonify({
-            'entries': export_data,
-            'total': len(export_data)
-        }), 200
+            'message': 'CSV import completed',
+            'created': created_count,
+            'updated': updated_count,
+            'skipped': skipped_count,
+            'errors': errors[:10]
+        }), 201
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
