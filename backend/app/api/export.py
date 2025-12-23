@@ -162,12 +162,31 @@ def export_to_excel(project_id):
         fixed_columns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
         all_columns = fixed_columns + floorplan_columns
         
-        # Create workbook with headers
-        workbook = excel_service.create_workbook_with_headers(all_columns)
-        sheet = workbook.active
+        # Create workbook
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment
         
-        # Write data rows
-        for row_idx, row_data in enumerate(rows, start=2):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Sign Data'
+        
+        # Row 1: Project name (merged across all columns)
+        project_name = project.get('name', 'Untitled Project')
+        sheet.cell(row=1, column=1, value=project_name)
+        sheet.cell(row=1, column=1).font = Font(bold=True, size=14)
+        sheet.cell(row=1, column=1).alignment = Alignment(horizontal='left', vertical='center')
+        
+        # Row 2: Column headers
+        for col_idx, column in enumerate(all_columns, start=1):
+            cell = sheet.cell(row=2, column=col_idx)
+            cell.value = column
+            cell.font = excel_service.header_style['font']
+            cell.fill = excel_service.header_style['fill']
+            cell.alignment = excel_service.header_style['alignment']
+            cell.border = excel_service.header_style['border']
+        
+        # Write data rows (starting from row 3)
+        for row_idx, row_data in enumerate(rows, start=3):
             # Fixed columns
             sheet.cell(row=row_idx, column=1, value=row_data.get('row_number', row_idx - 1))
             sheet.cell(row=row_idx, column=2, value=row_data.get('sign_no', ''))
