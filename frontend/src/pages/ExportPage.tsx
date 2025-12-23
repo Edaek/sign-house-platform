@@ -1,11 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { 
   ChevronLeft,
-  Download,
   FileSpreadsheet,
-  FileText,
   AlertTriangle,
   Table,
   Loader2,
@@ -969,9 +967,9 @@ function SignTablePreview({
 
 export default function ExportPage() {
   const { projectId } = useParams<{ projectId: string }>()
+  const navigate = useNavigate()
   const { currentProject, fetchProject } = useProjectStore()
   const [isLoading, setIsLoading] = useState(true)
-  const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
   
   useEffect(() => {
     if (projectId) {
@@ -984,11 +982,7 @@ export default function ExportPage() {
     if (!projectId) return
     
     try {
-      const endpoint = exportFormat === 'excel' 
-        ? `/export/excel/${projectId}`
-        : `/export/csv/${projectId}`
-      
-      const response = await api.post(endpoint, 
+      const response = await api.post(`/export/excel/${projectId}`, 
         { include_metadata: true },
         { responseType: 'blob' }
       )
@@ -996,7 +990,7 @@ export default function ExportPage() {
       const url = window.URL.createObjectURL(new Blob([response.data]))
       const link = document.createElement('a')
       link.href = url
-      link.setAttribute('download', `${currentProject?.name || 'export'}.${exportFormat === 'excel' ? 'xlsx' : 'csv'}`)
+      link.setAttribute('download', `${currentProject?.name || 'export'}.xlsx`)
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -1025,13 +1019,13 @@ export default function ExportPage() {
       <div className="flex-shrink-0 bg-slate-900/50 border-b border-slate-700 px-4 py-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <Link 
-              to={`/project/${projectId}`}
+            <button 
+              onClick={() => navigate(-1)}
               className="inline-flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
             >
               <ChevronLeft className="w-4 h-4" />
               Back
-            </Link>
+            </button>
             
             <div className="h-6 w-px bg-slate-700" />
             
@@ -1049,41 +1043,13 @@ export default function ExportPage() {
               <span>Floors: <span className="text-white font-medium">{currentProject?.floorplans?.length || 0}</span></span>
             </div>
             
-            {/* Format Toggle */}
-            <div className="flex rounded-lg overflow-hidden border border-slate-600">
-              <button
-                onClick={() => setExportFormat('excel')}
-                className={clsx(
-                  'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors',
-                  exportFormat === 'excel'
-                    ? 'bg-sign-500 text-white'
-                    : 'bg-slate-800 text-slate-400 hover:text-white'
-                )}
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                Excel
-              </button>
-              <button
-                onClick={() => setExportFormat('csv')}
-                className={clsx(
-                  'flex items-center gap-1.5 px-3 py-1.5 text-sm transition-colors border-l border-slate-600',
-                  exportFormat === 'csv'
-                    ? 'bg-sign-500 text-white'
-                    : 'bg-slate-800 text-slate-400 hover:text-white'
-                )}
-              >
-                <FileText className="w-4 h-4" />
-                CSV
-              </button>
-            </div>
-            
             {/* Download Button */}
             <button
               onClick={handleExport}
               className="btn btn-primary flex items-center gap-2 px-4 py-1.5"
             >
-              <Download className="w-4 h-4" />
-              Download
+              <FileSpreadsheet className="w-4 h-4" />
+              Download Excel
             </button>
           </div>
         </div>
