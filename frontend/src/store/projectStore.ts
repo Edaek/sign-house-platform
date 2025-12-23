@@ -67,6 +67,14 @@ interface Project {
   floorplans?: FloorPlan[]
 }
 
+interface CropRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+  name: string
+}
+
 interface ProjectState {
   projects: Project[]
   currentProject: Project | null
@@ -86,6 +94,7 @@ interface ProjectState {
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   updateFloorplan: (projectId: string, floorplanId: string, data: Partial<FloorPlan>) => Promise<void>
   deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
+  splitFloorplan: (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal?: boolean) => Promise<FloorPlan[]>
   
   detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
@@ -238,6 +247,53 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }))
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to delete floorplan' })
+      throw error
+    }
+  },
+  
+  splitFloorplan: async (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal = false) => {
+    set({ isLoading: true, error: null })
+    try {
+      const response = await api.post(`/processing/split/${floorplanId}`, {
+        regions,
+        delete_original: deleteOriginal
+      })
+      
+      const newFloorplans = response.data.floorplans
+      
+      // Update currentProject with new floorplans
+      set((state) => {
+        if (!state.currentProject) return { isLoading: false }
+        
+        let updatedFloorplans = [...(state.currentProject.floorplans || [])]
+        
+        // Remove original if deleted
+        if (deleteOriginal) {
+          updatedFloorplans = updatedFloorplans.filter(fp => fp.id !== floorplanId)
+        }
+        
+        // Add new floorplans
+        updatedFloorplans = [...updatedFloorplans, ...newFloorplans]
+        
+        // Sort by floor_number
+        updatedFloorplans.sort((a, b) => a.floor_number - b.floor_number)
+        
+        return {
+          isLoading: false,
+          currentProject: {
+            ...state.currentProject,
+            floorplans: updatedFloorplans,
+            floorplan_count: updatedFloorplans.length
+          },
+          currentFloorplan: deleteOriginal && state.currentFloorplan?.id === floorplanId
+            ? null
+            : state.currentFloorplan
+        }
+      })
+      
+      return newFloorplans
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to split floorplan', isLoading: false })
       throw error
     }
   },
