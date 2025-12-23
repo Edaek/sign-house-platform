@@ -12,13 +12,15 @@ import {
   RefreshCw,
   ChevronDown,
   Search,
-  X
+  BookPlus,
+  Check
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import { 
   getSignTableData,
   updateSignTableCell,
   searchDictionary,
+  addToDictionary,
   SignTable,
   SignRow,
   DictionarySearchResult
@@ -336,19 +338,27 @@ function EnglishAutocompleteCell({
   )
 }
 
-// Editable Chinese cell
+// Editable Chinese cell with save to dictionary option
 function ChineseEditableCell({ 
   value, 
   rowNumber,
-  onSave 
+  englishValue,
+  knownTranslations,
+  onSave,
+  onSaveToDictionary
 }: { 
   value: string
   rowNumber: number
+  englishValue: string
+  knownTranslations: string[]  // Known Chinese translations for this English word
   onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSaveToDictionary: (rowNumber: number, english: string, chinese: string) => Promise<void>
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const [isSaving, setIsSaving] = useState(false)
+  const [isSavingToDict, setIsSavingToDict] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -388,6 +398,25 @@ function ChineseEditableCell({
     }
   }
 
+  const handleSaveToDictionary = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!englishValue || !value) return
+    
+    setIsSavingToDict(true)
+    try {
+      await onSaveToDictionary(rowNumber, englishValue, value)
+      setJustSaved(true)
+      setTimeout(() => setJustSaved(false), 2000)
+    } catch {
+      // Error handled in parent
+    }
+    setIsSavingToDict(false)
+  }
+
+  // Show save to dictionary icon when both English and Chinese have values and this Chinese translation is not in dictionary
+  const isTranslationInDictionary = knownTranslations.includes(value)
+  const canSaveToDictionary = englishValue && value && !isTranslationInDictionary && !justSaved
+
   if (isEditing) {
     return (
       <div className="relative">
@@ -409,15 +438,40 @@ function ChineseEditableCell({
   }
 
   return (
-    <div
-      onClick={() => setIsEditing(true)}
-      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-purple-500/10 border border-transparent hover:border-purple-500/30"
-      title="Click to edit"
-    >
-      {value !== '' ? (
-        <span className="text-purple-300">{value}</span>
-      ) : (
-        <span className="text-slate-500">—</span>
+    <div className="flex items-center gap-1">
+      <div
+        onClick={() => setIsEditing(true)}
+        className="flex-1 px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-purple-500/10 border border-transparent hover:border-purple-500/30"
+        title="Click to edit"
+      >
+        {value !== '' ? (
+          <span className="text-purple-300">{value}</span>
+        ) : (
+          <span className="text-slate-500">—</span>
+        )}
+      </div>
+      
+      {/* Save to dictionary button */}
+      {canSaveToDictionary && (
+        <button
+          onClick={handleSaveToDictionary}
+          disabled={isSavingToDict}
+          className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors"
+          title="Save to dictionary"
+        >
+          {isSavingToDict ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <BookPlus className="w-4 h-4" />
+          )}
+        </button>
+      )}
+      
+      {/* Just saved indicator */}
+      {justSaved && (
+        <span className="text-emerald-400">
+          <Check className="w-4 h-4" />
+        </span>
       )}
     </div>
   )
@@ -428,16 +482,37 @@ function ChineseSelectCell({
   value,
   options,
   rowNumber,
-  onSave
+  englishValue,
+  onSave,
+  onSaveToDictionary
 }: {
   value: string
   options: string[]
   rowNumber: number
+  englishValue: string
   onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onSaveToDictionary: (rowNumber: number, english: string, chinese: string) => Promise<void>
 }) {
   const [isSaving, setIsSaving] = useState(false)
+  const [isSavingToDict, setIsSavingToDict] = useState(false)
+  const [justSaved, setJustSaved] = useState(false)
+  const [isAddingNew, setIsAddingNew] = useState(false)
+  const [newValue, setNewValue] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (isAddingNew && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [isAddingNew])
 
   const handleSelect = async (selected: string) => {
+    if (selected === '__add_new__') {
+      setIsAddingNew(true)
+      setNewValue('')
+      return
+    }
+    
     if (selected === value) return // No change
     
     setIsSaving(true)
@@ -449,24 +524,123 @@ function ChineseSelectCell({
     setIsSaving(false)
   }
 
+  const handleSaveNewValue = async () => {
+    if (!newValue.trim()) {
+      setIsAddingNew(false)
+      return
+    }
+    
+    setIsSaving(true)
+    try {
+      await onSave(rowNumber, 'chinese', newValue.trim())
+      setIsAddingNew(false)
+      setNewValue('')
+    } catch {
+      toast.error('Failed to save')
+    }
+    setIsSaving(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveNewValue()
+    } else if (e.key === 'Escape') {
+      setIsAddingNew(false)
+      setNewValue('')
+    }
+  }
+
+  const handleSaveToDictionary = async () => {
+    if (!englishValue || !value) return
+    
+    setIsSavingToDict(true)
+    try {
+      await onSaveToDictionary(rowNumber, englishValue, value)
+      setJustSaved(true)
+      setTimeout(() => setJustSaved(false), 2000)
+    } catch {
+      // Error handled in parent
+    }
+    setIsSavingToDict(false)
+  }
+
+  // Check if current value is NOT in the options (meaning it was manually entered)
+  const isManualEntry = value && !options.includes(value)
+
+  if (isAddingNew) {
+    return (
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="text"
+          value={newValue}
+          onChange={(e) => setNewValue(e.target.value)}
+          onBlur={handleSaveNewValue}
+          onKeyDown={handleKeyDown}
+          disabled={isSaving}
+          placeholder="Enter new translation..."
+          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-purple-500 rounded focus:outline-none"
+        />
+        {isSaving && (
+          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+        )}
+      </div>
+    )
+  }
+
   return (
-    <div className="relative">
-      <select
-        value={value || ''}
-        onChange={(e) => handleSelect(e.target.value)}
-        disabled={isSaving}
-        className="w-full px-2 py-1.5 text-sm bg-purple-900/20 border border-purple-500/40 rounded text-purple-200 cursor-pointer appearance-none focus:outline-none hover:bg-purple-900/30"
-      >
-        {!value && <option value="" disabled>Select translation...</option>}
-        {options.map((opt, idx) => (
-          <option key={idx} value={opt} className="bg-slate-800 text-white">
-            {opt}
+    <div className="flex items-center gap-1">
+      <div className="relative flex-1">
+        <select
+          value={value || ''}
+          onChange={(e) => handleSelect(e.target.value)}
+          disabled={isSaving}
+          className="w-full px-2 py-1.5 text-sm bg-purple-900/20 border border-purple-500/40 rounded text-purple-200 cursor-pointer appearance-none focus:outline-none hover:bg-purple-900/30"
+        >
+          {!value && <option value="" disabled>Select translation...</option>}
+          {/* Show current value if it's not in options (manual entry) */}
+          {isManualEntry && (
+            <option value={value} className="bg-slate-800 text-white">
+              {value}
+            </option>
+          )}
+          {options.map((opt, idx) => (
+            <option key={idx} value={opt} className="bg-slate-800 text-white">
+              {opt}
+            </option>
+          ))}
+          {/* Add new option */}
+          <option value="__add_new__" className="bg-slate-700 text-emerald-400">
+            ＋ Add new translation...
           </option>
-        ))}
-      </select>
-      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 pointer-events-none" />
-      {isSaving && (
-        <Loader2 className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+        </select>
+        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 pointer-events-none" />
+        {isSaving && (
+          <Loader2 className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+        )}
+      </div>
+      
+      {/* Save to dictionary button for manual entries */}
+      {isManualEntry && !justSaved && (
+        <button
+          onClick={handleSaveToDictionary}
+          disabled={isSavingToDict}
+          className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors"
+          title="Save to dictionary"
+        >
+          {isSavingToDict ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <BookPlus className="w-4 h-4" />
+          )}
+        </button>
+      )}
+      
+      {/* Just saved indicator */}
+      {justSaved && (
+        <span className="text-emerald-400">
+          <Check className="w-4 h-4" />
+        </span>
       )}
     </div>
   )
@@ -522,7 +696,8 @@ function SignTablePreview({
         try {
           // Look up all Chinese translations for this English word
           const response = await api.get(`/dictionary/lookup?english=${encodeURIComponent(row.english)}`)
-          if (response.data.found && response.data.chinese && response.data.chinese.length > 1) {
+          if (response.data.found && response.data.chinese && response.data.chinese.length > 0) {
+            // Store all known translations so we can check if current value is in dictionary
             newOptions[row.row_number] = response.data.chinese
           }
           newFetched.add(row.row_number)
@@ -588,11 +763,6 @@ function SignTablePreview({
     setFetchedRows(prev => new Set([...prev, rowNumber]))
   }
 
-  const clearChineseOptions = (rowNumber: number) => {
-    // Don't clear - keep showing dropdown for multiple options
-    // This function is now a no-op but kept for interface compatibility
-  }
-
   // Refetch options when English value changes
   const refetchChineseOptions = async (rowNumber: number, english: string) => {
     if (!english) {
@@ -606,7 +776,8 @@ function SignTablePreview({
 
     try {
       const response = await api.get(`/dictionary/lookup?english=${encodeURIComponent(english)}`)
-      if (response.data.found && response.data.chinese && response.data.chinese.length > 1) {
+      if (response.data.found && response.data.chinese && response.data.chinese.length > 0) {
+        // Store all known translations (even if just one) so we can check if current value is in dictionary
         setChineseOptions(prev => ({ ...prev, [rowNumber]: response.data.chinese }))
       } else {
         setChineseOptions(prev => {
@@ -617,6 +788,28 @@ function SignTablePreview({
       }
     } catch {
       // Ignore errors
+    }
+  }
+
+  const handleSaveToDictionary = async (rowNumber: number, english: string, chinese: string) => {
+    try {
+      const result = await addToDictionary(english, chinese)
+      
+      if (result.action === 'created') {
+        toast.success(`Added "${english}" to dictionary`)
+      } else if (result.action === 'added') {
+        toast.success(`Added translation to "${english}"`)
+      } else {
+        toast.success('Translation already in dictionary')
+      }
+      
+      // Update Chinese options with all translations from the dictionary
+      if (result.entry.chinese && result.entry.chinese.length > 0) {
+        setChineseOptions(prev => ({ ...prev, [rowNumber]: result.entry.chinese }))
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to save to dictionary')
+      throw err
     }
   }
 
@@ -734,13 +927,18 @@ function SignTablePreview({
                     value={row.chinese}
                     options={chineseOptions[row.row_number]}
                     rowNumber={row.row_number}
+                    englishValue={row.english}
                     onSave={handleCellSave}
+                    onSaveToDictionary={handleSaveToDictionary}
                   />
                 ) : (
                   <ChineseEditableCell
                     value={row.chinese}
                     rowNumber={row.row_number}
+                    englishValue={row.english}
+                    knownTranslations={chineseOptions[row.row_number] || []}
                     onSave={handleCellSave}
+                    onSaveToDictionary={handleSaveToDictionary}
                   />
                 )}
               </td>

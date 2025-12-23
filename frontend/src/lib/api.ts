@@ -176,5 +176,24 @@ export const searchDictionary = async (query: string, limit = 10): Promise<Dicti
   return response.data
 }
 
+// Add translation to dictionary
+export interface AddToDictionaryResponse {
+  action: 'created' | 'added' | 'exists'
+  message: string
+  entry: {
+    id: string
+    english: string
+    chinese: string[]
+  }
+}
+
+export const addToDictionary = async (english: string, chinese: string): Promise<AddToDictionaryResponse> => {
+  const response = await api.post('/dictionary/add-translation', {
+    english,
+    chinese,
+  })
+  return response.data
+}
+
 export default api
 

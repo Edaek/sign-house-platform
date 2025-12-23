@@ -373,6 +373,109 @@ def delete_entry(entry_id):
         return jsonify({'error': str(e)}), 500
 
 
+@dictionary_bp.route('/add-translation', methods=['POST'])
+@jwt_required()
+def add_translation():
+    """Add a translation to the dictionary.
+    
+    If the English word doesn't exist, creates a new entry.
+    If it exists, adds the Chinese translation to the existing entry.
+    
+    Request body:
+    {
+        "english": "Exit",
+        "chinese": "出口"
+    }
+    
+    Response:
+    {
+        "action": "created" | "added" | "exists",
+        "entry": {...}
+    }
+    """
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        english = data.get('english', '').strip() if data.get('english') else ''
+        chinese = data.get('chinese', '').strip() if data.get('chinese') else ''
+        
+        if not english:
+            return jsonify({'error': 'English word is required'}), 400
+        
+        if not chinese:
+            return jsonify({'error': 'Chinese translation is required'}), 400
+        
+        # Check if English word already exists
+        existing = mongo.db.dictionary.find_one({'english': {'$regex': f'^{english}$', '$options': 'i'}})
+        
+        if existing:
+            # Check if this Chinese translation already exists
+            current_chinese = existing.get('chinese', [])
+            if isinstance(current_chinese, str):
+                current_chinese = [current_chinese] if current_chinese else []
+            
+            if chinese in current_chinese:
+                # Translation already exists
+                return jsonify({
+                    'action': 'exists',
+                    'message': 'Translation already exists in dictionary',
+                    'entry': dictionary_entry_to_dict(existing)
+                }), 200
+            
+            # Add the new translation
+            mongo.db.dictionary.update_one(
+                {'_id': existing['_id']},
+                {
+                    '$push': {'chinese': chinese},
+                    '$set': {'updated_at': datetime.utcnow()}
+                }
+            )
+            
+            # Log action
+            log_action(
+                user_id=user_id,
+                action='dictionary_translation_added',
+                resource_type='dictionary',
+                resource_id=str(existing['_id']),
+                details={'english': english, 'added_chinese': chinese}
+            )
+            
+            updated_entry = mongo.db.dictionary.find_one({'_id': existing['_id']})
+            
+            return jsonify({
+                'action': 'added',
+                'message': f'Added translation to existing entry',
+                'entry': dictionary_entry_to_dict(updated_entry)
+            }), 200
+        else:
+            # Create new entry
+            entry_doc = create_dictionary_entry_doc(english, [chinese], user_id)
+            result = mongo.db.dictionary.insert_one(entry_doc)
+            entry_doc['_id'] = result.inserted_id
+            
+            # Log action
+            log_action(
+                user_id=user_id,
+                action='dictionary_entry_created',
+                resource_type='dictionary',
+                resource_id=str(result.inserted_id),
+                details={'english': english, 'chinese': [chinese]}
+            )
+            
+            return jsonify({
+                'action': 'created',
+                'message': 'Created new dictionary entry',
+                'entry': dictionary_entry_to_dict(entry_doc)
+            }), 201
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @dictionary_bp.route('/bulk', methods=['POST'])
 @jwt_required()
 def bulk_import():
