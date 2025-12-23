@@ -12,7 +12,10 @@ import {
   ChevronLeft,
   Users,
   FileText,
-  X
+  X,
+  Pencil,
+  Check,
+  Loader2
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
@@ -25,8 +28,10 @@ export default function ProjectPage() {
   const { 
     currentProject, 
     fetchProject, 
+    updateProject,
     uploadFloorplans,
     pollBatchStatus,
+    fetchActiveBatchJob,
     currentBatchJob,
     isBatchUploading,
     clearBatchJob,
@@ -36,15 +41,20 @@ export default function ProjectPage() {
   const [showBatchProgress, setShowBatchProgress] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editedName, setEditedName] = useState('')
   
   const floorplanInputRef = useRef<HTMLInputElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
   
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
+      // Check for any active batch jobs when page loads
+      fetchActiveBatchJob(projectId)
     }
-  }, [projectId, fetchProject])
+  }, [projectId, fetchProject, fetchActiveBatchJob])
   
   // Handle file selection from input
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -122,10 +132,70 @@ export default function ProjectPage() {
     }
   }, [projectId, currentBatchJob, pollBatchStatus])
   
+  // Continue polling even when dialog is closed but job is still running
+  useEffect(() => {
+    if (!showBatchProgress && currentBatchJob && 
+        (currentBatchJob.status === 'pending' || currentBatchJob.status === 'processing')) {
+      const pollInterval = setInterval(() => {
+        handlePollStatus()
+      }, 2000)
+      
+      return () => clearInterval(pollInterval)
+    }
+  }, [showBatchProgress, currentBatchJob?.status, handlePollStatus])
+  
   // Close batch progress modal
   const handleCloseBatchProgress = () => {
     setShowBatchProgress(false)
-    clearBatchJob()
+    // Only clear the job if it's completed or errored
+    // Keep it in state if still processing so the indicator can show
+    if (currentBatchJob?.status === 'completed' || currentBatchJob?.status === 'error') {
+      clearBatchJob()
+    }
+  }
+  
+  // Check if there's an active job running in the background
+  const hasActiveBackgroundJob = currentBatchJob && 
+    !showBatchProgress && 
+    (currentBatchJob.status === 'pending' || currentBatchJob.status === 'processing')
+  
+  // Start editing project name
+  const handleStartEditName = () => {
+    if (currentProject) {
+      setEditedName(currentProject.name)
+      setIsEditingName(true)
+      setTimeout(() => nameInputRef.current?.focus(), 0)
+    }
+  }
+  
+  // Save project name
+  const handleSaveName = async () => {
+    if (!projectId || !editedName.trim()) {
+      setIsEditingName(false)
+      return
+    }
+    
+    if (editedName.trim() === currentProject?.name) {
+      setIsEditingName(false)
+      return
+    }
+    
+    try {
+      await updateProject(projectId, { name: editedName.trim() })
+      toast.success('Project renamed')
+      setIsEditingName(false)
+    } catch {
+      toast.error('Failed to rename project')
+    }
+  }
+  
+  // Handle key press in name input
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveName()
+    } else if (e.key === 'Escape') {
+      setIsEditingName(false)
+    }
   }
   
   const getStatusIcon = (status: string) => {
@@ -182,7 +252,35 @@ export default function ProjectPage() {
         
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">{currentProject.name}</h1>
+            {isEditingName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={nameInputRef}
+                  type="text"
+                  value={editedName}
+                  onChange={(e) => setEditedName(e.target.value)}
+                  onKeyDown={handleNameKeyDown}
+                  onBlur={handleSaveName}
+                  className="text-3xl font-display font-bold text-slate-900 dark:text-white bg-transparent border-b-2 border-sign-500 outline-none py-0"
+                />
+                <button
+                  onClick={handleSaveName}
+                  className="p-1.5 text-emerald-500 hover:text-emerald-400 transition-colors"
+                >
+                  <Check className="w-5 h-5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group">
+                <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">{currentProject.name}</h1>
+                <button
+                  onClick={handleStartEditName}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-all"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             {currentProject.description && (
               <p className="text-slate-600 dark:text-slate-400 mt-1">{currentProject.description}</p>
             )}
@@ -214,7 +312,7 @@ export default function ProjectPage() {
       </div>
       
       {/* Upload Section */}
-      <div className="max-w-2xl mb-8">
+      <div className="mb-8">
         {/* Floorplan Upload */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -450,6 +548,27 @@ export default function ProjectPage() {
         onClose={handleCloseBatchProgress}
         onPoll={handlePollStatus}
       />
+      
+      {/* Floating Processing Indicator - shows when dialog is closed but job is running */}
+      {hasActiveBackgroundJob && (
+        <motion.button
+          initial={{ opacity: 0, y: 20, scale: 0.9 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20, scale: 0.9 }}
+          onClick={() => setShowBatchProgress(true)}
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-3 px-4 py-3 bg-sign-600 hover:bg-sign-500 text-white rounded-full shadow-lg shadow-sign-500/30 transition-colors cursor-pointer"
+        >
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm font-medium">
+            Processing {currentBatchJob.total_files} file{currentBatchJob.total_files > 1 ? 's' : ''}...
+          </span>
+          <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+            <span className="text-xs font-bold">
+              {Math.round((currentBatchJob.files.reduce((sum, f) => sum + f.progress, 0) / currentBatchJob.total_files))}%
+            </span>
+          </div>
+        </motion.button>
+      )}
     </div>
   )
 }

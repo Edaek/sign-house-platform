@@ -173,14 +173,13 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
               </div>
             </div>
             
-            {isComplete && (
-              <button
-                onClick={onClose}
-                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            )}
+            <button
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+              title={isComplete ? 'Close' : 'Minimize (processing continues in background)'}
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
           
           {/* Overall Progress */}
@@ -277,16 +276,20 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
           </div>
           
           {/* Footer */}
-          {isComplete && (
-            <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
-              <button
-                onClick={onClose}
-                className="w-full btn btn-primary"
-              >
-                {errorCount > 0 ? 'Close & Review' : 'Done'}
-              </button>
-            </div>
-          )}
+          <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
+            <button
+              onClick={onClose}
+              className={clsx(
+                'w-full btn',
+                isComplete ? 'btn-primary' : 'btn-secondary'
+              )}
+            >
+              {isComplete 
+                ? (errorCount > 0 ? 'Close & Review' : 'Done')
+                : 'Minimize (processing continues in background)'
+              }
+            </button>
+          </div>
         </motion.div>
       </div>
     </AnimatePresence>

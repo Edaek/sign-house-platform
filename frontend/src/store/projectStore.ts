@@ -123,6 +123,7 @@ interface ProjectState {
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
   uploadFloorplans: (projectId: string, files: File[]) => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
+  fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
   clearBatchJob: () => void
   
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
@@ -187,9 +188,12 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   updateProject: async (id: string, data: Partial<Project>) => {
     try {
       const response = await api.put(`/projects/${id}`, data)
+      const updatedProject = response.data.project
       set((state) => ({
-        projects: state.projects.map(p => p.id === id ? response.data.project : p),
-        currentProject: state.currentProject?.id === id ? response.data.project : state.currentProject
+        projects: state.projects.map(p => p.id === id ? { ...p, ...updatedProject } : p),
+        currentProject: state.currentProject?.id === id 
+          ? { ...state.currentProject, ...updatedProject }
+          : state.currentProject
       }))
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to update project' })
@@ -283,6 +287,24 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   
   clearBatchJob: () => {
     set({ currentBatchJob: null, isBatchUploading: false })
+  },
+  
+  fetchActiveBatchJob: async (projectId: string) => {
+    try {
+      const response = await api.get(`/processing/batch-upload/${projectId}/status`)
+      const job = response.data.job as BatchUploadJob
+      
+      // Only restore job if it's still in progress
+      if (job.status === 'pending' || job.status === 'processing') {
+        set({ currentBatchJob: job, isBatchUploading: true })
+        return job
+      }
+      
+      return null
+    } catch {
+      // No active job found - this is expected behavior, not an error
+      return null
+    }
   },
   
   fetchFloorplan: async (projectId: string, floorplanId: string) => {
