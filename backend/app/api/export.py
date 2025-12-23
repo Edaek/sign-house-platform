@@ -1,10 +1,12 @@
 import os
+from datetime import datetime
 from flask import Blueprint, request, jsonify, send_file, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from bson import ObjectId
 from app import mongo
-from app.models import serialize_doc
+from app.models import serialize_doc, create_sign_table_doc, create_sign_row, sign_table_to_dict
 from app.services.excel_service import ExcelService
+from app.services.dictionary_service import lookup_chinese
 
 export_bp = Blueprint('export', __name__)
 
@@ -112,7 +114,7 @@ def preview_export(project_id):
 @export_bp.route('/excel/<project_id>', methods=['POST'])
 @jwt_required()
 def export_to_excel(project_id):
-    """Export project data to Excel using the template."""
+    """Export project data to Excel using the sign table structure."""
     user_id = get_jwt_identity()
     
     try:
@@ -126,49 +128,26 @@ def export_to_excel(project_id):
     if not project:
         return jsonify({'error': 'Project not found'}), 404
     
-    # Get column mapping from request
-    data = request.get_json() or {}
-    column_mapping = data.get('column_mapping', {})
-    
-    # Collect all extracted data
-    floorplans = list(mongo.db.floorplans.find({
-        'project_id': ObjectId(project_id)
-    }).sort('floor_number', 1))
-    
-    all_data = []
-    for fp in floorplans:
-        extracted = list(mongo.db.extracted_data.find({
-            'floorplan_id': fp['_id']
-        }).sort('shape_index', 1))
-        
-        for item in extracted:
-            display_text = item.get('manual_text') or item.get('extracted_text') or ''
-            row = {
-                'floor_number': fp['floor_number'],
-                'floor_name': fp['floor_name'],
-                'shape_index': item['shape_index'] + 1,
-                'text': display_text,
-                'quantity': item.get('quantity', 1),
-                'confidence': round((item.get('confidence') or 0) * 100, 1),
-                'x': item['x'],
-                'y': item['y'],
-                'width': item['width'],
-                'height': item['height']
-            }
-            all_data.append(row)
-    
     try:
+        # Get or generate sign table data
+        sign_table = mongo.db.project_sign_data.find_one({
+            'project_id': ObjectId(project_id)
+        })
+        
+        if not sign_table:
+            # Generate it if it doesn't exist
+            generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+            sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
+            result = mongo.db.project_sign_data.insert_one(sign_table_doc)
+            sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
+        
+        rows = sign_table.get('rows', [])
+        floorplan_columns = sign_table.get('floorplan_columns', [])
+        
+        if not rows:
+            return jsonify({'error': 'No data to export. Process floor plans first.'}), 400
+        
         excel_service = ExcelService()
-        
-        # Use template if available
-        template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
-        template_path = template.get('filepath') if template else None
-        floor_mapping = template.get('floor_mapping', {}) if template else {}
-        
-        # Debug logging
-        current_app.logger.info(f'Template path: {template_path}')
-        current_app.logger.info(f'Floor mapping: {floor_mapping}')
-        current_app.logger.info(f'Data count: {len(all_data)}')
         
         # Create export file
         output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'exports')
@@ -179,29 +158,54 @@ def export_to_excel(project_id):
         safe_name = re.sub(r'[^\w\s-]', '', project["name"]).strip().replace(' ', '_')
         output_path = os.path.join(output_dir, f'export_{project_id}_{safe_name}.xlsx')
         
-        # Use template mapping if both template and floor mapping are available
-        if template_path and floor_mapping:
-            excel_service.export_with_template_mapping(
-                all_data,
-                output_path,
-                template_path,
-                floor_mapping
-            )
-        elif template_path:
-            # Template exists but no floor mapping - return error with helpful message
-            return jsonify({
-                'error': 'Floor mapping not configured',
-                'message': 'Please configure floor-to-column mapping before exporting',
-                'template_columns': template.get('columns', [])
-            }), 400
-        else:
-            # No template - use default export
-            excel_service.export_data(
-                all_data,
-                output_path,
-                template_path=None,
-                column_mapping=column_mapping
-            )
+        # Build column headers: #, Sign No., Sign, English, Chinese, [floor columns...]
+        fixed_columns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
+        all_columns = fixed_columns + floorplan_columns
+        
+        # Create workbook with headers
+        workbook = excel_service.create_workbook_with_headers(all_columns)
+        sheet = workbook.active
+        
+        # Write data rows
+        for row_idx, row_data in enumerate(rows, start=2):
+            # Fixed columns
+            sheet.cell(row=row_idx, column=1, value=row_data.get('row_number', row_idx - 1))
+            sheet.cell(row=row_idx, column=2, value=row_data.get('sign_no', ''))
+            sheet.cell(row=row_idx, column=3, value=row_data.get('sign', ''))
+            sheet.cell(row=row_idx, column=4, value=row_data.get('english', ''))
+            sheet.cell(row=row_idx, column=5, value=row_data.get('chinese', ''))
+            
+            # Floor count columns
+            floor_counts = row_data.get('floor_counts', {})
+            for col_offset, floor_name in enumerate(floorplan_columns):
+                count = floor_counts.get(floor_name, 0)
+                if count > 0:
+                    sheet.cell(row=row_idx, column=6 + col_offset, value=count)
+            
+            # Apply cell styles
+            for col_idx in range(1, len(all_columns) + 1):
+                cell = sheet.cell(row=row_idx, column=col_idx)
+                cell.alignment = excel_service.cell_style['alignment']
+                cell.border = excel_service.cell_style['border']
+        
+        # Auto-adjust column widths
+        for column_cells in sheet.columns:
+            max_length = 0
+            column = column_cells[0].column_letter
+            
+            for cell in column_cells:
+                try:
+                    if cell.value:
+                        max_length = max(max_length, len(str(cell.value)))
+                except:
+                    pass
+            
+            adjusted_width = min(max_length + 2, 50)
+            sheet.column_dimensions[column].width = max(adjusted_width, 10)
+        
+        # Save workbook
+        workbook.save(output_path)
+        workbook.close()
         
         return send_file(
             output_path,
@@ -220,7 +224,7 @@ def export_to_excel(project_id):
 @export_bp.route('/csv/<project_id>', methods=['POST'])
 @jwt_required()
 def export_to_csv(project_id):
-    """Export project data to CSV."""
+    """Export project data to CSV using the sign table structure."""
     user_id = get_jwt_identity()
     
     try:
@@ -234,46 +238,60 @@ def export_to_csv(project_id):
     if not project:
         return jsonify({'error': 'Project not found'}), 404
     
-    # Get options from request
-    data = request.get_json() or {}
-    include_metadata = data.get('include_metadata', True)
-    
-    # Collect all extracted data
-    floorplans = list(mongo.db.floorplans.find({
-        'project_id': ObjectId(project_id)
-    }).sort('floor_number', 1))
-    
-    all_data = []
-    for fp in floorplans:
-        extracted = list(mongo.db.extracted_data.find({
-            'floorplan_id': fp['_id']
-        }).sort('shape_index', 1))
-        
-        for item in extracted:
-            display_text = item.get('manual_text') or item.get('extracted_text') or ''
-            row = {
-                'floor_number': fp['floor_number'],
-                'floor_name': fp['floor_name'],
-                'item_number': item['shape_index'] + 1,
-                'text': display_text,
-                'quantity': item.get('quantity', 1)
-            }
-            if include_metadata:
-                row['confidence'] = round((item.get('confidence') or 0) * 100, 1)
-                row['x'] = item['x']
-                row['y'] = item['y']
-                row['width'] = item['width']
-                row['height'] = item['height']
-            all_data.append(row)
-    
     try:
-        excel_service = ExcelService()
+        import csv
         
+        # Get or generate sign table data
+        sign_table = mongo.db.project_sign_data.find_one({
+            'project_id': ObjectId(project_id)
+        })
+        
+        if not sign_table:
+            # Generate it if it doesn't exist
+            generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+            sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
+            result = mongo.db.project_sign_data.insert_one(sign_table_doc)
+            sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
+        
+        rows = sign_table.get('rows', [])
+        floorplan_columns = sign_table.get('floorplan_columns', [])
+        
+        if not rows:
+            return jsonify({'error': 'No data to export. Process floor plans first.'}), 400
+        
+        # Create export file
         output_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'exports')
         os.makedirs(output_dir, exist_ok=True)
-        output_path = os.path.join(output_dir, f'export_{project_id}_{project["name"]}.csv')
         
-        excel_service.export_to_csv(all_data, output_path)
+        import re
+        safe_name = re.sub(r'[^\w\s-]', '', project["name"]).strip().replace(' ', '_')
+        output_path = os.path.join(output_dir, f'export_{project_id}_{safe_name}.csv')
+        
+        # Build column headers
+        fixed_columns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
+        all_columns = fixed_columns + floorplan_columns
+        
+        # Write CSV
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(all_columns)
+            
+            for row_data in rows:
+                row = [
+                    row_data.get('row_number', ''),
+                    row_data.get('sign_no', ''),
+                    row_data.get('sign', ''),
+                    row_data.get('english', ''),
+                    row_data.get('chinese', '')
+                ]
+                
+                # Add floor counts
+                floor_counts = row_data.get('floor_counts', {})
+                for floor_name in floorplan_columns:
+                    count = floor_counts.get(floor_name, 0)
+                    row.append(count if count > 0 else '')
+                
+                writer.writerow(row)
         
         return send_file(
             output_path,
@@ -283,6 +301,9 @@ def export_to_csv(project_id):
         )
         
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        current_app.logger.error(f'CSV Export failed: {str(e)}\n{error_trace}')
         return jsonify({'error': f'Export failed: {str(e)}'}), 500
 
 
@@ -468,3 +489,231 @@ def update_template_data(project_id):
         error_trace = traceback.format_exc()
         current_app.logger.error(f'Failed to update template: {str(e)}\n{error_trace}')
         return jsonify({'error': f'Failed to update template: {str(e)}'}), 500
+
+
+def _generate_sign_table_from_ocr(project_id):
+    """Generate sign table data from OCR extracted data.
+    
+    Returns:
+        Tuple of (rows, floorplan_columns) where:
+        - rows: List of sign row dicts
+        - floorplan_columns: List of floor names
+    """
+    # Get all floorplans for the project
+    floorplans = list(mongo.db.floorplans.find({
+        'project_id': ObjectId(project_id)
+    }).sort('floor_number', 1))
+    
+    # Collect floor names for columns
+    floorplan_columns = [fp['floor_name'] for fp in floorplans]
+    
+    # Group OCR data by unique sign number (normalized text)
+    sign_groups = {}
+    
+    for fp in floorplans:
+        floor_name = fp['floor_name']
+        
+        extracted = list(mongo.db.extracted_data.find({
+            'floorplan_id': fp['_id']
+        }))
+        
+        for item in extracted:
+            display_text = item.get('manual_text') or item.get('extracted_text') or ''
+            sign_no = display_text.strip()
+            
+            if not sign_no:
+                continue
+            
+            # Use normalized text as key for grouping
+            normalized_key = sign_no.lower()
+            quantity = item.get('quantity', 1)
+            
+            if normalized_key not in sign_groups:
+                sign_groups[normalized_key] = {
+                    'sign_no': sign_no,  # Keep original case
+                    'floor_counts': {}
+                }
+            
+            # Add count for this floor
+            if floor_name in sign_groups[normalized_key]['floor_counts']:
+                sign_groups[normalized_key]['floor_counts'][floor_name] += quantity
+            else:
+                sign_groups[normalized_key]['floor_counts'][floor_name] = quantity
+    
+    # Sort by sign_no and create rows with auto-increment
+    sorted_signs = sorted(sign_groups.values(), key=lambda x: x['sign_no'].lower())
+    
+    rows = []
+    for idx, sign_data in enumerate(sorted_signs, start=1):
+        rows.append(create_sign_row(
+            row_number=idx,
+            sign_no=sign_data['sign_no'],
+            floor_counts=sign_data['floor_counts'],
+            sign='',
+            english='',
+            chinese=''
+        ))
+    
+    return rows, floorplan_columns
+
+
+@export_bp.route('/sign-table/<project_id>', methods=['GET'])
+@jwt_required()
+def get_sign_table(project_id):
+    """Get or generate sign table data for a project.
+    
+    The sign table aggregates OCR data by unique sign number and shows
+    counts per floorplan. User-editable fields (sign, english, chinese)
+    are preserved across regenerations.
+    """
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Check if sign table already exists
+    existing_table = mongo.db.project_sign_data.find_one({
+        'project_id': ObjectId(project_id)
+    })
+    
+    # Generate fresh data from OCR
+    generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+    
+    if existing_table:
+        # Merge user-edited fields from existing table
+        existing_rows_map = {row['sign_no'].lower(): row for row in existing_table.get('rows', [])}
+        
+        merged_rows = []
+        for gen_row in generated_rows:
+            key = gen_row['sign_no'].lower()
+            if key in existing_rows_map:
+                # Preserve user-edited fields
+                existing = existing_rows_map[key]
+                gen_row['sign'] = existing.get('sign', '')
+                gen_row['english'] = existing.get('english', '')
+                gen_row['chinese'] = existing.get('chinese', '')
+            merged_rows.append(gen_row)
+        
+        # Update existing document
+        mongo.db.project_sign_data.update_one(
+            {'_id': existing_table['_id']},
+            {'$set': {
+                'rows': merged_rows,
+                'floorplan_columns': floorplan_columns,
+                'updated_at': datetime.utcnow()
+            }}
+        )
+        
+        sign_table = mongo.db.project_sign_data.find_one({'_id': existing_table['_id']})
+    else:
+        # Create new sign table
+        sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
+        result = mongo.db.project_sign_data.insert_one(sign_table_doc)
+        sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
+    
+    return jsonify({
+        'sign_table': sign_table_to_dict(sign_table),
+        'project': serialize_doc(project)
+    }), 200
+
+
+@export_bp.route('/sign-table/<project_id>', methods=['PUT'])
+@jwt_required()
+def update_sign_table(project_id):
+    """Update a cell in the sign table.
+    
+    Request body:
+        {
+            "row_number": 1,
+            "field": "sign" | "english" | "chinese",
+            "value": "new value"
+        }
+    
+    When the english field is updated, chinese is auto-filled from dictionary.
+    """
+    user_id = get_jwt_identity()
+    
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except:
+        return jsonify({'error': 'Invalid project ID'}), 400
+    
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    
+    # Get request data
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+    
+    row_number = data.get('row_number')
+    field = data.get('field')
+    value = data.get('value', '')
+    
+    if row_number is None:
+        return jsonify({'error': 'row_number is required'}), 400
+    
+    if field not in ['sign', 'english', 'chinese']:
+        return jsonify({'error': 'field must be one of: sign, english, chinese'}), 400
+    
+    # Get existing sign table
+    sign_table = mongo.db.project_sign_data.find_one({
+        'project_id': ObjectId(project_id)
+    })
+    
+    if not sign_table:
+        return jsonify({'error': 'Sign table not found. Generate it first.'}), 404
+    
+    # Find and update the row
+    rows = sign_table.get('rows', [])
+    updated = False
+    chinese_auto_filled = None
+    
+    for row in rows:
+        if row['row_number'] == row_number:
+            row[field] = value
+            updated = True
+            
+            # Auto-fill Chinese when English is updated
+            if field == 'english' and value:
+                chinese_translation = lookup_chinese(value)
+                if chinese_translation:
+                    row['chinese'] = chinese_translation
+                    chinese_auto_filled = chinese_translation
+            
+            break
+    
+    if not updated:
+        return jsonify({'error': f'Row {row_number} not found'}), 404
+    
+    # Save updated table
+    mongo.db.project_sign_data.update_one(
+        {'_id': sign_table['_id']},
+        {'$set': {
+            'rows': rows,
+            'updated_at': datetime.utcnow()
+        }}
+    )
+    
+    response = {
+        'message': 'Cell updated',
+        'row_number': row_number,
+        'field': field,
+        'value': value
+    }
+    
+    if chinese_auto_filled:
+        response['chinese_auto_filled'] = chinese_auto_filled
+    
+    return jsonify(response), 200

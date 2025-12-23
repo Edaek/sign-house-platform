@@ -6,85 +6,46 @@ import {
   Download,
   FileSpreadsheet,
   FileText,
-  CheckCircle,
   AlertTriangle,
   Table,
   Loader2,
   RefreshCw,
   ChevronDown,
-  ChevronUp,
-  Info,
-  Book,
-  Settings
+  Search,
+  X
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
-import api, { 
-  getTemplateMapping, 
-  getTemplateData, 
-  updateTemplateCell,
-  TemplateData,
-  TemplateDataResponse,
-  TemplateRow
+import { 
+  getSignTableData,
+  updateSignTableCell,
+  searchDictionary,
+  SignTable,
+  SignRow,
+  DictionarySearchResult
 } from '../lib/api'
+import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
-interface ExportPreview {
-  project: {
-    id: string
-    name: string
-    status: string
-  }
-  columns: { name: string; column: number; letter: string }[]
-  data: {
-    floor_number: number
-    floor_name: string
-    shape_index: number
-    text: string
-    quantity: number
-    merged_count?: number
-    confidence: number
-    is_manual: boolean
-  }[]
-  total_items: number
-  summary?: {
-    text: string
-    total_quantity: number
-    floor_count: number
-    floors: number[]
-    floor_details: {
-      floor_number: number
-      floor_name: string
-      quantity: number
-    }[]
-  }[]
-  summary_stats?: {
-    unique_items: number
-    total_floors: number
-  }
-}
-
-// Regular Editable cell component
+// Editable cell component for Sign column
 function EditableCell({ 
   value, 
-  row, 
-  col, 
-  isOcrCell, 
+  rowNumber, 
+  field,
   onSave 
 }: { 
-  value: string | number
-  row: number
-  col: number
-  isOcrCell: boolean
-  onSave: (row: number, col: number, value: string | number) => Promise<void>
+  value: string
+  rowNumber: number
+  field: 'sign'
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
 }) {
   const [isEditing, setIsEditing] = useState(false)
-  const [editValue, setEditValue] = useState(String(value))
+  const [editValue, setEditValue] = useState(value)
   const [isSaving, setIsSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    setEditValue(String(value))
+    setEditValue(value)
   }, [value])
 
   useEffect(() => {
@@ -95,18 +56,18 @@ function EditableCell({
   }, [isEditing])
 
   const handleSave = async () => {
-    if (editValue === String(value)) {
+    if (editValue === value) {
       setIsEditing(false)
       return
     }
 
     setIsSaving(true)
     try {
-      await onSave(row, col, editValue)
+      await onSave(rowNumber, field, editValue)
       setIsEditing(false)
     } catch {
       toast.error('Failed to save')
-      setEditValue(String(value))
+      setEditValue(value)
     }
     setIsSaving(false)
   }
@@ -115,7 +76,7 @@ function EditableCell({
     if (e.key === 'Enter') {
       handleSave()
     } else if (e.key === 'Escape') {
-      setEditValue(String(value))
+      setEditValue(value)
       setIsEditing(false)
     }
   }
@@ -143,81 +104,255 @@ function EditableCell({
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className={clsx(
-        'px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm',
-        isOcrCell 
-          ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 font-semibold text-emerald-300' 
-          : 'hover:bg-slate-700/50'
-      )}
-      title={isOcrCell ? 'OCR populated - Click to edit' : 'Click to edit'}
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-slate-700/50"
+      title="Click to edit"
     >
       {value !== '' ? value : <span className="text-slate-500">—</span>}
     </div>
   )
 }
 
-// Dictionary-aware cell component - shows dropdown when partner column has value
-function DictionaryCell({ 
+// English cell with instant search autocomplete
+function EnglishAutocompleteCell({ 
   value, 
-  row, 
-  col, 
-  isOcrCell, 
+  rowNumber,
   onSave,
-  partnerValue,
-  lookupDirection
+  onChineseUpdate,
+  onChineseOptions
 }: { 
-  value: string | number
-  row: number
-  col: number
-  isOcrCell: boolean
-  onSave: (row: number, col: number, value: string | number) => Promise<void>
-  partnerValue: string  // Value from the partner column (English or Chinese)
-  lookupDirection: 'en_to_cn' | 'cn_to_en'  // Which direction to look up
+  value: string
+  rowNumber: number
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+  onChineseUpdate: (rowNumber: number, chinese: string) => void
+  onChineseOptions: (rowNumber: number, options: string[]) => void
 }) {
   const [isEditing, setIsEditing] = useState(false)
-  const [editValue, setEditValue] = useState(String(value))
+  const [editValue, setEditValue] = useState(value)
   const [isSaving, setIsSaving] = useState(false)
-  const [suggestions, setSuggestions] = useState<string[]>([])
-  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
+  const [isSearching, setIsSearching] = useState(false)
+  const [suggestions, setSuggestions] = useState<DictionarySearchResult[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(-1)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
+  useEffect(() => {
+    setEditValue(value)
+  }, [value])
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [isEditing])
+
+  // Search dictionary with debounce
+  const searchWithDebounce = useCallback((query: string) => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current)
+    }
+
+    if (!query.trim()) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+
+    searchTimeoutRef.current = setTimeout(async () => {
+      setIsSearching(true)
+      try {
+        const response = await searchDictionary(query, 8)
+        setSuggestions(response.results)
+        setShowSuggestions(response.results.length > 0)
+        setSelectedIndex(-1)
+      } catch {
+        setSuggestions([])
+      }
+      setIsSearching(false)
+    }, 300)
+  }, [])
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newValue = e.target.value
+    setEditValue(newValue)
+    searchWithDebounce(newValue)
+  }
+
+  const handleSelectSuggestion = async (suggestion: DictionarySearchResult) => {
+    setEditValue(suggestion.english)
+    setShowSuggestions(false)
+    setSuggestions([])
+    
+    setIsSaving(true)
+    try {
+      // Save the English value
+      await onSave(rowNumber, 'english', suggestion.english)
+      
+      // Auto-fill and save Chinese from the suggestion
+      if (suggestion.chinese && suggestion.chinese.length > 0) {
+        if (suggestion.chinese.length === 1) {
+          // Only one translation - auto-fill it
+          const chineseValue = suggestion.chinese[0]
+          await onSave(rowNumber, 'chinese', chineseValue)
+          onChineseUpdate(rowNumber, chineseValue)
+        } else {
+          // Multiple translations - pass them to parent for selection
+          onChineseOptions(rowNumber, suggestion.chinese)
+        }
+      }
+      setIsEditing(false)
+    } catch {
+      toast.error('Failed to save')
+    }
+    setIsSaving(false)
+  }
+
+  const handleSave = async () => {
+    setShowSuggestions(false)
+    if (editValue === value) {
+      setIsEditing(false)
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      await onSave(rowNumber, 'english', editValue)
+      setIsEditing(false)
+    } catch {
+      toast.error('Failed to save')
+      setEditValue(value)
+    }
+    setIsSaving(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (showSuggestions && suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSelectedIndex(prev => Math.min(prev + 1, suggestions.length - 1))
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSelectedIndex(prev => Math.max(prev - 1, -1))
+      } else if (e.key === 'Enter' && selectedIndex >= 0) {
+        e.preventDefault()
+        handleSelectSuggestion(suggestions[selectedIndex])
+      } else if (e.key === 'Escape') {
+        setShowSuggestions(false)
+        setSelectedIndex(-1)
+      }
+    } else {
+      if (e.key === 'Enter') {
+        handleSave()
+      } else if (e.key === 'Escape') {
+        setEditValue(value)
+        setIsEditing(false)
+      }
+    }
+  }
+
+  const handleBlur = (e: React.FocusEvent) => {
+    // Don't close if clicking on dropdown
+    if (dropdownRef.current?.contains(e.relatedTarget as Node)) {
+      return
+    }
+    
+    setTimeout(() => {
+      setShowSuggestions(false)
+      if (!isSaving && editValue !== value) {
+        handleSave()
+      } else if (!isSaving) {
+        setIsEditing(false)
+      }
+    }, 150)
+  }
+
+  if (isEditing) {
+    return (
+      <div className="relative">
+        <div className="relative">
+          <input
+            ref={inputRef}
+            type="text"
+            value={editValue}
+            onChange={handleInputChange}
+            onBlur={handleBlur}
+            onKeyDown={handleKeyDown}
+            disabled={isSaving}
+            placeholder="Type to search..."
+            className="w-full px-2 py-1 pr-8 text-sm bg-white dark:bg-slate-700 border-2 border-blue-500 rounded focus:outline-none"
+          />
+          {isSearching ? (
+            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-blue-500" />
+          ) : (
+            <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-blue-400" />
+          )}
+        </div>
+        
+        {/* Suggestions dropdown */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div 
+            ref={dropdownRef}
+            className="absolute z-50 w-full mt-1 bg-slate-800 border border-slate-600 rounded-lg shadow-xl max-h-48 overflow-auto"
+          >
+            {suggestions.map((suggestion, idx) => (
+              <div
+                key={suggestion.english}
+                onClick={() => handleSelectSuggestion(suggestion)}
+                className={clsx(
+                  'px-3 py-2 cursor-pointer text-sm border-b border-slate-700 last:border-0',
+                  idx === selectedIndex ? 'bg-blue-600/30' : 'hover:bg-slate-700'
+                )}
+              >
+                <div className="font-medium text-white">{suggestion.english}</div>
+                {suggestion.chinese.length > 0 && (
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    {suggestion.chinese.join(', ')}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      onClick={() => setIsEditing(true)}
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-blue-500/10 border border-transparent hover:border-blue-500/30"
+      title="Click to edit with dictionary search"
+    >
+      {value !== '' ? (
+        <span className="text-blue-300">{value}</span>
+      ) : (
+        <span className="text-slate-500 flex items-center gap-1">
+          <Search className="w-3 h-3" />
+          Search...
+        </span>
+      )}
+    </div>
+  )
+}
+
+// Editable Chinese cell
+function ChineseEditableCell({ 
+  value, 
+  rowNumber,
+  onSave 
+}: { 
+  value: string
+  rowNumber: number
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(value)
+  const [isSaving, setIsSaving] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Check if we should show dictionary suggestions
-  const isEmpty = !value || String(value).trim() === ''
-  const hasPartner = partnerValue && partnerValue.trim() !== ''
-  const shouldShowSuggestions = isEmpty && hasPartner
-
-  // Fetch dictionary suggestions when partner value changes
   useEffect(() => {
-    if (shouldShowSuggestions && partnerValue) {
-      setIsLoadingSuggestions(true)
-      const param = lookupDirection === 'en_to_cn' ? 'english' : 'chinese'
-      api.get(`/dictionary/lookup?${param}=${encodeURIComponent(partnerValue)}`)
-        .then(res => {
-          if (res.data.found) {
-            if (lookupDirection === 'en_to_cn') {
-              // Looking up Chinese for English word
-              setSuggestions(res.data.chinese || [])
-            } else {
-              // Looking up English for Chinese word - might have multiple matches
-              if (res.data.matches) {
-                setSuggestions(res.data.matches.map((m: { english: string }) => m.english))
-              } else {
-                setSuggestions([res.data.primary])
-              }
-            }
-          } else {
-            setSuggestions([])
-          }
-        })
-        .catch(() => setSuggestions([]))
-        .finally(() => setIsLoadingSuggestions(false))
-    } else {
-      setSuggestions([])
-    }
-  }, [partnerValue, lookupDirection, shouldShowSuggestions])
-
-  useEffect(() => {
-    setEditValue(String(value))
+    setEditValue(value)
   }, [value])
 
   useEffect(() => {
@@ -227,21 +362,19 @@ function DictionaryCell({
     }
   }, [isEditing])
 
-  const handleSave = async (newValue?: string) => {
-    const saveValue = newValue ?? editValue
-    if (saveValue === String(value)) {
+  const handleSave = async () => {
+    if (editValue === value) {
       setIsEditing(false)
       return
     }
 
     setIsSaving(true)
     try {
-      await onSave(row, col, saveValue)
-      setEditValue(saveValue)
+      await onSave(rowNumber, 'chinese', editValue)
       setIsEditing(false)
     } catch {
       toast.error('Failed to save')
-      setEditValue(String(value))
+      setEditValue(value)
     }
     setIsSaving(false)
   }
@@ -250,53 +383,11 @@ function DictionaryCell({
     if (e.key === 'Enter') {
       handleSave()
     } else if (e.key === 'Escape') {
-      setEditValue(String(value))
+      setEditValue(value)
       setIsEditing(false)
     }
   }
 
-  const handleSelectSuggestion = async (suggestion: string) => {
-    await handleSave(suggestion)
-  }
-
-  // Show dropdown with suggestions when cell is empty but has dictionary matches
-  if (shouldShowSuggestions && suggestions.length > 0) {
-    return (
-      <div className="relative">
-        <select
-          value=""
-          onChange={(e) => handleSelectSuggestion(e.target.value)}
-          disabled={isSaving}
-          className="w-full px-2 py-1.5 text-sm bg-amber-500/10 border border-amber-500/40 rounded text-amber-300 cursor-pointer hover:bg-amber-500/20 appearance-none"
-        >
-          <option value="" disabled>
-            {suggestions.length === 1 ? suggestions[0] : `Select (${suggestions.length} options)`}
-          </option>
-          {suggestions.map((s, idx) => (
-            <option key={idx} value={s} className="bg-slate-800 text-white">
-              {s}
-            </option>
-          ))}
-        </select>
-        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-amber-400 pointer-events-none" />
-        {isSaving && (
-          <Loader2 className="absolute right-6 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-amber-500" />
-        )}
-      </div>
-    )
-  }
-
-  // Show loading state while fetching suggestions
-  if (shouldShowSuggestions && isLoadingSuggestions) {
-    return (
-      <div className="px-2 py-1.5 min-h-[32px] text-sm flex items-center gap-2 text-slate-400">
-        <Loader2 className="w-3 h-3 animate-spin" />
-        <span className="text-xs">Looking up...</span>
-      </div>
-    )
-  }
-
-  // Editing mode
   if (isEditing) {
     return (
       <div className="relative">
@@ -305,116 +396,228 @@ function DictionaryCell({
           type="text"
           value={editValue}
           onChange={(e) => setEditValue(e.target.value)}
-          onBlur={() => handleSave()}
+          onBlur={handleSave}
           onKeyDown={handleKeyDown}
           disabled={isSaving}
-          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-sign-500 rounded focus:outline-none"
+          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-purple-500 rounded focus:outline-none"
         />
         {isSaving && (
-          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-500" />
+          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
         )}
       </div>
     )
   }
 
-  // Default display mode
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className={clsx(
-        'px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm',
-        isOcrCell 
-          ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 font-semibold text-emerald-300' 
-          : 'hover:bg-slate-700/50'
-      )}
-      title={isOcrCell ? 'OCR populated - Click to edit' : 'Click to edit'}
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-purple-500/10 border border-transparent hover:border-purple-500/30"
+      title="Click to edit"
     >
-      {value !== '' ? value : <span className="text-slate-500">—</span>}
+      {value !== '' ? (
+        <span className="text-purple-300">{value}</span>
+      ) : (
+        <span className="text-slate-500">—</span>
+      )}
     </div>
   )
 }
 
-// Template Preview Component - Full Width
-function TemplatePreview({ 
-  projectId, 
-  hasTemplate,
-  floorMapping,
-  englishColIdx,
-  chineseColIdx
+// Chinese selection dropdown when multiple translations available
+function ChineseSelectCell({
+  value,
+  options,
+  rowNumber,
+  onSave
+}: {
+  value: string
+  options: string[]
+  rowNumber: number
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<void>
+}) {
+  const [isSaving, setIsSaving] = useState(false)
+
+  const handleSelect = async (selected: string) => {
+    if (selected === value) return // No change
+    
+    setIsSaving(true)
+    try {
+      await onSave(rowNumber, 'chinese', selected)
+    } catch {
+      toast.error('Failed to save')
+    }
+    setIsSaving(false)
+  }
+
+  return (
+    <div className="relative">
+      <select
+        value={value || ''}
+        onChange={(e) => handleSelect(e.target.value)}
+        disabled={isSaving}
+        className="w-full px-2 py-1.5 text-sm bg-purple-900/20 border border-purple-500/40 rounded text-purple-200 cursor-pointer appearance-none focus:outline-none hover:bg-purple-900/30"
+      >
+        {!value && <option value="" disabled>Select translation...</option>}
+        {options.map((opt, idx) => (
+          <option key={idx} value={opt} className="bg-slate-800 text-white">
+            {opt}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 pointer-events-none" />
+      {isSaving && (
+        <Loader2 className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+      )}
+    </div>
+  )
+}
+
+// Sign Table Preview Component
+function SignTablePreview({ 
+  projectId 
 }: { 
   projectId: string
-  hasTemplate: boolean
-  floorMapping: Record<string, string>
-  englishColIdx: number | null
-  chineseColIdx: number | null
 }) {
-  const [templateData, setTemplateData] = useState<TemplateData | null>(null)
+  const [signTable, setSignTable] = useState<SignTable | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [ocrCellSet, setOcrCellSet] = useState<Set<string>>(new Set())
+  // Track rows with available Chinese translations (for dropdown)
+  const [chineseOptions, setChineseOptions] = useState<Record<number, string[]>>({})
+  // Track which rows we've already fetched options for
+  const [fetchedRows, setFetchedRows] = useState<Set<number>>(new Set())
 
-  const fetchTemplateData = useCallback(async () => {
-    if (!hasTemplate) return
-
+  const fetchSignTableData = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     
     try {
-      const response: TemplateDataResponse = await getTemplateData(projectId)
-      setTemplateData(response.data)
-      
-      // Build OCR cell set for quick lookup
-      const cellSet = new Set<string>()
-      response.data.ocr_cells?.forEach(cell => {
-        cellSet.add(`${cell.row}-${cell.col}`)
-      })
-      setOcrCellSet(cellSet)
+      const response = await getSignTableData(projectId)
+      setSignTable(response.sign_table)
+      // Reset fetched rows when table is reloaded
+      setFetchedRows(new Set())
+      setChineseOptions({})
     } catch (err) {
-      console.error('Failed to fetch template data:', err)
-      setError('Failed to load template data')
+      console.error('Failed to fetch sign table data:', err)
+      setError('Failed to load sign table data')
     }
     setIsLoading(false)
-  }, [projectId, hasTemplate])
+  }, [projectId])
 
   useEffect(() => {
-    fetchTemplateData()
-  }, [fetchTemplateData, floorMapping])
+    fetchSignTableData()
+  }, [fetchSignTableData])
 
-  const handleCellSave = async (row: number, col: number, value: string | number) => {
-    await updateTemplateCell(projectId, row, col, value)
-    
-    // Update local state
-    if (templateData) {
-      const newRows = templateData.rows.map(r => {
-        if (r.row === row) {
-          return {
-            ...r,
-            cells: r.cells.map(c => {
-              if (c.col === col) {
-                return { ...c, value }
-              }
-              return c
-            })
+  // Fetch Chinese translations for rows that have English values
+  useEffect(() => {
+    if (!signTable) return
+
+    const fetchChineseOptions = async () => {
+      const newOptions: Record<number, string[]> = { ...chineseOptions }
+      const newFetched = new Set(fetchedRows)
+      
+      for (const row of signTable.rows) {
+        // Skip if already fetched or no English value
+        if (fetchedRows.has(row.row_number) || !row.english) continue
+        
+        try {
+          // Look up all Chinese translations for this English word
+          const response = await api.get(`/dictionary/lookup?english=${encodeURIComponent(row.english)}`)
+          if (response.data.found && response.data.chinese && response.data.chinese.length > 1) {
+            newOptions[row.row_number] = response.data.chinese
           }
+          newFetched.add(row.row_number)
+        } catch {
+          // Ignore lookup errors
+          newFetched.add(row.row_number)
         }
-        return r
+      }
+      
+      if (newFetched.size > fetchedRows.size) {
+        setFetchedRows(newFetched)
+        setChineseOptions(newOptions)
+      }
+    }
+
+    fetchChineseOptions()
+  }, [signTable?.rows])
+
+  const handleCellSave = async (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => {
+    const result = await updateSignTableCell(projectId, rowNumber, field, value)
+    
+    // Update local state using functional update to avoid stale closure
+    setSignTable(prev => {
+      if (!prev) return prev
+      const newRows = prev.rows.map(row => {
+        if (row.row_number === rowNumber) {
+          const updated = { ...row, [field]: value }
+          // If Chinese was auto-filled, update it too
+          if (result.chinese_auto_filled) {
+            updated.chinese = result.chinese_auto_filled
+          }
+          return updated
+        }
+        return row
       })
-      setTemplateData({ ...templateData, rows: newRows })
+      return { ...prev, rows: newRows }
+    })
+
+    // If English was updated, refetch Chinese options
+    if (field === 'english') {
+      refetchChineseOptions(rowNumber, value)
     }
   }
 
-  const isOcrCell = (row: number, col: number) => {
-    return ocrCellSet.has(`${row}-${col}`)
+  const handleChineseUpdate = (rowNumber: number, chinese: string) => {
+    // Update Chinese in local state when auto-filled from English selection
+    setSignTable(prev => {
+      if (!prev) return prev
+      const newRows = prev.rows.map(row => {
+        if (row.row_number === rowNumber) {
+          return { ...row, chinese }
+        }
+        return row
+      })
+      return { ...prev, rows: newRows }
+    })
   }
 
-  // Helper to get cell value by column index for a row
-  const getCellValue = (rowData: TemplateRow, colIdx: number): string => {
-    const cell = rowData.cells.find(c => c.col === colIdx)
-    return cell ? String(cell.value || '') : ''
+  const handleChineseOptions = (rowNumber: number, options: string[]) => {
+    // Store options for this row to show selection dropdown
+    setChineseOptions(prev => ({ ...prev, [rowNumber]: options }))
+    // Mark as fetched
+    setFetchedRows(prev => new Set([...prev, rowNumber]))
   }
 
-  if (!hasTemplate) {
-    return null
+  const clearChineseOptions = (rowNumber: number) => {
+    // Don't clear - keep showing dropdown for multiple options
+    // This function is now a no-op but kept for interface compatibility
+  }
+
+  // Refetch options when English value changes
+  const refetchChineseOptions = async (rowNumber: number, english: string) => {
+    if (!english) {
+      setChineseOptions(prev => {
+        const updated = { ...prev }
+        delete updated[rowNumber]
+        return updated
+      })
+      return
+    }
+
+    try {
+      const response = await api.get(`/dictionary/lookup?english=${encodeURIComponent(english)}`)
+      if (response.data.found && response.data.chinese && response.data.chinese.length > 1) {
+        setChineseOptions(prev => ({ ...prev, [rowNumber]: response.data.chinese }))
+      } else {
+        setChineseOptions(prev => {
+          const updated = { ...prev }
+          delete updated[rowNumber]
+          return updated
+        })
+      }
+    } catch {
+      // Ignore errors
+    }
   }
 
   if (isLoading) {
@@ -422,7 +625,7 @@ function TemplatePreview({
       <div className="flex items-center justify-center py-32">
         <div className="flex items-center gap-3 text-slate-500">
           <Loader2 className="w-6 h-6 animate-spin" />
-          <span>Loading template...</span>
+          <span>Loading sign table...</span>
         </div>
       </div>
     )
@@ -433,7 +636,7 @@ function TemplatePreview({
       <div className="flex flex-col items-center justify-center py-20 gap-4">
         <p className="text-red-400">{error}</p>
         <button
-          onClick={fetchTemplateData}
+          onClick={fetchSignTableData}
           className="flex items-center gap-2 text-sm text-sign-400 hover:text-sign-300"
         >
           <RefreshCw className="w-4 h-4" />
@@ -443,97 +646,117 @@ function TemplatePreview({
     )
   }
 
-  if (!templateData || templateData.rows.length === 0) {
+  if (!signTable || signTable.rows.length === 0) {
     return (
       <div className="px-4 py-20 text-center text-slate-500">
-        No data in template yet.
+        <Table className="w-12 h-12 mx-auto mb-4 opacity-50" />
+        <p>No sign data yet. Process floor plans to generate the sign table.</p>
       </div>
     )
   }
 
+  // Fixed columns + dynamic floorplan columns
+  const fixedColumns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
+  const floorColumns = signTable.floorplan_columns
+
   return (
-    <div className="overflow-auto" style={{ height: 'calc(100vh - 320px)', minHeight: '400px' }}>
+    <div className="overflow-auto" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
       <table className="w-full border-collapse text-sm">
         <thead className="bg-slate-800 sticky top-0 z-10">
           <tr>
-            <th className="px-2 py-2 text-left text-xs font-medium text-slate-400 border-r border-slate-700 bg-slate-800 sticky left-0 z-20 w-12">
+            {/* Fixed columns */}
+            <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 border-b border-slate-700 w-12">
               #
             </th>
-            {templateData.columns.map((col) => (
+            <th className="px-3 py-2 text-left text-xs font-medium text-slate-300 border-b border-slate-700 min-w-[100px]">
+              Sign No.
+            </th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-slate-300 border-b border-slate-700 min-w-[120px]">
+              Sign
+            </th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-blue-300 border-b border-slate-700 min-w-[150px] bg-blue-900/20">
+              English
+            </th>
+            <th className="px-3 py-2 text-left text-xs font-medium text-purple-300 border-b border-slate-700 min-w-[120px] bg-purple-900/20">
+              Chinese
+            </th>
+            
+            {/* Dynamic floorplan columns */}
+            {floorColumns.map((floorName) => (
               <th 
-                key={col.column}
-                className={clsx(
-                  "px-3 py-2 text-left text-xs font-medium border-b border-slate-700 whitespace-nowrap min-w-[100px]",
-                  col.column === englishColIdx ? "bg-blue-900/30 text-blue-300" :
-                  col.column === chineseColIdx ? "bg-purple-900/30 text-purple-300" :
-                  "text-slate-300"
-                )}
+                key={floorName}
+                className="px-3 py-2 text-center text-xs font-medium text-emerald-300 border-b border-slate-700 min-w-[80px] bg-emerald-900/10"
               >
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-slate-500 text-[10px]">{col.letter}</span>
-                  <span className="truncate flex items-center gap-1">
-                    {col.name || '—'}
-                    {col.column === englishColIdx && <span className="text-[9px] px-1 bg-blue-500/30 rounded">EN</span>}
-                    {col.column === chineseColIdx && <span className="text-[9px] px-1 bg-purple-500/30 rounded">中</span>}
-                  </span>
-                </div>
+                {floorName}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {templateData.rows.map((row) => (
-            <tr key={row.row} className="border-b border-slate-800 hover:bg-slate-800/50">
-              <td className="px-2 py-1 text-xs text-slate-500 border-r border-slate-700 bg-slate-900/50 sticky left-0 font-mono">
-                {row.row}
+          {signTable.rows.map((row) => (
+            <tr key={row.row_number} className="border-b border-slate-800 hover:bg-slate-800/50">
+              {/* Row number */}
+              <td className="px-3 py-1 text-xs text-slate-500 font-mono">
+                {row.row_number}
               </td>
-              {row.cells.map((cell) => {
-                // Check if this cell should use dictionary lookup
-                const isEnglishCol = cell.col === englishColIdx
-                const isChineseCol = cell.col === chineseColIdx
-                const isDictionaryColumn = isEnglishCol || isChineseCol
-                
-                // Get partner value for dictionary lookup
-                let partnerValue = ''
-                let lookupDirection: 'en_to_cn' | 'cn_to_en' = 'en_to_cn'
-                
-                if (isEnglishCol && chineseColIdx !== null) {
-                  // This is English column, look up from Chinese
-                  partnerValue = getCellValue(row, chineseColIdx)
-                  lookupDirection = 'cn_to_en'
-                } else if (isChineseCol && englishColIdx !== null) {
-                  // This is Chinese column, look up from English
-                  partnerValue = getCellValue(row, englishColIdx)
-                  lookupDirection = 'en_to_cn'
-                }
-
+              
+              {/* Sign No. (extracted, read-only) */}
+              <td className="px-3 py-1 text-white font-mono bg-slate-800/30">
+                {row.sign_no}
+              </td>
+              
+              {/* Sign (editable) */}
+              <td className="px-1 py-0.5">
+                <EditableCell
+                  value={row.sign}
+                  rowNumber={row.row_number}
+                  field="sign"
+                  onSave={handleCellSave}
+                />
+              </td>
+              
+              {/* English (editable with autocomplete) */}
+              <td className="px-1 py-0.5 bg-blue-900/5">
+                <EnglishAutocompleteCell
+                  value={row.english}
+                  rowNumber={row.row_number}
+                  onSave={handleCellSave}
+                  onChineseUpdate={handleChineseUpdate}
+                  onChineseOptions={handleChineseOptions}
+                />
+              </td>
+              
+              {/* Chinese (editable, with dropdown for multiple options) */}
+              <td className="px-1 py-0.5 bg-purple-900/5">
+                {chineseOptions[row.row_number] && chineseOptions[row.row_number].length > 1 ? (
+                  // Show dropdown when multiple translations available
+                  <ChineseSelectCell
+                    value={row.chinese}
+                    options={chineseOptions[row.row_number]}
+                    rowNumber={row.row_number}
+                    onSave={handleCellSave}
+                  />
+                ) : (
+                  <ChineseEditableCell
+                    value={row.chinese}
+                    rowNumber={row.row_number}
+                    onSave={handleCellSave}
+                  />
+                )}
+              </td>
+              
+              {/* Floor count columns */}
+              {floorColumns.map((floorName) => {
+                const count = row.floor_counts[floorName] || 0
                 return (
                   <td 
-                    key={`${row.row}-${cell.col}`}
-                    className={clsx(
-                      "px-1 py-0.5 text-slate-200",
-                      isEnglishCol && "bg-blue-900/10",
-                      isChineseCol && "bg-purple-900/10"
-                    )}
+                    key={`${row.row_number}-${floorName}`}
+                    className="px-3 py-1.5 text-center bg-emerald-900/5"
                   >
-                    {isDictionaryColumn && englishColIdx !== null && chineseColIdx !== null ? (
-                      <DictionaryCell
-                        value={cell.value}
-                        row={row.row}
-                        col={cell.col}
-                        isOcrCell={isOcrCell(row.row, cell.col)}
-                        onSave={handleCellSave}
-                        partnerValue={partnerValue}
-                        lookupDirection={lookupDirection}
-                      />
+                    {count > 0 ? (
+                      <span className="text-emerald-400 font-medium">{count}</span>
                     ) : (
-                      <EditableCell
-                        value={cell.value}
-                        row={row.row}
-                        col={cell.col}
-                        isOcrCell={isOcrCell(row.row, cell.col)}
-                        onSave={handleCellSave}
-                      />
+                      <span className="text-slate-600">—</span>
                     )}
                   </td>
                 )
@@ -546,158 +769,18 @@ function TemplatePreview({
   )
 }
 
-// OCR Data Preview Component (fallback when no template)
-function OcrDataPreview({ preview }: { preview: ExportPreview | null }) {
-  if (!preview?.data || preview.data.length === 0) {
-    return (
-      <div className="px-4 py-20 text-center text-slate-500">
-        No data to export. Process floor plans first.
-      </div>
-    )
-  }
-
-  return (
-    <div className="overflow-auto" style={{ height: 'calc(100vh - 280px)', minHeight: '500px' }}>
-      <table className="w-full">
-        <thead className="bg-slate-800 sticky top-0">
-          <tr>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Floor</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">#</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Extracted Text</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Qty</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Confidence</th>
-            <th className="px-4 py-3 text-left text-sm font-medium text-slate-300">Source</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-700/50">
-          {preview.data.map((item, index) => (
-            <tr key={index} className="hover:bg-slate-800/30">
-              <td className="px-4 py-3 text-sm text-slate-300">
-                {item.floor_name}
-              </td>
-              <td className="px-4 py-3 text-sm text-slate-400 font-mono">
-                {item.shape_index + 1}
-              </td>
-              <td className="px-4 py-3 text-sm text-white font-mono">
-                <div className="flex items-center gap-2">
-                  {item.text || <span className="text-slate-500">—</span>}
-                  {item.merged_count && item.merged_count > 1 && (
-                    <span 
-                      className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-semibold"
-                      title={`${item.merged_count} detections merged`}
-                    >
-                      {item.merged_count} merged
-                    </span>
-                  )}
-                </div>
-              </td>
-              <td className="px-4 py-3 text-sm">
-                <span className="text-white font-mono">
-                  {item.quantity || 1}
-                </span>
-              </td>
-              <td className="px-4 py-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                    <div 
-                      className={clsx(
-                        'h-full rounded-full',
-                        item.confidence > 80 ? 'bg-emerald-500' :
-                        item.confidence > 50 ? 'bg-amber-500' : 'bg-red-500'
-                      )}
-                      style={{ width: `${item.confidence}%` }}
-                    />
-                  </div>
-                  <span className="text-slate-400 text-xs">{item.confidence}%</span>
-                </div>
-              </td>
-              <td className="px-4 py-3 text-sm">
-                <span className={clsx(
-                  'px-2 py-0.5 rounded text-xs font-medium',
-                  item.is_manual 
-                    ? 'bg-sign-500/20 text-sign-400' 
-                    : 'bg-blue-500/20 text-blue-400'
-                )}>
-                  {item.is_manual ? 'Manual' : 'OCR'}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
 export default function ExportPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const { currentProject, fetchProject } = useProjectStore()
-  const [preview, setPreview] = useState<ExportPreview | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv'>('excel')
-  const [includeMetadata, _setIncludeMetadata] = useState(true)
-  const [floorMapping, setFloorMapping] = useState<Record<string, string>>({})
-  const [showSummary, setShowSummary] = useState(false)
-  
-  // Dictionary column configuration
-  const [showDictConfig, setShowDictConfig] = useState(false)
-  const [englishColIdx, setEnglishColIdx] = useState<number | null>(null)
-  const [chineseColIdx, setChineseColIdx] = useState<number | null>(null)
-  const [templateColumns, setTemplateColumns] = useState<{ name: string; column: number }[]>([])
   
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
-      fetchPreview()
-      loadTemplateMapping()
+      setIsLoading(false)
     }
   }, [projectId])
-  
-  // Load template columns for dictionary config
-  useEffect(() => {
-    if (projectId && currentProject?.template) {
-      getTemplateData(projectId).then(res => {
-        setTemplateColumns(res.data.columns.map(c => ({ name: c.name, column: c.column })))
-        
-        // Auto-detect English/Chinese columns by name
-        res.data.columns.forEach(col => {
-          const name = col.name?.toLowerCase() || ''
-          if (name.includes('english') || name.includes('eng') || name === 'en') {
-            setEnglishColIdx(col.column)
-          }
-          if (name.includes('chinese') || name.includes('中文') || name === 'cn' || name.includes('chn')) {
-            setChineseColIdx(col.column)
-          }
-        })
-      }).catch(() => {})
-    }
-  }, [projectId, currentProject?.template])
-  
-  const loadTemplateMapping = async () => {
-    if (!projectId) return
-    
-    try {
-      const response = await getTemplateMapping(projectId)
-      if (response.floor_mapping) {
-        setFloorMapping(response.floor_mapping)
-      }
-    } catch (error) {
-      console.log('No template mapping found')
-    }
-  }
-  
-  const fetchPreview = async () => {
-    if (!projectId) return
-    
-    setIsLoading(true)
-    try {
-      const response = await api.get(`/export/preview/${projectId}`)
-      setPreview(response.data)
-    } catch (error) {
-      toast.error('Failed to load export preview')
-    }
-    setIsLoading(false)
-  }
   
   const handleExport = async () => {
     if (!projectId) return
@@ -708,7 +791,7 @@ export default function ExportPage() {
         : `/export/csv/${projectId}`
       
       const response = await api.post(endpoint, 
-        { include_metadata: includeMetadata },
+        { include_metadata: true },
         { responseType: 'blob' }
       )
       
@@ -728,10 +811,9 @@ export default function ExportPage() {
   }
   
   const incompleteFoors = currentProject?.floorplans?.filter(fp => fp.status !== 'completed') || []
-  const hasTemplate = !!currentProject?.template
-  const hasDictConfig = englishColIdx !== null && chineseColIdx !== null
+  const totalItems = currentProject?.floorplans?.reduce((sum, fp) => sum + (fp.data_count || 0), 0) || 0
   
-  if (isLoading && !preview) {
+  if (isLoading && !currentProject) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
@@ -765,15 +847,8 @@ export default function ExportPage() {
           <div className="flex items-center gap-3">
             {/* Stats */}
             <div className="hidden md:flex items-center gap-4 text-xs text-slate-400 mr-4">
-              <span>Items: <span className="text-white font-medium">{preview?.total_items || 0}</span></span>
-              <span>Unique: <span className="text-emerald-400 font-medium">{preview?.summary_stats?.unique_items || 0}</span></span>
+              <span>Items: <span className="text-white font-medium">{totalItems}</span></span>
               <span>Floors: <span className="text-white font-medium">{currentProject?.floorplans?.length || 0}</span></span>
-              {hasTemplate && (
-                <span className="flex items-center gap-1 text-emerald-400">
-                  <CheckCircle className="w-3 h-3" />
-                  Template
-                </span>
-              )}
             </div>
             
             {/* Format Toggle */}
@@ -826,89 +901,16 @@ export default function ExportPage() {
         </div>
       )}
       
-      {/* Info bar for auto-matching */}
-      {hasTemplate && (
-        <div className="flex-shrink-0 px-4 py-2 bg-blue-500/10 border-b border-blue-500/30 flex items-center gap-2 text-sm">
-          <Info className="w-4 h-4 text-blue-400" />
-          <span className="text-blue-200">
-            OCR data auto-fills based on floor names matching column headers. 
-            <span className="text-emerald-400 ml-1">Green cells</span> = OCR populated. Click any cell to edit.
-          </span>
-        </div>
-      )}
+      {/* Info bar */}
+      <div className="flex-shrink-0 px-4 py-2 bg-blue-500/10 border-b border-blue-500/30 flex items-center gap-2 text-sm">
+        <Search className="w-4 h-4 text-blue-400" />
+        <span className="text-blue-200">
+          Click on <span className="text-blue-300 font-medium">English</span> cells to search the dictionary. 
+          <span className="text-purple-300 ml-1">Chinese</span> auto-fills from matches.
+        </span>
+      </div>
       
-      {/* Dictionary Column Config */}
-      {hasTemplate && (
-        <div className="flex-shrink-0 px-4 py-2 bg-slate-800/50 border-b border-slate-700 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Book className="w-4 h-4 text-amber-400" />
-            <span className="text-sm text-white font-medium">Dictionary Auto-Fill</span>
-            {hasDictConfig ? (
-              <span className="text-xs text-emerald-400 flex items-center gap-1">
-                <CheckCircle className="w-3 h-3" />
-                Active
-              </span>
-            ) : (
-              <span className="text-xs text-slate-400">Configure columns to enable</span>
-            )}
-          </div>
-          
-          <button
-            onClick={() => setShowDictConfig(!showDictConfig)}
-            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
-          >
-            <Settings className="w-4 h-4" />
-            {showDictConfig ? 'Hide' : 'Configure'}
-          </button>
-        </div>
-      )}
-      
-      {/* Dictionary Config Panel */}
-      {hasTemplate && showDictConfig && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="flex-shrink-0 px-4 py-3 bg-slate-900/70 border-b border-slate-700"
-        >
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-blue-300">English Column:</label>
-              <select
-                value={englishColIdx ?? ''}
-                onChange={(e) => setEnglishColIdx(e.target.value ? Number(e.target.value) : null)}
-                className="px-2 py-1 text-sm bg-blue-900/30 border border-blue-500/40 rounded text-blue-200"
-              >
-                <option value="">Not set</option>
-                {templateColumns.filter(c => c.name).map(c => (
-                  <option key={c.column} value={c.column}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-purple-300">Chinese Column:</label>
-              <select
-                value={chineseColIdx ?? ''}
-                onChange={(e) => setChineseColIdx(e.target.value ? Number(e.target.value) : null)}
-                className="px-2 py-1 text-sm bg-purple-900/30 border border-purple-500/40 rounded text-purple-200"
-              >
-                <option value="">Not set</option>
-                {templateColumns.filter(c => c.name).map(c => (
-                  <option key={c.column} value={c.column}>{c.name}</option>
-                ))}
-              </select>
-            </div>
-            
-            {hasDictConfig && (
-              <span className="text-xs text-slate-400">
-                Empty cells will show dropdown with dictionary suggestions
-              </span>
-            )}
-          </div>
-        </motion.div>
-      )}
-      
-      {/* Main Content - Full Width Template Preview */}
+      {/* Main Content - Sign Table */}
       <div className="flex-1 overflow-hidden">
         <motion.div
           initial={{ opacity: 0 }}
@@ -919,92 +921,17 @@ export default function ExportPage() {
             <div className="flex items-center gap-3">
               <Table className="w-5 h-5 text-slate-400" />
               <h2 className="text-base font-semibold text-white">
-                {hasTemplate ? 'Template Preview' : 'Data Preview'}
+                Sign Table
               </h2>
-              {hasTemplate && (
-                <span className="text-xs px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
-                  Editable
-                </span>
-              )}
+              <span className="text-xs px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
+                Auto-generated
+              </span>
             </div>
-            
-            {preview?.summary && preview.summary.length > 0 && (
-              <button
-                onClick={() => setShowSummary(!showSummary)}
-                className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white transition-colors"
-              >
-                {showSummary ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                Cross-Floor Summary
-              </button>
-            )}
           </div>
           
-          {hasTemplate ? (
-            <TemplatePreview 
-              projectId={projectId!} 
-              hasTemplate={hasTemplate}
-              floorMapping={floorMapping}
-              englishColIdx={englishColIdx}
-              chineseColIdx={chineseColIdx}
-            />
-          ) : (
-            <OcrDataPreview preview={preview} />
-          )}
+          {projectId && <SignTablePreview projectId={projectId} />}
         </motion.div>
       </div>
-      
-      {/* Collapsible Cross-Floor Summary */}
-      {showSummary && preview?.summary && preview.summary.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, height: 0 }}
-          animate={{ opacity: 1, height: 'auto' }}
-          exit={{ opacity: 0, height: 0 }}
-          className="flex-shrink-0 border-t border-slate-700 bg-slate-900/80 max-h-64 overflow-auto"
-        >
-          <div className="p-3 border-b border-slate-700 flex items-center justify-between sticky top-0 bg-slate-900/95 backdrop-blur">
-            <div className="flex items-center gap-2">
-              <Table className="w-4 h-4 text-slate-400" />
-              <span className="text-sm font-medium text-white">Cross-Floor Summary</span>
-            </div>
-            <span className="text-xs text-slate-400">
-              {preview.summary_stats?.unique_items || 0} unique items across {preview.summary_stats?.total_floors || 0} floors
-            </span>
-          </div>
-          
-          <table className="w-full text-sm">
-            <thead className="bg-slate-800/50 sticky top-12">
-              <tr>
-                <th className="px-4 py-2 text-left text-xs font-medium text-slate-400">Text</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-slate-400">Total</th>
-                <th className="px-4 py-2 text-left text-xs font-medium text-slate-400">Floor Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {preview.summary.map((item, index) => (
-                <tr key={index} className="hover:bg-slate-800/30">
-                  <td className="px-4 py-2 text-white font-mono">{item.text || '—'}</td>
-                  <td className="px-4 py-2">
-                    <span className="text-emerald-400 font-semibold">{item.total_quantity}</span>
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex flex-wrap gap-1.5">
-                      {item.floor_details.map((detail, idx) => (
-                        <span
-                          key={idx}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-slate-700/50 rounded text-xs"
-                        >
-                          <span className="text-slate-300">{detail.floor_name}</span>
-                          <span className="text-emerald-400">×{detail.quantity}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </motion.div>
-      )}
     </div>
   )
 }

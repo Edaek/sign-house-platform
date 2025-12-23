@@ -18,7 +18,10 @@ __all__ = [
     'create_audit_log_doc',
     'create_project_member_doc',
     'create_dictionary_entry_doc',
-    'dictionary_entry_to_dict'
+    'dictionary_entry_to_dict',
+    'create_sign_table_doc',
+    'create_sign_row',
+    'sign_table_to_dict'
 ]
 
 
@@ -212,4 +215,57 @@ def dictionary_entry_to_dict(entry_doc):
         'created_by': str(entry_doc['created_by']) if entry_doc.get('created_by') else None,
         'created_at': entry_doc['created_at'].isoformat() if entry_doc.get('created_at') else None,
         'updated_at': entry_doc['updated_at'].isoformat() if entry_doc.get('updated_at') else None
+    }
+
+
+def create_sign_row(row_number, sign_no, floor_counts, sign='', english='', chinese=''):
+    """Create a sign row for the sign table.
+    
+    Args:
+        row_number: Auto-incremented row number (1-based)
+        sign_no: The extracted sign number from OCR
+        floor_counts: Dict mapping floor names to counts, e.g., {"21/F": 3, "22/F": 2}
+        sign: Optional sign description (user fills)
+        english: Optional English translation (user fills, with autocomplete)
+        chinese: Optional Chinese translation (auto-filled from dictionary)
+    """
+    return {
+        'row_number': row_number,
+        'sign_no': sign_no,
+        'sign': sign,
+        'english': english,
+        'chinese': chinese,
+        'floor_counts': floor_counts or {}
+    }
+
+
+def create_sign_table_doc(project_id, rows, floorplan_columns):
+    """Create a sign table document for a project.
+    
+    Args:
+        project_id: The project ID this sign table belongs to
+        rows: List of sign rows created by create_sign_row()
+        floorplan_columns: List of floorplan names that become dynamic columns
+    """
+    return {
+        'project_id': ObjectId(project_id),
+        'rows': rows or [],
+        'floorplan_columns': floorplan_columns or [],
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow()
+    }
+
+
+def sign_table_to_dict(sign_table_doc):
+    """Convert sign table document to dict for JSON response."""
+    if not sign_table_doc:
+        return None
+    
+    return {
+        'id': str(sign_table_doc['_id']),
+        'project_id': str(sign_table_doc['project_id']),
+        'rows': sign_table_doc.get('rows', []),
+        'floorplan_columns': sign_table_doc.get('floorplan_columns', []),
+        'created_at': sign_table_doc['created_at'].isoformat() if sign_table_doc.get('created_at') else None,
+        'updated_at': sign_table_doc['updated_at'].isoformat() if sign_table_doc.get('updated_at') else None
     }

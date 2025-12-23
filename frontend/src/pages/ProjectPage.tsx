@@ -3,8 +3,6 @@ import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { 
   Upload, 
-  FileSpreadsheet, 
-  FileText,
   Layers,
   ArrowRight,
   CheckCircle,
@@ -21,12 +19,10 @@ import clsx from 'clsx'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { currentProject, fetchProject, uploadTemplate, uploadFloorplan, isLoading } = useProjectStore()
-  const [uploadingTemplate, setUploadingTemplate] = useState(false)
+  const { currentProject, fetchProject, uploadFloorplan, isLoading } = useProjectStore()
   const [uploadingFloorplan, setUploadingFloorplan] = useState(false)
   const [showMembersModal, setShowMembersModal] = useState(false)
   
-  const templateInputRef = useRef<HTMLInputElement>(null)
   const floorplanInputRef = useRef<HTMLInputElement>(null)
   
   useEffect(() => {
@@ -34,21 +30,6 @@ export default function ProjectPage() {
       fetchProject(projectId)
     }
   }, [projectId, fetchProject])
-  
-  const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !projectId) return
-    
-    setUploadingTemplate(true)
-    try {
-      await uploadTemplate(projectId, file)
-      toast.success('Template uploaded successfully!')
-    } catch {
-      toast.error('Failed to upload template')
-    }
-    setUploadingTemplate(false)
-    e.target.value = ''
-  }
   
   const handleFloorplanUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -151,72 +132,7 @@ export default function ProjectPage() {
       </div>
       
       {/* Upload Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        {/* Template Upload */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card p-6"
-        >
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
-              <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Excel Template</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Define your export format</p>
-            </div>
-          </div>
-          
-          {currentProject.template ? (
-            <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-slate-500 dark:text-slate-400" />
-                  <div>
-                    <p className="text-slate-900 dark:text-white font-medium">{currentProject.template.filename}</p>
-                    <p className="text-sm text-slate-600 dark:text-slate-400">
-                      {currentProject.template.columns.length} columns defined
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => templateInputRef.current?.click()}
-                  className="text-sign-600 hover:text-sign-500 dark:text-sign-400 dark:hover:text-sign-300 text-sm font-medium"
-                >
-                  Replace
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => templateInputRef.current?.click()}
-              disabled={uploadingTemplate}
-              className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
-            >
-              {uploadingTemplate ? (
-                <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
-              ) : (
-                <>
-                  <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                  <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
-                    Click to upload Excel template
-                  </p>
-                  <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">.xlsx or .xls</p>
-                </>
-              )}
-            </button>
-          )}
-          
-          <input
-            ref={templateInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleTemplateUpload}
-            className="hidden"
-          />
-        </motion.div>
-        
+      <div className="max-w-xl mb-8">
         {/* Floorplan Upload */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -261,6 +177,15 @@ export default function ProjectPage() {
           />
         </motion.div>
       </div>
+      
+      {/* Info about sign table */}
+      {currentProject.floorplans && currentProject.floorplans.length > 0 && (
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+          <p className="text-sm text-blue-200">
+            <span className="font-medium">Tip:</span> After processing floor plans, visit the Export page to view the auto-generated sign table with all extracted data.
+          </p>
+        </div>
+      )}
       
       {/* Floor Plans List */}
       {currentProject.floorplans && currentProject.floorplans.length > 0 && (

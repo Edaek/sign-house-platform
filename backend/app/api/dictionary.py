@@ -483,6 +483,87 @@ def bulk_import():
         return jsonify({'error': str(e)}), 500
 
 
+@dictionary_bp.route('/search', methods=['GET'])
+@jwt_required()
+def search():
+    """Instant search for autocomplete.
+    
+    Query params:
+    - q: Search query (searches in English words)
+    - limit: Maximum results to return (default 10, max 50)
+    
+    Returns matching English words with their Chinese translations.
+    Prioritizes exact prefix matches, then contains matches.
+    """
+    try:
+        query = request.args.get('q', '').strip()
+        limit = min(int(request.args.get('limit', 10)), 50)
+        
+        if not query:
+            return jsonify({'results': []}), 200
+        
+        if len(query) < 1:
+            return jsonify({'results': []}), 200
+        
+        # Search for English words matching the query
+        # Use case-insensitive regex search
+        # First try prefix match, then contains match
+        
+        results = []
+        seen_english = set()
+        
+        # Prefix matches first (higher priority)
+        prefix_pattern = f'^{query}'
+        prefix_entries = mongo.db.dictionary.find({
+            'english': {'$regex': prefix_pattern, '$options': 'i'}
+        }).sort('english', 1).limit(limit)
+        
+        for entry in prefix_entries:
+            english = entry.get('english', '')
+            if english.lower() not in seen_english:
+                seen_english.add(english.lower())
+                chinese = entry.get('chinese', [])
+                if isinstance(chinese, str):
+                    chinese = [chinese] if chinese else []
+                results.append({
+                    'english': english,
+                    'chinese': chinese,
+                    'match_type': 'prefix'
+                })
+        
+        # If we haven't reached the limit, add contains matches
+        if len(results) < limit:
+            remaining = limit - len(results)
+            contains_pattern = query
+            contains_entries = mongo.db.dictionary.find({
+                'english': {'$regex': contains_pattern, '$options': 'i'}
+            }).sort('english', 1).limit(remaining + len(results))  # Get extra to filter duplicates
+            
+            for entry in contains_entries:
+                if len(results) >= limit:
+                    break
+                english = entry.get('english', '')
+                if english.lower() not in seen_english:
+                    seen_english.add(english.lower())
+                    chinese = entry.get('chinese', [])
+                    if isinstance(chinese, str):
+                        chinese = [chinese] if chinese else []
+                    results.append({
+                        'english': english,
+                        'chinese': chinese,
+                        'match_type': 'contains'
+                    })
+        
+        return jsonify({
+            'results': results[:limit],
+            'query': query,
+            'count': len(results[:limit])
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @dictionary_bp.route('/lookup', methods=['GET'])
 @jwt_required()
 def lookup():
