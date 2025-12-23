@@ -100,6 +100,10 @@ def create_app(config_name=None):
         # Dictionary indexes
         mongo.db.dictionary.create_index('english')
         mongo.db.dictionary.create_index('chinese')
+        # Processing jobs indexes
+        mongo.db.processing_jobs.create_index('job_id', unique=True)
+        mongo.db.processing_jobs.create_index('project_id')
+        mongo.db.processing_jobs.create_index([('project_id', 1), ('created_at', -1)])
     
     # Register blueprints
     from app.api.health import health_bp

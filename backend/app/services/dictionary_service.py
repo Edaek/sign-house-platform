@@ -111,6 +111,62 @@ def lookup_chinese_all(english):
     return []
 
 
+def lookup_sign(english):
+    """
+    Look up the sign name/code for an English word.
+    
+    Args:
+        english: English text to look up
+        
+    Returns:
+        Sign name/code if found, None otherwise
+    """
+    if not english or not english.strip():
+        return None
+    
+    # Case-insensitive lookup for English
+    entry = mongo.db.dictionary.find_one({
+        'english': {'$regex': f'^{english.strip()}$', '$options': 'i'}
+    })
+    
+    if entry:
+        sign = entry.get('sign', '')
+        if sign:
+            return sign
+    
+    return None
+
+
+def lookup_entry(english):
+    """
+    Look up the full dictionary entry for an English word.
+    Returns sign and chinese translations together.
+    
+    Args:
+        english: English text to look up
+        
+    Returns:
+        Tuple of (sign, chinese_list) if found, (None, []) otherwise
+    """
+    if not english or not english.strip():
+        return None, []
+    
+    # Case-insensitive lookup for English
+    entry = mongo.db.dictionary.find_one({
+        'english': {'$regex': f'^{english.strip()}$', '$options': 'i'}
+    })
+    
+    if entry:
+        sign = entry.get('sign', '') or None
+        chinese = entry.get('chinese', [])
+        # Handle both array and legacy string format
+        if isinstance(chinese, str):
+            chinese = [chinese] if chinese else []
+        return sign, chinese
+    
+    return None, []
+
+
 def lookup_translation(text):
     """
     Automatically detect if text is English or Chinese and look up its translation.
@@ -309,17 +365,20 @@ def get_all_entries_dict():
     Get all dictionary entries as lookup dictionaries.
     
     Returns:
-        Tuple of (english_to_chinese, chinese_to_english) dictionaries
+        Tuple of (english_to_chinese, chinese_to_english, english_to_sign) dictionaries
         - english_to_chinese: maps lowercase english to list of chinese translations
         - chinese_to_english: maps each chinese term to its english word
+        - english_to_sign: maps lowercase english to sign name/code
     """
     entries = list(mongo.db.dictionary.find({}))
     
     english_to_chinese = {}
     chinese_to_english = {}
+    english_to_sign = {}
     
     for entry in entries:
         english = entry.get('english', '').strip()
+        sign = entry.get('sign', '').strip()
         chinese = entry.get('chinese', [])
         
         # Handle legacy string format
@@ -328,13 +387,14 @@ def get_all_entries_dict():
         
         if english:
             english_to_chinese[english.lower()] = chinese
+            english_to_sign[english.lower()] = sign
             
             # Map each Chinese translation back to this English word
             for cn in chinese:
                 if cn:
                     chinese_to_english[cn] = english
     
-    return english_to_chinese, chinese_to_english
+    return english_to_chinese, chinese_to_english, english_to_sign
 
 
 def batch_lookup(texts, direction='auto'):
@@ -354,7 +414,7 @@ def batch_lookup(texts, direction='auto'):
         return {}
     
     results = {}
-    english_to_chinese, chinese_to_english = get_all_entries_dict()
+    english_to_chinese, chinese_to_english, _ = get_all_entries_dict()
     
     for text in texts:
         if not text or not str(text).strip():
@@ -395,7 +455,7 @@ def batch_lookup_all(texts, direction='auto'):
         return {}
     
     results = {}
-    english_to_chinese, chinese_to_english = get_all_entries_dict()
+    english_to_chinese, chinese_to_english, _ = get_all_entries_dict()
     
     for text in texts:
         if not text or not str(text).strip():

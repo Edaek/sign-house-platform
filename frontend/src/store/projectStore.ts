@@ -67,12 +67,51 @@ interface Project {
   floorplans?: FloorPlan[]
 }
 
+interface CropRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+  name: string
+}
+
+interface ProcessingFile {
+  filename: string
+  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error'
+  progress: number
+  error: string | null
+  floorplan_ids: string[]
+  pages_total: number
+  pages_processed: number
+  shapes_detected: number
+  started_at: string | null
+  completed_at: string | null
+}
+
+interface BatchUploadJob {
+  id: string
+  job_id: string
+  project_id: string
+  user_id: string
+  status: 'pending' | 'processing' | 'completed' | 'error'
+  total_files: number
+  processed_files: number
+  files: ProcessingFile[]
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
 interface ProjectState {
   projects: Project[]
   currentProject: Project | null
   currentFloorplan: FloorPlan | null
   isLoading: boolean
   error: string | null
+  
+  // Batch upload state
+  currentBatchJob: BatchUploadJob | null
+  isBatchUploading: boolean
   
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
@@ -82,10 +121,15 @@ interface ProjectState {
   
   uploadTemplate: (projectId: string, file: File) => Promise<void>
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
+  uploadFloorplans: (projectId: string, files: File[]) => Promise<BatchUploadJob>
+  pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
+  fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
+  clearBatchJob: () => void
   
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   updateFloorplan: (projectId: string, floorplanId: string, data: Partial<FloorPlan>) => Promise<void>
   deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
+  splitFloorplan: (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal?: boolean) => Promise<FloorPlan[]>
   
   detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
@@ -102,6 +146,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   currentFloorplan: null,
   isLoading: false,
   error: null,
+  currentBatchJob: null,
+  isBatchUploading: false,
   
   fetchProjects: async () => {
     set({ isLoading: true, error: null })
@@ -142,9 +188,12 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   updateProject: async (id: string, data: Partial<Project>) => {
     try {
       const response = await api.put(`/projects/${id}`, data)
+      const updatedProject = response.data.project
       set((state) => ({
-        projects: state.projects.map(p => p.id === id ? response.data.project : p),
-        currentProject: state.currentProject?.id === id ? response.data.project : state.currentProject
+        projects: state.projects.map(p => p.id === id ? { ...p, ...updatedProject } : p),
+        currentProject: state.currentProject?.id === id 
+          ? { ...state.currentProject, ...updatedProject }
+          : state.currentProject
       }))
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to update project' })
@@ -193,6 +242,71 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
+  uploadFloorplans: async (projectId: string, files: File[]) => {
+    set({ isBatchUploading: true, error: null })
+    
+    const formData = new FormData()
+    files.forEach(file => {
+      formData.append('files', file)
+    })
+    
+    try {
+      const response = await api.post(`/processing/batch-upload/${projectId}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      const job = response.data.job as BatchUploadJob
+      set({ currentBatchJob: job })
+      return job
+    } catch (error: any) {
+      set({ 
+        error: error.response?.data?.error || 'Failed to upload floorplans',
+        isBatchUploading: false 
+      })
+      throw error
+    }
+  },
+  
+  pollBatchStatus: async (projectId: string, jobId: string) => {
+    try {
+      const response = await api.get(`/processing/batch-upload/${projectId}/job/${jobId}`)
+      const job = response.data.job as BatchUploadJob
+      set({ currentBatchJob: job })
+      
+      // If job is completed or errored, stop uploading state and refresh project
+      if (job.status === 'completed' || job.status === 'error') {
+        set({ isBatchUploading: false })
+        await get().fetchProject(projectId)
+      }
+      
+      return job
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to get batch status' })
+      throw error
+    }
+  },
+  
+  clearBatchJob: () => {
+    set({ currentBatchJob: null, isBatchUploading: false })
+  },
+  
+  fetchActiveBatchJob: async (projectId: string) => {
+    try {
+      const response = await api.get(`/processing/batch-upload/${projectId}/status`)
+      const job = response.data.job as BatchUploadJob
+      
+      // Only restore job if it's still in progress
+      if (job.status === 'pending' || job.status === 'processing') {
+        set({ currentBatchJob: job, isBatchUploading: true })
+        return job
+      }
+      
+      return null
+    } catch {
+      // No active job found - this is expected behavior, not an error
+      return null
+    }
+  },
+  
   fetchFloorplan: async (projectId: string, floorplanId: string) => {
     set({ isLoading: true, error: null })
     try {
@@ -238,6 +352,53 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       }))
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to delete floorplan' })
+      throw error
+    }
+  },
+  
+  splitFloorplan: async (_projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal = false) => {
+    set({ isLoading: true, error: null })
+    try {
+      const response = await api.post(`/processing/split/${floorplanId}`, {
+        regions,
+        delete_original: deleteOriginal
+      })
+      
+      const newFloorplans = response.data.floorplans
+      
+      // Update currentProject with new floorplans
+      set((state) => {
+        if (!state.currentProject) return { isLoading: false }
+        
+        let updatedFloorplans = [...(state.currentProject.floorplans || [])]
+        
+        // Remove original if deleted
+        if (deleteOriginal) {
+          updatedFloorplans = updatedFloorplans.filter(fp => fp.id !== floorplanId)
+        }
+        
+        // Add new floorplans
+        updatedFloorplans = [...updatedFloorplans, ...newFloorplans]
+        
+        // Sort by floor_number
+        updatedFloorplans.sort((a, b) => a.floor_number - b.floor_number)
+        
+        return {
+          isLoading: false,
+          currentProject: {
+            ...state.currentProject,
+            floorplans: updatedFloorplans,
+            floorplan_count: updatedFloorplans.length
+          },
+          currentFloorplan: deleteOriginal && state.currentFloorplan?.id === floorplanId
+            ? null
+            : state.currentFloorplan
+        }
+      })
+      
+      return newFloorplans
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to split floorplan', isLoading: false })
       throw error
     }
   },

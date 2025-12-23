@@ -111,5 +111,118 @@ export const updateTemplateCells = async (projectId: string, updates: CellUpdate
   return response.data
 }
 
+// Sign Table API functions (auto-generated from OCR data)
+export interface SignRow {
+  row_number: number
+  sign_no: string
+  sign: string
+  english: string
+  chinese: string
+  floor_counts: Record<string, number>
+}
+
+export interface SignTable {
+  id: string
+  project_id: string
+  rows: SignRow[]
+  floorplan_columns: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SignTableResponse {
+  sign_table: SignTable
+  project: {
+    id: string
+    name: string
+    status: string
+  }
+}
+
+// Sign table cell update response
+export interface SignTableCellUpdateResponse {
+  message: string
+  row_number: number
+  field: string
+  value: string
+  floor_name?: string
+  sign_auto_filled?: string
+  chinese_auto_filled?: string
+  dictionary_updated?: boolean
+}
+
+export const getSignTableData = async (projectId: string): Promise<SignTableResponse> => {
+  const response = await api.get(`/export/sign-table/${projectId}`)
+  return response.data
+}
+
+export const updateSignTableCell = async (
+  projectId: string,
+  rowNumber: number,
+  field: 'sign' | 'english' | 'chinese' | 'sign_no',
+  value: string
+): Promise<SignTableCellUpdateResponse> => {
+  const response = await api.put(`/export/sign-table/${projectId}`, {
+    row_number: rowNumber,
+    field,
+    value,
+  })
+  return response.data
+}
+
+export const updateSignTableFloorCount = async (
+  projectId: string,
+  rowNumber: number,
+  floorName: string,
+  value: number | string
+): Promise<SignTableCellUpdateResponse> => {
+  const response = await api.put(`/export/sign-table/${projectId}`, {
+    row_number: rowNumber,
+    field: 'floor_count',
+    floor_name: floorName,
+    value: String(value),
+  })
+  return response.data
+}
+
+// Dictionary search for autocomplete
+export interface DictionarySearchResult {
+  english: string
+  sign: string
+  chinese: string[]
+  match_type: 'prefix' | 'contains'
+}
+
+export interface DictionarySearchResponse {
+  results: DictionarySearchResult[]
+  query: string
+  count: number
+}
+
+export const searchDictionary = async (query: string, limit = 10): Promise<DictionarySearchResponse> => {
+  const response = await api.get(`/dictionary/search?q=${encodeURIComponent(query)}&limit=${limit}`)
+  return response.data
+}
+
+// Add translation to dictionary
+export interface AddToDictionaryResponse {
+  action: 'created' | 'added' | 'exists'
+  message: string
+  entry: {
+    id: string
+    english: string
+    sign: string
+    chinese: string[]
+  }
+}
+
+export const addToDictionary = async (english: string, chinese: string): Promise<AddToDictionaryResponse> => {
+  const response = await api.post('/dictionary/add-translation', {
+    english,
+    chinese,
+  })
+  return response.data
+}
+
 export default api
 

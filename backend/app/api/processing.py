@@ -2,13 +2,28 @@ import os
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from werkzeug.utils import secure_filename
 from bson import ObjectId
 from app import mongo
-from app.models import serialize_doc, create_extracted_data_doc
+from app.models import (
+    serialize_doc, 
+    create_extracted_data_doc, 
+    create_floorplan_doc,
+    create_processing_job_doc,
+    create_processing_file_doc,
+    processing_job_to_dict
+)
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService
+from app.services.batch_processor import start_batch_processing
+from app.utils.permissions import require_project_access, require_project_modify
 
 processing_bp = Blueprint('processing', __name__)
+
+
+def allowed_file(filename, allowed_extensions):
+    """Check if file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
 
 @processing_bp.route('/detect/<floorplan_id>', methods=['POST'])
@@ -432,3 +447,298 @@ def get_floorplan_image(floorplan_id):
         return jsonify({'error': 'Image not found'}), 404
     
     return send_file(floorplan['image_filepath'], mimetype='image/png')
+
+
+@processing_bp.route('/split/<floorplan_id>', methods=['POST'])
+@jwt_required()
+def split_floorplan(floorplan_id):
+    """Split a floorplan into multiple floors by cropping regions.
+    
+    Request body:
+    {
+        "regions": [
+            {"x": 0, "y": 0, "width": 500, "height": 600, "name": "Floor 1"},
+            {"x": 0, "y": 600, "width": 500, "height": 600, "name": "Floor 2"}
+        ],
+        "delete_original": false  // optional, defaults to false
+    }
+    """
+    user_id = get_jwt_identity()
+    
+    try:
+        floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
+    except:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+    
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+    
+    project = mongo.db.projects.find_one({
+        '_id': floorplan['project_id'],
+        'user_id': ObjectId(user_id)
+    })
+    if not project:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    data = request.get_json()
+    if not data or 'regions' not in data:
+        return jsonify({'error': 'Crop regions are required'}), 400
+    
+    regions = data['regions']
+    delete_original = data.get('delete_original', False)
+    
+    if not isinstance(regions, list) or len(regions) < 1:
+        return jsonify({'error': 'At least one crop region is required'}), 400
+    
+    # Validate each region
+    for i, region in enumerate(regions):
+        if not all(key in region for key in ['x', 'y', 'width', 'height']):
+            return jsonify({'error': f'Region {i + 1} missing required fields (x, y, width, height)'}), 400
+        if region['width'] <= 0 or region['height'] <= 0:
+            return jsonify({'error': f'Region {i + 1} has invalid dimensions'}), 400
+    
+    if not os.path.exists(floorplan.get('image_filepath', '')):
+        return jsonify({'error': 'Floorplan image not found'}), 404
+    
+    try:
+        cv_service = CVService()
+        project_id = str(floorplan['project_id'])
+        
+        # Create output directory for cropped images
+        image_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'images', project_id)
+        os.makedirs(image_dir, exist_ok=True)
+        
+        # Crop the image into regions
+        cropped_images = cv_service.crop_image(
+            floorplan['image_filepath'],
+            regions,
+            image_dir
+        )
+        
+        if not cropped_images:
+            return jsonify({'error': 'No valid regions were cropped'}), 400
+        
+        # Get current max floor number
+        max_floor = mongo.db.floorplans.find_one(
+            {'project_id': floorplan['project_id']},
+            sort=[('floor_number', -1)]
+        )
+        next_floor_number = (max_floor['floor_number'] + 1) if max_floor else 1
+        
+        # Create new floorplan documents for each cropped image
+        new_floorplans = []
+        for idx, crop_info in enumerate(cropped_images):
+            floor_name = crop_info['name']
+            
+            floorplan_doc = create_floorplan_doc(
+                floor_number=next_floor_number + idx,
+                floor_name=floor_name,
+                pdf_filename=floorplan.get('pdf_filename', ''),
+                pdf_filepath=floorplan.get('pdf_filepath', ''),
+                image_filepath=crop_info['path'],
+                project_id=project_id
+            )
+            
+            # Add metadata about the crop source
+            floorplan_doc['cropped_from'] = floorplan_id
+            floorplan_doc['crop_region'] = {
+                'x': crop_info['x'],
+                'y': crop_info['y'],
+                'width': crop_info['width'],
+                'height': crop_info['height']
+            }
+            
+            result = mongo.db.floorplans.insert_one(floorplan_doc)
+            floorplan_doc['_id'] = result.inserted_id
+            
+            fp_dict = serialize_doc(floorplan_doc)
+            fp_dict['data_count'] = 0
+            fp_dict['extracted_data'] = []
+            new_floorplans.append(fp_dict)
+        
+        # Optionally delete the original floorplan
+        if delete_original:
+            # Delete extracted data for original floorplan
+            mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
+            
+            # Delete original floorplan image (optional - keep for reference)
+            # if os.path.exists(floorplan['image_filepath']):
+            #     os.remove(floorplan['image_filepath'])
+            
+            # Delete the floorplan document
+            mongo.db.floorplans.delete_one({'_id': ObjectId(floorplan_id)})
+        
+        # Update project timestamp
+        mongo.db.projects.update_one(
+            {'_id': ObjectId(project_id)},
+            {'$set': {'updated_at': datetime.utcnow()}}
+        )
+        
+        return jsonify({
+            'message': f'Successfully split floorplan into {len(new_floorplans)} floors',
+            'floorplans': new_floorplans,
+            'original_deleted': delete_original
+        }), 201
+        
+    except Exception as e:
+        current_app.logger.error(f'Failed to split floorplan: {str(e)}')
+        return jsonify({'error': f'Failed to split floorplan: {str(e)}'}), 500
+
+
+@processing_bp.route('/image-dimensions/<floorplan_id>', methods=['GET'])
+@jwt_required()
+def get_image_dimensions(floorplan_id):
+    """Get the dimensions of a floorplan image."""
+    user_id = get_jwt_identity()
+    
+    try:
+        floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
+    except:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+    
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+    
+    project = mongo.db.projects.find_one({
+        '_id': floorplan['project_id'],
+        'user_id': ObjectId(user_id)
+    })
+    if not project:
+        return jsonify({'error': 'Access denied'}), 403
+    
+    if not os.path.exists(floorplan.get('image_filepath', '')):
+        return jsonify({'error': 'Image not found'}), 404
+    
+    try:
+        cv_service = CVService()
+        width, height = cv_service.get_image_dimensions(floorplan['image_filepath'])
+        
+        return jsonify({
+            'width': width,
+            'height': height
+        }), 200
+    except Exception as e:
+        return jsonify({'error': f'Failed to get image dimensions: {str(e)}'}), 500
+
+
+@processing_bp.route('/batch-upload/<project_id>', methods=['POST'])
+@jwt_required()
+@require_project_modify
+def batch_upload_floorplans(project_id, _user=None, _project=None):
+    """Upload multiple PDF floorplans with automatic shape detection and OCR.
+    
+    Files are processed in the background. Returns a job ID for status polling.
+    """
+    user_id = get_jwt_identity()
+    
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files selected'}), 400
+    
+    # Validate all files are PDFs
+    valid_files = []
+    for file in files:
+        if file.filename and allowed_file(file.filename, {'pdf'}):
+            valid_files.append(file)
+    
+    if not valid_files:
+        return jsonify({'error': 'No valid PDF files provided'}), 400
+    
+    # Create PDF directory
+    pdf_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pdfs', project_id)
+    os.makedirs(pdf_dir, exist_ok=True)
+    
+    # Save files and prepare job
+    files_info = []
+    job_files = []
+    
+    for idx, file in enumerate(valid_files):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(pdf_dir, filename)
+        
+        # Handle duplicate filenames
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(filepath):
+            filename = f"{base}_{counter}{ext}"
+            filepath = os.path.join(pdf_dir, filename)
+            counter += 1
+        
+        file.save(filepath)
+        
+        files_info.append({
+            'index': idx,
+            'filename': filename,
+            'file_path': filepath
+        })
+        job_files.append(create_processing_file_doc(filename))
+    
+    # Create job document
+    job_doc = create_processing_job_doc(project_id, user_id, job_files)
+    result = mongo.db.processing_jobs.insert_one(job_doc)
+    job_doc['_id'] = result.inserted_id
+    
+    # Extract config values needed for processing
+    config = {
+        'TITLE_REGION_X_START': current_app.config.get('TITLE_REGION_X_START', 60),
+        'TITLE_REGION_Y_START': current_app.config.get('TITLE_REGION_Y_START', 85),
+        'TITLE_REGION_WIDTH': current_app.config.get('TITLE_REGION_WIDTH', 40),
+        'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15)
+    }
+    
+    # Start background processing
+    start_batch_processing(
+        job_id=job_doc['job_id'],
+        files_info=files_info,
+        project_id=project_id,
+        upload_folder=current_app.config['UPLOAD_FOLDER'],
+        config=config
+    )
+    
+    return jsonify({
+        'message': f'Started processing {len(valid_files)} PDF files',
+        'job': processing_job_to_dict(job_doc)
+    }), 202
+
+
+@processing_bp.route('/batch-upload/<project_id>/status', methods=['GET'])
+@jwt_required()
+@require_project_access
+def get_batch_upload_status(project_id, _user=None, _project=None):
+    """Get the status of the current batch upload job for a project."""
+    
+    # Get the most recent job for this project
+    job = mongo.db.processing_jobs.find_one(
+        {'project_id': ObjectId(project_id)},
+        sort=[('created_at', -1)]
+    )
+    
+    if not job:
+        return jsonify({'error': 'No batch upload job found'}), 404
+    
+    return jsonify({
+        'job': processing_job_to_dict(job)
+    }), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/job/<job_id>', methods=['GET'])
+@jwt_required()
+@require_project_access
+def get_batch_job_status(project_id, job_id, _user=None, _project=None):
+    """Get the status of a specific batch upload job."""
+    
+    job = mongo.db.processing_jobs.find_one({
+        'job_id': job_id,
+        'project_id': ObjectId(project_id)
+    })
+    
+    if not job:
+        return jsonify({'error': 'Batch upload job not found'}), 404
+    
+    return jsonify({
+        'job': processing_job_to_dict(job)
+    }), 200

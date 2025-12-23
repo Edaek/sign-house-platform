@@ -1,10 +1,8 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { 
   Upload, 
-  FileSpreadsheet, 
-  FileText,
   Layers,
   ArrowRight,
   CheckCircle,
@@ -12,57 +10,192 @@ import {
   AlertCircle,
   Download,
   ChevronLeft,
-  Users
+  Users,
+  FileText,
+  X,
+  Pencil,
+  Check,
+  Loader2
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
+import BatchUploadProgress from '../components/BatchUploadProgress'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { currentProject, fetchProject, uploadTemplate, uploadFloorplan, isLoading } = useProjectStore()
-  const [uploadingTemplate, setUploadingTemplate] = useState(false)
-  const [uploadingFloorplan, setUploadingFloorplan] = useState(false)
+  const { 
+    currentProject, 
+    fetchProject, 
+    updateProject,
+    uploadFloorplans,
+    pollBatchStatus,
+    fetchActiveBatchJob,
+    currentBatchJob,
+    isBatchUploading,
+    clearBatchJob,
+    isLoading 
+  } = useProjectStore()
   const [showMembersModal, setShowMembersModal] = useState(false)
+  const [showBatchProgress, setShowBatchProgress] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editedName, setEditedName] = useState('')
   
-  const templateInputRef = useRef<HTMLInputElement>(null)
   const floorplanInputRef = useRef<HTMLInputElement>(null)
+  const dropZoneRef = useRef<HTMLDivElement>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
   
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
+      // Check for any active batch jobs when page loads
+      fetchActiveBatchJob(projectId)
     }
-  }, [projectId, fetchProject])
+  }, [projectId, fetchProject, fetchActiveBatchJob])
   
-  const handleTemplateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !projectId) return
-    
-    setUploadingTemplate(true)
-    try {
-      await uploadTemplate(projectId, file)
-      toast.success('Template uploaded successfully!')
-    } catch {
-      toast.error('Failed to upload template')
+  // Handle file selection from input
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...files])
     }
-    setUploadingTemplate(false)
     e.target.value = ''
   }
   
-  const handleFloorplanUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !projectId) return
-    
-    setUploadingFloorplan(true)
-    try {
-      await uploadFloorplan(projectId, file)
-      toast.success('Floor plan uploaded successfully!')
-    } catch {
-      toast.error('Failed to upload floor plan')
+  // Handle drag and drop
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+  
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Only set isDragging to false if we're leaving the drop zone entirely
+    if (dropZoneRef.current && !dropZoneRef.current.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
     }
-    setUploadingFloorplan(false)
-    e.target.value = ''
+  }, [])
+  
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+  
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    
+    const files = Array.from(e.dataTransfer.files).filter(
+      file => file.type === 'application/pdf'
+    )
+    
+    if (files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...files])
+    } else {
+      toast.error('Please drop PDF files only')
+    }
+  }, [])
+  
+  // Remove a file from selection
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index))
+  }
+  
+  // Start batch upload
+  const handleBatchUpload = async () => {
+    if (!projectId || selectedFiles.length === 0) return
+    
+    try {
+      const job = await uploadFloorplans(projectId, selectedFiles)
+      setSelectedFiles([])
+      setShowBatchProgress(true)
+      toast.success(`Started processing ${job.total_files} PDF files`)
+    } catch {
+      toast.error('Failed to start upload')
+    }
+  }
+  
+  // Poll for batch status
+  const handlePollStatus = useCallback(async () => {
+    if (!projectId || !currentBatchJob) return
+    
+    try {
+      await pollBatchStatus(projectId, currentBatchJob.job_id)
+    } catch {
+      // Silently handle poll errors
+    }
+  }, [projectId, currentBatchJob, pollBatchStatus])
+  
+  // Continue polling even when dialog is closed but job is still running
+  useEffect(() => {
+    if (!showBatchProgress && currentBatchJob && 
+        (currentBatchJob.status === 'pending' || currentBatchJob.status === 'processing')) {
+      const pollInterval = setInterval(() => {
+        handlePollStatus()
+      }, 2000)
+      
+      return () => clearInterval(pollInterval)
+    }
+  }, [showBatchProgress, currentBatchJob?.status, handlePollStatus])
+  
+  // Close batch progress modal
+  const handleCloseBatchProgress = () => {
+    setShowBatchProgress(false)
+    // Only clear the job if it's completed or errored
+    // Keep it in state if still processing so the indicator can show
+    if (currentBatchJob?.status === 'completed' || currentBatchJob?.status === 'error') {
+      clearBatchJob()
+    }
+  }
+  
+  // Check if there's an active job running in the background
+  const hasActiveBackgroundJob = currentBatchJob && 
+    !showBatchProgress && 
+    (currentBatchJob.status === 'pending' || currentBatchJob.status === 'processing')
+  
+  // Start editing project name
+  const handleStartEditName = () => {
+    if (currentProject) {
+      setEditedName(currentProject.name)
+      setIsEditingName(true)
+      setTimeout(() => nameInputRef.current?.focus(), 0)
+    }
+  }
+  
+  // Save project name
+  const handleSaveName = async () => {
+    if (!projectId || !editedName.trim()) {
+      setIsEditingName(false)
+      return
+    }
+    
+    if (editedName.trim() === currentProject?.name) {
+      setIsEditingName(false)
+      return
+    }
+    
+    try {
+      await updateProject(projectId, { name: editedName.trim() })
+      toast.success('Project renamed')
+      setIsEditingName(false)
+    } catch {
+      toast.error('Failed to rename project')
+    }
+  }
+  
+  // Handle key press in name input
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSaveName()
+    } else if (e.key === 'Escape') {
+      setIsEditingName(false)
+    }
   }
   
   const getStatusIcon = (status: string) => {
@@ -119,7 +252,35 @@ export default function ProjectPage() {
         
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">{currentProject.name}</h1>
+            {isEditingName ? (
+              <div className="flex items-center gap-2">
+                <input
+                  ref={nameInputRef}
+                  type="text"
+                  value={editedName}
+                  onChange={(e) => setEditedName(e.target.value)}
+                  onKeyDown={handleNameKeyDown}
+                  onBlur={handleSaveName}
+                  className="text-3xl font-display font-bold text-slate-900 dark:text-white bg-transparent border-b-2 border-sign-500 outline-none py-0"
+                />
+                <button
+                  onClick={handleSaveName}
+                  className="p-1.5 text-emerald-500 hover:text-emerald-400 transition-colors"
+                >
+                  <Check className="w-5 h-5" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 group">
+                <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">{currentProject.name}</h1>
+                <button
+                  onClick={handleStartEditName}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 opacity-0 group-hover:opacity-100 transition-all"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             {currentProject.description && (
               <p className="text-slate-600 dark:text-slate-400 mt-1">{currentProject.description}</p>
             )}
@@ -151,72 +312,7 @@ export default function ProjectPage() {
       </div>
       
       {/* Upload Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-        {/* Template Upload */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card p-6"
-        >
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-emerald-500/20 rounded-lg flex items-center justify-center">
-              <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Excel Template</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Define your export format</p>
-            </div>
-          </div>
-          
-          {currentProject.template ? (
-            <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-slate-500 dark:text-slate-400" />
-                  <div>
-                    <p className="text-slate-900 dark:text-white font-medium">{currentProject.template.filename}</p>
-                    <p className="text-sm text-slate-600 dark:text-slate-400">
-                      {currentProject.template.columns.length} columns defined
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => templateInputRef.current?.click()}
-                  className="text-sign-600 hover:text-sign-500 dark:text-sign-400 dark:hover:text-sign-300 text-sm font-medium"
-                >
-                  Replace
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => templateInputRef.current?.click()}
-              disabled={uploadingTemplate}
-              className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
-            >
-              {uploadingTemplate ? (
-                <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
-              ) : (
-                <>
-                  <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                  <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
-                    Click to upload Excel template
-                  </p>
-                  <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">.xlsx or .xls</p>
-                </>
-              )}
-            </button>
-          )}
-          
-          <input
-            ref={templateInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleTemplateUpload}
-            className="hidden"
-          />
-        </motion.div>
-        
+      <div className="mb-8">
         {/* Floorplan Upload */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -229,38 +325,141 @@ export default function ProjectPage() {
               <Layers className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDF</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Upload multi-page floor plans</p>
+              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDFs</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Upload multiple PDFs - auto shape detection & OCR
+              </p>
             </div>
           </div>
           
-          <button
+          {/* Drop Zone */}
+          <div
+            ref={dropZoneRef}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
             onClick={() => floorplanInputRef.current?.click()}
-            disabled={uploadingFloorplan}
-            className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
-          >
-            {uploadingFloorplan ? (
-              <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
-            ) : (
-              <>
-                <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
-                  Click to upload floor plan PDF
-                </p>
-                <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">Multi-page PDF supported</p>
-              </>
+            className={clsx(
+              'w-full p-8 border-2 border-dashed rounded-lg transition-all cursor-pointer',
+              isDragging
+                ? 'border-sign-500 bg-sign-500/10 scale-[1.02]'
+                : 'border-slate-300 dark:border-slate-600 hover:border-sign-500 hover:bg-sign-500/5',
+              isBatchUploading && 'pointer-events-none opacity-50'
             )}
-          </button>
+          >
+            <div className="text-center">
+              <Upload className={clsx(
+                'w-10 h-10 mx-auto mb-3 transition-colors',
+                isDragging ? 'text-sign-500' : 'text-slate-400'
+              )} />
+              <p className={clsx(
+                'font-medium transition-colors',
+                isDragging 
+                  ? 'text-sign-500' 
+                  : 'text-slate-600 dark:text-slate-400'
+              )}>
+                {isDragging ? 'Drop files here' : 'Drag & drop PDF files here'}
+              </p>
+              <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">
+                or click to browse
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-600 mt-2">
+                Multiple files supported • Auto shape detection & OCR
+              </p>
+            </div>
+          </div>
           
           <input
             ref={floorplanInputRef}
             type="file"
             accept=".pdf"
-            onChange={handleFloorplanUpload}
+            multiple
+            onChange={handleFileSelect}
             className="hidden"
           />
+          
+          {/* Selected Files List */}
+          {selectedFiles.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Selected Files ({selectedFiles.length})
+                </h4>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedFiles([])
+                  }}
+                  className="text-xs text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors"
+                >
+                  Clear all
+                </button>
+              </div>
+              
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {selectedFiles.map((file, index) => (
+                  <motion.div
+                    key={`${file.name}-${index}`}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      <span className="text-sm text-slate-700 dark:text-slate-300 truncate">
+                        {file.name}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-500 flex-shrink-0">
+                        {(file.size / 1024 / 1024).toFixed(1)} MB
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeFile(index)
+                      }}
+                      className="p-1 text-slate-400 hover:text-red-500 transition-colors flex-shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
+              
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleBatchUpload()
+                }}
+                disabled={isBatchUploading}
+                className="mt-4 w-full btn btn-primary flex items-center justify-center gap-2"
+              >
+                {isBatchUploading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    Upload & Process {selectedFiles.length} File{selectedFiles.length > 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </motion.div>
       </div>
+      
+      {/* Info about sign table */}
+      {currentProject.floorplans && currentProject.floorplans.length > 0 && (
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+          <p className="text-sm text-blue-200">
+            <span className="font-medium">Tip:</span> After processing floor plans, visit the Export page to view the auto-generated sign table with all extracted data.
+          </p>
+        </div>
+      )}
       
       {/* Floor Plans List */}
       {currentProject.floorplans && currentProject.floorplans.length > 0 && (
@@ -340,6 +539,35 @@ export default function ProjectPage() {
           isOpen={showMembersModal}
           onClose={() => setShowMembersModal(false)}
         />
+      )}
+      
+      {/* Batch Upload Progress Modal */}
+      <BatchUploadProgress
+        job={currentBatchJob}
+        isOpen={showBatchProgress}
+        onClose={handleCloseBatchProgress}
+        onPoll={handlePollStatus}
+      />
+      
+      {/* Floating Processing Indicator - shows when dialog is closed but job is running */}
+      {hasActiveBackgroundJob && (
+        <motion.button
+          initial={{ opacity: 0, y: 20, scale: 0.9 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20, scale: 0.9 }}
+          onClick={() => setShowBatchProgress(true)}
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-3 px-4 py-3 bg-sign-600 hover:bg-sign-500 text-white rounded-full shadow-lg shadow-sign-500/30 transition-colors cursor-pointer"
+        >
+          <Loader2 className="w-5 h-5 animate-spin" />
+          <span className="text-sm font-medium">
+            Processing {currentBatchJob.total_files} file{currentBatchJob.total_files > 1 ? 's' : ''}...
+          </span>
+          <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+            <span className="text-xs font-bold">
+              {Math.round((currentBatchJob.files.reduce((sum, f) => sum + f.progress, 0) / currentBatchJob.total_files))}%
+            </span>
+          </div>
+        </motion.button>
       )}
     </div>
   )

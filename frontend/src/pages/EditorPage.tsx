@@ -16,7 +16,9 @@ import {
   ZoomIn,
   ZoomOut,
   Move,
-  Loader2
+  Loader2,
+  Scissors,
+  Layers
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import api from '../lib/api'
@@ -28,6 +30,15 @@ interface DrawingRect {
   startY: number
   width: number
   height: number
+}
+
+interface CropRegion {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+  name: string
 }
 
 export default function EditorPage() {
@@ -45,6 +56,7 @@ export default function EditorPage() {
     deleteExtractedData,
     updateFloorplan,
     deleteFloorplan,
+    splitFloorplan,
     isLoading 
   } = useProjectStore()
   
@@ -52,7 +64,7 @@ export default function EditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   
-  const [tool, setTool] = useState<'select' | 'draw'>('select')
+  const [tool, setTool] = useState<'select' | 'draw' | 'crop'>('select')
   const [shapeType, setShapeType] = useState<'auto' | 'circle' | 'rectangle'>('auto')
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -73,8 +85,16 @@ export default function EditorPage() {
   
   const [isDetectingShapes, setIsDetectingShapes] = useState(false)
   const [isRunningOCR, setIsRunningOCR] = useState(false)
+  const [isSplitting, setIsSplitting] = useState(false)
   
   const [imageLoaded, setImageLoaded] = useState(false)
+  
+  // Crop mode state
+  const [cropRegions, setCropRegions] = useState<CropRegion[]>([])
+  const [selectedCropRegion, setSelectedCropRegion] = useState<string | null>(null)
+  const [editingCropName, setEditingCropName] = useState<string | null>(null)
+  const [editCropName, setEditCropName] = useState('')
+  const [deleteOriginalAfterSplit, setDeleteOriginalAfterSplit] = useState(false)
   
   // Fetch project and floorplan data
   useEffect(() => {
@@ -197,9 +217,9 @@ export default function EditorPage() {
     
     // Draw current drawing rectangle
     if (drawingRect) {
-      ctx.strokeStyle = '#ed751d'
+      ctx.strokeStyle = tool === 'crop' ? '#10b981' : '#ed751d'
       ctx.lineWidth = 2 / scale
-      ctx.fillStyle = 'rgba(237, 117, 29, 0.2)'
+      ctx.fillStyle = tool === 'crop' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(237, 117, 29, 0.2)'
       ctx.setLineDash([5 / scale, 5 / scale])
       ctx.beginPath()
       ctx.rect(drawingRect.startX, drawingRect.startY, drawingRect.width, drawingRect.height)
@@ -208,8 +228,43 @@ export default function EditorPage() {
       ctx.setLineDash([])
     }
     
+    // Draw crop regions
+    cropRegions.forEach((region, index) => {
+      const isSelected = selectedCropRegion === region.id
+      
+      ctx.strokeStyle = isSelected ? '#059669' : '#10b981'
+      ctx.lineWidth = isSelected ? 3 / scale : 2 / scale
+      ctx.fillStyle = isSelected ? 'rgba(5, 150, 105, 0.15)' : 'rgba(16, 185, 129, 0.1)'
+      
+      ctx.beginPath()
+      ctx.rect(region.x, region.y, region.width, region.height)
+      ctx.fill()
+      ctx.stroke()
+      
+      // Draw region label
+      ctx.fillStyle = isSelected ? '#059669' : '#10b981'
+      ctx.font = `bold ${14 / scale}px sans-serif`
+      
+      // Background for text
+      const text = region.name || `Region ${index + 1}`
+      const textMetrics = ctx.measureText(text)
+      const textHeight = 16 / scale
+      const padding = 4 / scale
+      
+      ctx.fillStyle = isSelected ? 'rgba(5, 150, 105, 0.9)' : 'rgba(16, 185, 129, 0.9)'
+      ctx.fillRect(
+        region.x, 
+        region.y - textHeight - padding * 2, 
+        textMetrics.width + padding * 2, 
+        textHeight + padding * 2
+      )
+      
+      ctx.fillStyle = '#ffffff'
+      ctx.fillText(text, region.x + padding, region.y - padding - 2 / scale)
+    })
+    
     ctx.restore()
-  }, [scale, offset, currentFloorplan?.extracted_data, selectedShape, drawingRect, imageLoaded])
+  }, [scale, offset, currentFloorplan?.extracted_data, selectedShape, drawingRect, imageLoaded, tool, cropRegions, selectedCropRegion])
   
   // Redraw on changes
   useEffect(() => {
@@ -272,10 +327,24 @@ export default function EditorPage() {
       return
     }
     
-    if (tool === 'draw') {
+    if (tool === 'draw' || tool === 'crop') {
       setIsDrawing(true)
       setDrawingRect({ startX: coords.x, startY: coords.y, width: 0, height: 0 })
     } else {
+      // Check if clicked on a crop region first (when in select mode)
+      const clickedCropRegion = cropRegions.find(region =>
+        coords.x >= region.x && 
+        coords.x <= region.x + region.width &&
+        coords.y >= region.y && 
+        coords.y <= region.y + region.height
+      )
+      
+      if (clickedCropRegion) {
+        setSelectedCropRegion(clickedCropRegion.id)
+        setSelectedShape(null)
+        return
+      }
+      
       // Check if clicked on a shape (including all merged bounding boxes)
       const clickedShape = currentFloorplan?.extracted_data?.find(shape => {
         // If shape has merged bounding boxes, check all of them
@@ -297,9 +366,11 @@ export default function EditorPage() {
       
       if (clickedShape) {
         setSelectedShape(clickedShape.id)
+        setSelectedCropRegion(null)
       } else {
         // If no shape clicked, start panning
         setSelectedShape(null)
+        setSelectedCropRegion(null)
         setIsPanning(true)
         setPanStart({ x: e.clientX - offset.x, y: e.clientY - offset.y })
       }
@@ -342,11 +413,27 @@ export default function EditorPage() {
       const height = Math.abs(drawingRect.height)
       
       if (width > 10 && height > 10) {
-        try {
-          await ocrRegion(floorId, { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
-          toast.success('Text extracted!')
-        } catch {
-          toast.error('Failed to extract text')
+        if (tool === 'crop') {
+          // Add crop region
+          const newRegion: CropRegion = {
+            id: `crop_${Date.now()}`,
+            x: Math.round(x),
+            y: Math.round(y),
+            width: Math.round(width),
+            height: Math.round(height),
+            name: `Floor ${cropRegions.length + 1}`
+          }
+          setCropRegions([...cropRegions, newRegion])
+          setSelectedCropRegion(newRegion.id)
+          toast.success('Crop region added!')
+        } else {
+          // Draw tool - OCR region
+          try {
+            await ocrRegion(floorId, { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
+            toast.success('Text extracted!')
+          } catch {
+            toast.error('Failed to extract text')
+          }
         }
       }
     }
@@ -483,6 +570,61 @@ export default function EditorPage() {
       }
     } catch {
       toast.error('Failed to delete floor')
+    }
+  }
+  
+  // Crop region handlers
+  const handleDeleteCropRegion = (id: string) => {
+    setCropRegions(cropRegions.filter(r => r.id !== id))
+    if (selectedCropRegion === id) {
+      setSelectedCropRegion(null)
+    }
+    toast.success('Crop region removed')
+  }
+  
+  const handleSaveCropName = (id: string) => {
+    setCropRegions(cropRegions.map(r => 
+      r.id === id ? { ...r, name: editCropName || r.name } : r
+    ))
+    setEditingCropName(null)
+    setEditCropName('')
+  }
+  
+  const handleClearAllCropRegions = () => {
+    setCropRegions([])
+    setSelectedCropRegion(null)
+    toast.success('All crop regions cleared')
+  }
+  
+  const handleSplitFloor = async () => {
+    if (!projectId || !floorId || cropRegions.length === 0) return
+    
+    setIsSplitting(true)
+    try {
+      const regions = cropRegions.map(r => ({
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+        name: r.name
+      }))
+      
+      const newFloorplans = await splitFloorplan(projectId, floorId, regions, deleteOriginalAfterSplit)
+      
+      toast.success(`Successfully split into ${newFloorplans.length} floors!`)
+      setCropRegions([])
+      setSelectedCropRegion(null)
+      
+      // Navigate to the first new floor
+      if (newFloorplans.length > 0) {
+        navigate(`/project/${projectId}/floor/${newFloorplans[0].id}`)
+      } else if (deleteOriginalAfterSplit) {
+        navigate(`/project/${projectId}`)
+      }
+    } catch {
+      toast.error('Failed to split floorplan')
+    } finally {
+      setIsSplitting(false)
     }
   }
   
@@ -645,6 +787,17 @@ export default function EditorPage() {
             <Square className="w-5 h-5" />
           </button>
           
+          <button
+            onClick={() => setTool('crop')}
+            className={clsx(
+              'p-3 rounded-lg transition-colors',
+              tool === 'crop' ? 'bg-emerald-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+            )}
+            title="Crop Tool - Split into multiple floors (C)"
+          >
+            <Scissors className="w-5 h-5" />
+          </button>
+          
           <div className="h-px w-8 bg-slate-200 dark:bg-slate-700 my-2" />
           
           <button
@@ -685,7 +838,7 @@ export default function EditorPage() {
             onMouseLeave={handleMouseUp}
             className={clsx(
               'absolute inset-0',
-              tool === 'draw' ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : 'cursor-grab'
+              (tool === 'draw' || tool === 'crop') ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : 'cursor-grab'
             )}
           />
           
@@ -696,18 +849,23 @@ export default function EditorPage() {
           )}
           
           {/* Processing Overlay */}
-          {(isDetectingShapes || isRunningOCR) && (
+          {(isDetectingShapes || isRunningOCR || isSplitting) && (
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
               <div className="bg-slate-800 rounded-lg shadow-xl p-6 flex flex-col items-center gap-4 border border-slate-700">
-                <Loader2 className="w-10 h-10 text-sign-500 animate-spin" />
+                <Loader2 className={clsx(
+                  "w-10 h-10 animate-spin",
+                  isSplitting ? "text-emerald-500" : "text-sign-500"
+                )} />
                 <div className="text-center">
                   <p className="text-white font-medium mb-1">
-                    {isDetectingShapes ? 'Detecting Shapes...' : 'Running OCR...'}
+                    {isDetectingShapes ? 'Detecting Shapes...' : isRunningOCR ? 'Running OCR...' : 'Splitting Floorplan...'}
                   </p>
                   <p className="text-slate-400 text-sm">
                     {isDetectingShapes 
                       ? 'Analyzing floor plan and identifying shapes' 
-                      : 'Extracting text from detected shapes'}
+                      : isRunningOCR
+                        ? 'Extracting text from detected shapes'
+                        : 'Creating new floor images from crop regions'}
                   </p>
                 </div>
               </div>
@@ -717,6 +875,140 @@ export default function EditorPage() {
         
         {/* Right Panel */}
         <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col">
+          {/* Crop Mode Panel */}
+          {(tool === 'crop' || cropRegions.length > 0) && (
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-emerald-50 dark:bg-emerald-950/30">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <h3 className="font-medium text-emerald-800 dark:text-emerald-300">Split Floor</h3>
+                </div>
+                {cropRegions.length > 0 && (
+                  <button
+                    onClick={handleClearAllCropRegions}
+                    className="text-xs text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+              
+              {cropRegions.length === 0 ? (
+                <p className="text-sm text-emerald-700 dark:text-emerald-400/80">
+                  Draw rectangles on the image to define crop regions for each floor.
+                </p>
+              ) : (
+                <>
+                  <div className="space-y-2 mb-3 max-h-48 overflow-auto">
+                    {cropRegions.map((region, index) => (
+                      <div
+                        key={region.id}
+                        onClick={() => setSelectedCropRegion(region.id)}
+                        className={clsx(
+                          'p-2 rounded-lg cursor-pointer transition-colors flex items-center justify-between',
+                          selectedCropRegion === region.id
+                            ? 'bg-emerald-200 dark:bg-emerald-900/50 border border-emerald-400 dark:border-emerald-600'
+                            : 'bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 hover:border-emerald-300 dark:hover:border-emerald-700'
+                        )}
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="w-5 h-5 bg-emerald-100 dark:bg-emerald-900 rounded text-emerald-700 dark:text-emerald-400 text-xs font-bold flex items-center justify-center flex-shrink-0">
+                            {index + 1}
+                          </span>
+                          {editingCropName === region.id ? (
+                            <div className="flex items-center gap-1 flex-1">
+                              <input
+                                type="text"
+                                value={editCropName}
+                                onChange={(e) => setEditCropName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSaveCropName(region.id)
+                                  if (e.key === 'Escape') {
+                                    setEditingCropName(null)
+                                    setEditCropName('')
+                                  }
+                                }}
+                                className="input text-xs py-1 px-2 w-full"
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleSaveCropName(region.id)
+                                }}
+                                className="p-1 bg-emerald-500 text-white rounded hover:bg-emerald-400"
+                              >
+                                <Check className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-sm text-slate-700 dark:text-slate-300 truncate">
+                              {region.name}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          {editingCropName !== region.id && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingCropName(region.id)
+                                setEditCropName(region.name)
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                            </button>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteCropRegion(region.id)
+                            }}
+                            className="p-1 text-slate-400 hover:text-red-500"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                      <input
+                        type="checkbox"
+                        checked={deleteOriginalAfterSplit}
+                        onChange={(e) => setDeleteOriginalAfterSplit(e.target.checked)}
+                        className="rounded border-slate-300 dark:border-slate-600 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      Delete original floor after split
+                    </label>
+                    
+                    <button
+                      onClick={handleSplitFloor}
+                      disabled={isSplitting || cropRegions.length === 0}
+                      className="w-full btn bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center gap-2"
+                    >
+                      {isSplitting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Splitting...
+                        </>
+                      ) : (
+                        <>
+                          <Scissors className="w-4 h-4" />
+                          Split into {cropRegions.length} Floor{cropRegions.length > 1 ? 's' : ''}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          
           {/* Actions */}
           <div className="p-4 border-b border-slate-200 dark:border-slate-700">
             <h3 className="font-medium text-slate-900 dark:text-white mb-3">Detection</h3>

@@ -18,7 +18,13 @@ __all__ = [
     'create_audit_log_doc',
     'create_project_member_doc',
     'create_dictionary_entry_doc',
-    'dictionary_entry_to_dict'
+    'dictionary_entry_to_dict',
+    'create_sign_table_doc',
+    'create_sign_row',
+    'sign_table_to_dict',
+    'create_processing_job_doc',
+    'create_processing_file_doc',
+    'processing_job_to_dict'
 ]
 
 
@@ -170,13 +176,14 @@ def create_project_member_doc(project_id, user_id, role='member', added_by=None)
     }
 
 
-def create_dictionary_entry_doc(english, chinese_list, created_by=None):
-    """Create a dictionary entry document for English-Chinese translation pairs.
+def create_dictionary_entry_doc(english, chinese_list, created_by=None, sign=''):
+    """Create a dictionary entry document for English-Sign-Chinese translation entries.
     
     Args:
         english: The English word (primary key)
         chinese_list: A list of Chinese translations, or a single string
         created_by: User ID who created the entry
+        sign: The sign name/code corresponding to this English word
     """
     # Normalize chinese to a list
     if isinstance(chinese_list, str):
@@ -188,6 +195,7 @@ def create_dictionary_entry_doc(english, chinese_list, created_by=None):
     
     return {
         'english': english.strip() if english else '',
+        'sign': sign.strip() if sign else '',  # Sign name/code for this English word
         'chinese': chinese_list,  # Array of Chinese translations
         'created_by': ObjectId(created_by) if created_by else None,
         'created_at': datetime.utcnow(),
@@ -208,8 +216,133 @@ def dictionary_entry_to_dict(entry_doc):
     return {
         'id': str(entry_doc['_id']),
         'english': entry_doc.get('english', ''),
+        'sign': entry_doc.get('sign', ''),  # Sign name/code for this English word
         'chinese': chinese,  # Always return as array
         'created_by': str(entry_doc['created_by']) if entry_doc.get('created_by') else None,
         'created_at': entry_doc['created_at'].isoformat() if entry_doc.get('created_at') else None,
         'updated_at': entry_doc['updated_at'].isoformat() if entry_doc.get('updated_at') else None
+    }
+
+
+def create_sign_row(row_number, sign_no, floor_counts, sign='', english='', chinese=''):
+    """Create a sign row for the sign table.
+    
+    Args:
+        row_number: Auto-incremented row number (1-based)
+        sign_no: The extracted sign number from OCR
+        floor_counts: Dict mapping floor names to counts, e.g., {"21/F": 3, "22/F": 2}
+        sign: Optional sign description (user fills)
+        english: Optional English translation (user fills, with autocomplete)
+        chinese: Optional Chinese translation (auto-filled from dictionary)
+    """
+    return {
+        'row_number': row_number,
+        'sign_no': sign_no,
+        'sign': sign,
+        'english': english,
+        'chinese': chinese,
+        'floor_counts': floor_counts or {}
+    }
+
+
+def create_sign_table_doc(project_id, rows, floorplan_columns):
+    """Create a sign table document for a project.
+    
+    Args:
+        project_id: The project ID this sign table belongs to
+        rows: List of sign rows created by create_sign_row()
+        floorplan_columns: List of floorplan names that become dynamic columns
+    """
+    return {
+        'project_id': ObjectId(project_id),
+        'rows': rows or [],
+        'floorplan_columns': floorplan_columns or [],
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow()
+    }
+
+
+def sign_table_to_dict(sign_table_doc):
+    """Convert sign table document to dict for JSON response."""
+    if not sign_table_doc:
+        return None
+    
+    return {
+        'id': str(sign_table_doc['_id']),
+        'project_id': str(sign_table_doc['project_id']),
+        'rows': sign_table_doc.get('rows', []),
+        'floorplan_columns': sign_table_doc.get('floorplan_columns', []),
+        'created_at': sign_table_doc['created_at'].isoformat() if sign_table_doc.get('created_at') else None,
+        'updated_at': sign_table_doc['updated_at'].isoformat() if sign_table_doc.get('updated_at') else None
+    }
+
+
+def create_processing_file_doc(filename, status='pending'):
+    """Create a processing file entry for batch upload jobs.
+    
+    Args:
+        filename: Original filename of the PDF
+        status: Current processing status
+            - 'pending': Waiting to be processed
+            - 'uploading': File is being uploaded
+            - 'converting': Converting PDF to images
+            - 'detecting': Running shape detection
+            - 'ocr': Running OCR on detected shapes
+            - 'completed': Successfully processed
+            - 'error': Processing failed
+    """
+    return {
+        'filename': filename,
+        'status': status,
+        'progress': 0,  # 0-100 percentage
+        'error': None,
+        'floorplan_ids': [],  # IDs of created floorplans (one per page)
+        'pages_total': 0,
+        'pages_processed': 0,
+        'shapes_detected': 0,
+        'started_at': None,
+        'completed_at': None
+    }
+
+
+def create_processing_job_doc(project_id, user_id, files):
+    """Create a processing job document for batch PDF upload.
+    
+    Args:
+        project_id: The project ID this job belongs to
+        user_id: User who initiated the upload
+        files: List of file info dicts created by create_processing_file_doc()
+    """
+    import uuid
+    return {
+        'job_id': str(uuid.uuid4()),
+        'project_id': ObjectId(project_id),
+        'user_id': ObjectId(user_id),
+        'status': 'pending',  # pending, processing, completed, error
+        'total_files': len(files),
+        'processed_files': 0,
+        'files': files,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+        'completed_at': None
+    }
+
+
+def processing_job_to_dict(job_doc):
+    """Convert processing job document to dict for JSON response."""
+    if not job_doc:
+        return None
+    
+    return {
+        'id': str(job_doc['_id']),
+        'job_id': job_doc['job_id'],
+        'project_id': str(job_doc['project_id']),
+        'user_id': str(job_doc['user_id']),
+        'status': job_doc['status'],
+        'total_files': job_doc['total_files'],
+        'processed_files': job_doc['processed_files'],
+        'files': job_doc.get('files', []),
+        'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
+        'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
+        'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None
     }

@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 
@@ -613,4 +614,83 @@ class CVService:
         
         cv2.imwrite(output_path, img)
         return output_path
+    
+    def crop_image(self, image_path, regions, output_dir):
+        """Crop an image into multiple regions and save each as a separate file.
+        
+        Args:
+            image_path: Path to the source image file
+            regions: List of crop region dictionaries with x, y, width, height, and optional name
+            output_dir: Directory to save cropped images
+            
+        Returns:
+            List of dictionaries with cropped image info: {path, name, x, y, width, height}
+        """
+        img, _ = self.load_image(image_path)
+        img_height, img_width = img.shape[:2]
+        
+        cropped_images = []
+        
+        for idx, region in enumerate(regions):
+            # Get region coordinates with bounds checking
+            x = max(0, int(region['x']))
+            y = max(0, int(region['y']))
+            width = int(region['width'])
+            height = int(region['height'])
+            
+            # Ensure we don't go out of bounds
+            x2 = min(img_width, x + width)
+            y2 = min(img_height, y + height)
+            
+            # Skip invalid regions
+            if x2 <= x or y2 <= y:
+                continue
+            
+            # Crop the region
+            cropped = img[y:y2, x:x2]
+            
+            # Generate output filename
+            region_name = region.get('name', f'crop_{idx + 1}')
+            # Sanitize the name for use as a filename
+            safe_name = "".join(c for c in region_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            safe_name = safe_name.replace(' ', '_')
+            if not safe_name:
+                safe_name = f'crop_{idx + 1}'
+            
+            output_filename = f"{safe_name}.png"
+            output_path = os.path.join(output_dir, output_filename)
+            
+            # Handle duplicate filenames
+            counter = 1
+            while os.path.exists(output_path):
+                output_filename = f"{safe_name}_{counter}.png"
+                output_path = os.path.join(output_dir, output_filename)
+                counter += 1
+            
+            # Save the cropped image
+            cv2.imwrite(output_path, cropped)
+            
+            cropped_images.append({
+                'path': output_path,
+                'name': region_name,
+                'x': x,
+                'y': y,
+                'width': x2 - x,
+                'height': y2 - y
+            })
+        
+        return cropped_images
+    
+    def get_image_dimensions(self, image_path):
+        """Get the dimensions of an image.
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            Tuple of (width, height)
+        """
+        img, _ = self.load_image(image_path)
+        height, width = img.shape[:2]
+        return width, height
 
