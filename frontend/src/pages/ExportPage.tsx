@@ -17,6 +17,7 @@ import { useProjectStore } from '../store/projectStore'
 import { 
   getSignTableData,
   updateSignTableCell,
+  updateSignTableFloorCount,
   searchDictionary,
   addToDictionary,
   SignTable,
@@ -27,17 +28,19 @@ import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
-// Editable cell component for Sign column
+// Editable cell component for Sign and Sign No columns
 function EditableCell({ 
   value, 
   rowNumber, 
   field,
-  onSave 
+  onSave,
+  className = ''
 }: { 
   value: string
   rowNumber: number
-  field: 'sign'
-  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => Promise<SignTableCellUpdateResponse>
+  field: 'sign' | 'sign_no'
+  onSave: (rowNumber: number, field: 'sign' | 'english' | 'chinese' | 'sign_no', value: string) => Promise<SignTableCellUpdateResponse>
+  className?: string
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
@@ -104,10 +107,104 @@ function EditableCell({
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-slate-700/50"
+      className={clsx(
+        "px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-slate-700/50",
+        className
+      )}
       title="Click to edit"
     >
       {value !== '' ? value : <span className="text-slate-500">—</span>}
+    </div>
+  )
+}
+
+// Editable cell component for floor counts (numbers)
+function EditableFloorCountCell({ 
+  value, 
+  rowNumber, 
+  floorName,
+  onSave 
+}: { 
+  value: number
+  rowNumber: number
+  floorName: string
+  onSave: (rowNumber: number, floorName: string, value: number) => Promise<SignTableCellUpdateResponse>
+}) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editValue, setEditValue] = useState(String(value || ''))
+  const [isSaving, setIsSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setEditValue(String(value || ''))
+  }, [value])
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [isEditing])
+
+  const handleSave = async () => {
+    const numValue = parseInt(editValue) || 0
+    if (numValue === value) {
+      setIsEditing(false)
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      await onSave(rowNumber, floorName, numValue)
+      setIsEditing(false)
+    } catch {
+      toast.error('Failed to save')
+      setEditValue(String(value || ''))
+    }
+    setIsSaving(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleSave()
+    } else if (e.key === 'Escape') {
+      setEditValue(String(value || ''))
+      setIsEditing(false)
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <div className="relative">
+        <input
+          ref={inputRef}
+          type="number"
+          min="0"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={handleSave}
+          onKeyDown={handleKeyDown}
+          disabled={isSaving}
+          className="w-full px-2 py-1 text-sm text-center bg-white dark:bg-slate-700 border-2 border-emerald-500 rounded focus:outline-none"
+        />
+        {isSaving && (
+          <Loader2 className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-emerald-500" />
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      onClick={() => setIsEditing(true)}
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm text-center hover:bg-emerald-500/10"
+      title="Click to edit"
+    >
+      {value > 0 ? (
+        <span className="text-emerald-400 font-medium">{value}</span>
+      ) : (
+        <span className="text-slate-600">—</span>
+      )}
     </div>
   )
 }
@@ -305,6 +402,10 @@ function EnglishAutocompleteCell({
             {suggestions.map((suggestion, idx) => (
               <div
                 key={suggestion.english}
+                onMouseDown={(e) => {
+                  // Prevent blur from firing before click
+                  e.preventDefault()
+                }}
                 onClick={() => handleSelectSuggestion(suggestion)}
                 className={clsx(
                   'px-3 py-2 cursor-pointer text-sm border-b border-slate-700 last:border-0',
@@ -728,7 +829,7 @@ function SignTablePreview({
     fetchChineseOptions()
   }, [signTable?.rows])
 
-  const handleCellSave = async (rowNumber: number, field: 'sign' | 'english' | 'chinese', value: string) => {
+  const handleCellSave = async (rowNumber: number, field: 'sign' | 'english' | 'chinese' | 'sign_no', value: string) => {
     const result = await updateSignTableCell(projectId, rowNumber, field, value)
     
     // Update local state using functional update to avoid stale closure
@@ -761,6 +862,30 @@ function SignTablePreview({
     if (result.dictionary_updated) {
       toast.success('Dictionary updated with Sign')
     }
+    
+    return result
+  }
+
+  const handleFloorCountSave = async (rowNumber: number, floorName: string, value: number) => {
+    const result = await updateSignTableFloorCount(projectId, rowNumber, floorName, value)
+    
+    // Update local state
+    setSignTable(prev => {
+      if (!prev) return prev
+      const newRows = prev.rows.map(row => {
+        if (row.row_number === rowNumber) {
+          const updatedFloorCounts = { ...row.floor_counts }
+          if (value > 0) {
+            updatedFloorCounts[floorName] = value
+          } else {
+            delete updatedFloorCounts[floorName]
+          }
+          return { ...row, floor_counts: updatedFloorCounts }
+        }
+        return row
+      })
+      return { ...prev, rows: newRows }
+    })
     
     return result
   }
@@ -929,9 +1054,15 @@ function SignTablePreview({
                 {row.row_number}
               </td>
               
-              {/* Sign No. (extracted, read-only) */}
-              <td className="px-3 py-1 text-white font-mono bg-slate-800/30">
-                {row.sign_no}
+              {/* Sign No. (editable) */}
+              <td className="px-1 py-0.5 bg-slate-800/30">
+                <EditableCell
+                  value={row.sign_no}
+                  rowNumber={row.row_number}
+                  field="sign_no"
+                  onSave={handleCellSave}
+                  className="font-mono text-white"
+                />
               </td>
               
               {/* Sign (editable) */}
@@ -980,19 +1111,20 @@ function SignTablePreview({
                 )}
               </td>
               
-              {/* Floor count columns */}
+              {/* Floor count columns (editable) */}
               {floorColumns.map((floorName) => {
                 const count = row.floor_counts[floorName] || 0
                 return (
                   <td 
                     key={`${row.row_number}-${floorName}`}
-                    className="px-3 py-1.5 text-center bg-emerald-900/5"
+                    className="px-1 py-0.5 bg-emerald-900/5"
                   >
-                    {count > 0 ? (
-                      <span className="text-emerald-400 font-medium">{count}</span>
-                    ) : (
-                      <span className="text-slate-600">—</span>
-                    )}
+                    <EditableFloorCountCell
+                      value={count}
+                      rowNumber={row.row_number}
+                      floorName={floorName}
+                      onSave={handleFloorCountSave}
+                    />
                   </td>
                 )
               })}

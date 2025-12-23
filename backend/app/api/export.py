@@ -680,12 +680,18 @@ def update_sign_table(project_id):
     row_number = data.get('row_number')
     field = data.get('field')
     value = data.get('value', '')
+    floor_name = data.get('floor_name')  # For floor_count updates
     
     if row_number is None:
         return jsonify({'error': 'row_number is required'}), 400
     
-    if field not in ['sign', 'english', 'chinese']:
-        return jsonify({'error': 'field must be one of: sign, english, chinese'}), 400
+    valid_fields = ['sign', 'english', 'chinese', 'sign_no', 'floor_count']
+    if field not in valid_fields:
+        return jsonify({'error': f'field must be one of: {", ".join(valid_fields)}'}), 400
+    
+    # Floor count updates require floor_name
+    if field == 'floor_count' and not floor_name:
+        return jsonify({'error': 'floor_name is required for floor_count updates'}), 400
     
     # Get existing sign table
     sign_table = mongo.db.project_sign_data.find_one({
@@ -706,7 +712,24 @@ def update_sign_table(project_id):
     for row in rows:
         if row['row_number'] == row_number:
             current_english = row.get('english', '')
-            row[field] = value
+            
+            # Handle floor_count updates specially
+            if field == 'floor_count':
+                if 'floor_counts' not in row:
+                    row['floor_counts'] = {}
+                # Convert value to integer (0 or empty means remove)
+                try:
+                    count = int(value) if value else 0
+                except ValueError:
+                    count = 0
+                
+                if count > 0:
+                    row['floor_counts'][floor_name] = count
+                elif floor_name in row['floor_counts']:
+                    del row['floor_counts'][floor_name]
+            else:
+                row[field] = value
+            
             updated = True
             
             # Auto-fill Sign and Chinese when English is updated
@@ -769,6 +792,10 @@ def update_sign_table(project_id):
         'field': field,
         'value': value
     }
+    
+    # Include floor_name for floor_count updates
+    if field == 'floor_count' and floor_name:
+        response['floor_name'] = floor_name
     
     if sign_auto_filled:
         response['sign_auto_filled'] = sign_auto_filled
