@@ -21,7 +21,10 @@ __all__ = [
     'dictionary_entry_to_dict',
     'create_sign_table_doc',
     'create_sign_row',
-    'sign_table_to_dict'
+    'sign_table_to_dict',
+    'create_processing_job_doc',
+    'create_processing_file_doc',
+    'processing_job_to_dict'
 ]
 
 
@@ -271,4 +274,75 @@ def sign_table_to_dict(sign_table_doc):
         'floorplan_columns': sign_table_doc.get('floorplan_columns', []),
         'created_at': sign_table_doc['created_at'].isoformat() if sign_table_doc.get('created_at') else None,
         'updated_at': sign_table_doc['updated_at'].isoformat() if sign_table_doc.get('updated_at') else None
+    }
+
+
+def create_processing_file_doc(filename, status='pending'):
+    """Create a processing file entry for batch upload jobs.
+    
+    Args:
+        filename: Original filename of the PDF
+        status: Current processing status
+            - 'pending': Waiting to be processed
+            - 'uploading': File is being uploaded
+            - 'converting': Converting PDF to images
+            - 'detecting': Running shape detection
+            - 'ocr': Running OCR on detected shapes
+            - 'completed': Successfully processed
+            - 'error': Processing failed
+    """
+    return {
+        'filename': filename,
+        'status': status,
+        'progress': 0,  # 0-100 percentage
+        'error': None,
+        'floorplan_ids': [],  # IDs of created floorplans (one per page)
+        'pages_total': 0,
+        'pages_processed': 0,
+        'shapes_detected': 0,
+        'started_at': None,
+        'completed_at': None
+    }
+
+
+def create_processing_job_doc(project_id, user_id, files):
+    """Create a processing job document for batch PDF upload.
+    
+    Args:
+        project_id: The project ID this job belongs to
+        user_id: User who initiated the upload
+        files: List of file info dicts created by create_processing_file_doc()
+    """
+    import uuid
+    return {
+        'job_id': str(uuid.uuid4()),
+        'project_id': ObjectId(project_id),
+        'user_id': ObjectId(user_id),
+        'status': 'pending',  # pending, processing, completed, error
+        'total_files': len(files),
+        'processed_files': 0,
+        'files': files,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+        'completed_at': None
+    }
+
+
+def processing_job_to_dict(job_doc):
+    """Convert processing job document to dict for JSON response."""
+    if not job_doc:
+        return None
+    
+    return {
+        'id': str(job_doc['_id']),
+        'job_id': job_doc['job_id'],
+        'project_id': str(job_doc['project_id']),
+        'user_id': str(job_doc['user_id']),
+        'status': job_doc['status'],
+        'total_files': job_doc['total_files'],
+        'processed_files': job_doc['processed_files'],
+        'files': job_doc.get('files', []),
+        'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
+        'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
+        'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None
     }

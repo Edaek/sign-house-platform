@@ -2,13 +2,28 @@ import os
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from werkzeug.utils import secure_filename
 from bson import ObjectId
 from app import mongo
-from app.models import serialize_doc, create_extracted_data_doc, create_floorplan_doc
+from app.models import (
+    serialize_doc, 
+    create_extracted_data_doc, 
+    create_floorplan_doc,
+    create_processing_job_doc,
+    create_processing_file_doc,
+    processing_job_to_dict
+)
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService
+from app.services.batch_processor import start_batch_processing
+from app.utils.permissions import require_project_access, require_project_modify
 
 processing_bp = Blueprint('processing', __name__)
+
+
+def allowed_file(filename, allowed_extensions):
+    """Check if file extension is allowed."""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
 
 
 @processing_bp.route('/detect/<floorplan_id>', methods=['POST'])
@@ -604,3 +619,126 @@ def get_image_dimensions(floorplan_id):
         }), 200
     except Exception as e:
         return jsonify({'error': f'Failed to get image dimensions: {str(e)}'}), 500
+
+
+@processing_bp.route('/batch-upload/<project_id>', methods=['POST'])
+@jwt_required()
+@require_project_modify
+def batch_upload_floorplans(project_id, _user=None, _project=None):
+    """Upload multiple PDF floorplans with automatic shape detection and OCR.
+    
+    Files are processed in the background. Returns a job ID for status polling.
+    """
+    user_id = get_jwt_identity()
+    
+    if 'files' not in request.files:
+        return jsonify({'error': 'No files provided'}), 400
+    
+    files = request.files.getlist('files')
+    
+    if not files or all(f.filename == '' for f in files):
+        return jsonify({'error': 'No files selected'}), 400
+    
+    # Validate all files are PDFs
+    valid_files = []
+    for file in files:
+        if file.filename and allowed_file(file.filename, {'pdf'}):
+            valid_files.append(file)
+    
+    if not valid_files:
+        return jsonify({'error': 'No valid PDF files provided'}), 400
+    
+    # Create PDF directory
+    pdf_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'pdfs', project_id)
+    os.makedirs(pdf_dir, exist_ok=True)
+    
+    # Save files and prepare job
+    files_info = []
+    job_files = []
+    
+    for idx, file in enumerate(valid_files):
+        filename = secure_filename(file.filename)
+        filepath = os.path.join(pdf_dir, filename)
+        
+        # Handle duplicate filenames
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(filepath):
+            filename = f"{base}_{counter}{ext}"
+            filepath = os.path.join(pdf_dir, filename)
+            counter += 1
+        
+        file.save(filepath)
+        
+        files_info.append({
+            'index': idx,
+            'filename': filename,
+            'file_path': filepath
+        })
+        job_files.append(create_processing_file_doc(filename))
+    
+    # Create job document
+    job_doc = create_processing_job_doc(project_id, user_id, job_files)
+    result = mongo.db.processing_jobs.insert_one(job_doc)
+    job_doc['_id'] = result.inserted_id
+    
+    # Extract config values needed for processing
+    config = {
+        'TITLE_REGION_X_START': current_app.config.get('TITLE_REGION_X_START', 60),
+        'TITLE_REGION_Y_START': current_app.config.get('TITLE_REGION_Y_START', 85),
+        'TITLE_REGION_WIDTH': current_app.config.get('TITLE_REGION_WIDTH', 40),
+        'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15)
+    }
+    
+    # Start background processing
+    start_batch_processing(
+        job_id=job_doc['job_id'],
+        files_info=files_info,
+        project_id=project_id,
+        upload_folder=current_app.config['UPLOAD_FOLDER'],
+        config=config
+    )
+    
+    return jsonify({
+        'message': f'Started processing {len(valid_files)} PDF files',
+        'job': processing_job_to_dict(job_doc)
+    }), 202
+
+
+@processing_bp.route('/batch-upload/<project_id>/status', methods=['GET'])
+@jwt_required()
+@require_project_access
+def get_batch_upload_status(project_id, _user=None, _project=None):
+    """Get the status of the current batch upload job for a project."""
+    
+    # Get the most recent job for this project
+    job = mongo.db.processing_jobs.find_one(
+        {'project_id': ObjectId(project_id)},
+        sort=[('created_at', -1)]
+    )
+    
+    if not job:
+        return jsonify({'error': 'No batch upload job found'}), 404
+    
+    return jsonify({
+        'job': processing_job_to_dict(job)
+    }), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/job/<job_id>', methods=['GET'])
+@jwt_required()
+@require_project_access
+def get_batch_job_status(project_id, job_id, _user=None, _project=None):
+    """Get the status of a specific batch upload job."""
+    
+    job = mongo.db.processing_jobs.find_one({
+        'job_id': job_id,
+        'project_id': ObjectId(project_id)
+    })
+    
+    if not job:
+        return jsonify({'error': 'Batch upload job not found'}), 404
+    
+    return jsonify({
+        'job': processing_job_to_dict(job)
+    }), 200

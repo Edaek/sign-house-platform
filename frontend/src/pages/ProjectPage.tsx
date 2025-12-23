@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { 
@@ -10,20 +10,35 @@ import {
   AlertCircle,
   Download,
   ChevronLeft,
-  Users
+  Users,
+  FileText,
+  X
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
+import BatchUploadProgress from '../components/BatchUploadProgress'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
-  const { currentProject, fetchProject, uploadFloorplan, isLoading } = useProjectStore()
-  const [uploadingFloorplan, setUploadingFloorplan] = useState(false)
+  const { 
+    currentProject, 
+    fetchProject, 
+    uploadFloorplans,
+    pollBatchStatus,
+    currentBatchJob,
+    isBatchUploading,
+    clearBatchJob,
+    isLoading 
+  } = useProjectStore()
   const [showMembersModal, setShowMembersModal] = useState(false)
+  const [showBatchProgress, setShowBatchProgress] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   
   const floorplanInputRef = useRef<HTMLInputElement>(null)
+  const dropZoneRef = useRef<HTMLDivElement>(null)
   
   useEffect(() => {
     if (projectId) {
@@ -31,19 +46,86 @@ export default function ProjectPage() {
     }
   }, [projectId, fetchProject])
   
-  const handleFloorplanUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file || !projectId) return
-    
-    setUploadingFloorplan(true)
-    try {
-      await uploadFloorplan(projectId, file)
-      toast.success('Floor plan uploaded successfully!')
-    } catch {
-      toast.error('Failed to upload floor plan')
+  // Handle file selection from input
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...files])
     }
-    setUploadingFloorplan(false)
     e.target.value = ''
+  }
+  
+  // Handle drag and drop
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+  
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    // Only set isDragging to false if we're leaving the drop zone entirely
+    if (dropZoneRef.current && !dropZoneRef.current.contains(e.relatedTarget as Node)) {
+      setIsDragging(false)
+    }
+  }, [])
+  
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+  
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    
+    const files = Array.from(e.dataTransfer.files).filter(
+      file => file.type === 'application/pdf'
+    )
+    
+    if (files.length > 0) {
+      setSelectedFiles(prev => [...prev, ...files])
+    } else {
+      toast.error('Please drop PDF files only')
+    }
+  }, [])
+  
+  // Remove a file from selection
+  const removeFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index))
+  }
+  
+  // Start batch upload
+  const handleBatchUpload = async () => {
+    if (!projectId || selectedFiles.length === 0) return
+    
+    try {
+      const job = await uploadFloorplans(projectId, selectedFiles)
+      setSelectedFiles([])
+      setShowBatchProgress(true)
+      toast.success(`Started processing ${job.total_files} PDF files`)
+    } catch {
+      toast.error('Failed to start upload')
+    }
+  }
+  
+  // Poll for batch status
+  const handlePollStatus = useCallback(async () => {
+    if (!projectId || !currentBatchJob) return
+    
+    try {
+      await pollBatchStatus(projectId, currentBatchJob.job_id)
+    } catch {
+      // Silently handle poll errors
+    }
+  }, [projectId, currentBatchJob, pollBatchStatus])
+  
+  // Close batch progress modal
+  const handleCloseBatchProgress = () => {
+    setShowBatchProgress(false)
+    clearBatchJob()
   }
   
   const getStatusIcon = (status: string) => {
@@ -132,7 +214,7 @@ export default function ProjectPage() {
       </div>
       
       {/* Upload Section */}
-      <div className="max-w-xl mb-8">
+      <div className="max-w-2xl mb-8">
         {/* Floorplan Upload */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -145,36 +227,130 @@ export default function ProjectPage() {
               <Layers className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDF</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">Upload multi-page floor plans</p>
+              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDFs</h3>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Upload multiple PDFs - auto shape detection & OCR
+              </p>
             </div>
           </div>
           
-          <button
+          {/* Drop Zone */}
+          <div
+            ref={dropZoneRef}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
             onClick={() => floorplanInputRef.current?.click()}
-            disabled={uploadingFloorplan}
-            className="w-full p-6 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-lg hover:border-sign-500 hover:bg-sign-500/5 transition-colors group"
-          >
-            {uploadingFloorplan ? (
-              <div className="w-6 h-6 border-2 border-slate-500/30 border-t-slate-400 rounded-full animate-spin mx-auto" />
-            ) : (
-              <>
-                <Upload className="w-8 h-8 text-slate-400 group-hover:text-sign-500 dark:group-hover:text-sign-400 mx-auto mb-2 transition-colors" />
-                <p className="text-slate-600 group-hover:text-slate-900 dark:text-slate-400 dark:group-hover:text-white transition-colors">
-                  Click to upload floor plan PDF
-                </p>
-                <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">Multi-page PDF supported</p>
-              </>
+            className={clsx(
+              'w-full p-8 border-2 border-dashed rounded-lg transition-all cursor-pointer',
+              isDragging
+                ? 'border-sign-500 bg-sign-500/10 scale-[1.02]'
+                : 'border-slate-300 dark:border-slate-600 hover:border-sign-500 hover:bg-sign-500/5',
+              isBatchUploading && 'pointer-events-none opacity-50'
             )}
-          </button>
+          >
+            <div className="text-center">
+              <Upload className={clsx(
+                'w-10 h-10 mx-auto mb-3 transition-colors',
+                isDragging ? 'text-sign-500' : 'text-slate-400'
+              )} />
+              <p className={clsx(
+                'font-medium transition-colors',
+                isDragging 
+                  ? 'text-sign-500' 
+                  : 'text-slate-600 dark:text-slate-400'
+              )}>
+                {isDragging ? 'Drop files here' : 'Drag & drop PDF files here'}
+              </p>
+              <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">
+                or click to browse
+              </p>
+              <p className="text-xs text-slate-400 dark:text-slate-600 mt-2">
+                Multiple files supported • Auto shape detection & OCR
+              </p>
+            </div>
+          </div>
           
           <input
             ref={floorplanInputRef}
             type="file"
             accept=".pdf"
-            onChange={handleFloorplanUpload}
+            multiple
+            onChange={handleFileSelect}
             className="hidden"
           />
+          
+          {/* Selected Files List */}
+          {selectedFiles.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Selected Files ({selectedFiles.length})
+                </h4>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setSelectedFiles([])
+                  }}
+                  className="text-xs text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors"
+                >
+                  Clear all
+                </button>
+              </div>
+              
+              <div className="space-y-2 max-h-40 overflow-y-auto">
+                {selectedFiles.map((file, index) => (
+                  <motion.div
+                    key={`${file.name}-${index}`}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"
+                  >
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
+                      <span className="text-sm text-slate-700 dark:text-slate-300 truncate">
+                        {file.name}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-500 flex-shrink-0">
+                        {(file.size / 1024 / 1024).toFixed(1)} MB
+                      </span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        removeFile(index)
+                      }}
+                      className="p-1 text-slate-400 hover:text-red-500 transition-colors flex-shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </motion.div>
+                ))}
+              </div>
+              
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleBatchUpload()
+                }}
+                disabled={isBatchUploading}
+                className="mt-4 w-full btn btn-primary flex items-center justify-center gap-2"
+              >
+                {isBatchUploading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    Upload & Process {selectedFiles.length} File{selectedFiles.length > 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
         </motion.div>
       </div>
       
@@ -266,6 +442,14 @@ export default function ProjectPage() {
           onClose={() => setShowMembersModal(false)}
         />
       )}
+      
+      {/* Batch Upload Progress Modal */}
+      <BatchUploadProgress
+        job={currentBatchJob}
+        isOpen={showBatchProgress}
+        onClose={handleCloseBatchProgress}
+        onPoll={handlePollStatus}
+      />
     </div>
   )
 }
