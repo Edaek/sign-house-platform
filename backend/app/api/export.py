@@ -158,9 +158,9 @@ def export_to_excel(project_id):
         safe_name = re.sub(r'[^\w\s-]', '', project["name"]).strip().replace(' ', '_')
         output_path = os.path.join(output_dir, f'export_{project_id}_{safe_name}.xlsx')
         
-        # Build column headers: #, Sign No., Sign, English, Chinese, [floor columns...]
+        # Build column headers: #, Sign No., Sign, English, Chinese, [floor columns...], Total
         fixed_columns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
-        all_columns = fixed_columns + floorplan_columns
+        all_columns = fixed_columns + floorplan_columns + ['Total']
         
         # Create workbook
         from openpyxl import Workbook
@@ -172,7 +172,7 @@ def export_to_excel(project_id):
         
         # Row 1: Project name (merged across all columns)
         project_name = project.get('name', 'Untitled Project')
-        sheet.cell(row=1, column=1, value=project_name)
+        sheet.cell(row=1, column=1, value=f"Project Name: {project_name}")
         sheet.cell(row=1, column=1).font = Font(bold=True, size=14)
         sheet.cell(row=1, column=1).alignment = Alignment(horizontal='left', vertical='center')
         
@@ -196,16 +196,67 @@ def export_to_excel(project_id):
             
             # Floor count columns
             floor_counts = row_data.get('floor_counts', {})
+            row_total = 0
             for col_offset, floor_name in enumerate(floorplan_columns):
                 count = floor_counts.get(floor_name, 0)
                 if count > 0:
                     sheet.cell(row=row_idx, column=6 + col_offset, value=count)
+                row_total += count
+            
+            # Row total column (last column)
+            total_col_idx = 6 + len(floorplan_columns)
+            if row_total > 0:
+                sheet.cell(row=row_idx, column=total_col_idx, value=row_total)
             
             # Apply cell styles
             for col_idx in range(1, len(all_columns) + 1):
                 cell = sheet.cell(row=row_idx, column=col_idx)
                 cell.alignment = excel_service.cell_style['alignment']
                 cell.border = excel_service.cell_style['border']
+        
+        # Add total row at the bottom
+        total_row_idx = 3 + len(rows)
+        
+        # "Total" label in the Chinese column (column 5)
+        total_label_cell = sheet.cell(row=total_row_idx, column=5, value='Total')
+        total_label_cell.font = excel_service.header_style['font']
+        total_label_cell.fill = excel_service.header_style['fill']
+        total_label_cell.alignment = excel_service.header_style['alignment']
+        total_label_cell.border = excel_service.header_style['border']
+        
+        # Calculate and write column sums for floor columns
+        grand_total = 0
+        for col_offset, floor_name in enumerate(floorplan_columns):
+            col_sum = 0
+            for row_data in rows:
+                floor_counts = row_data.get('floor_counts', {})
+                col_sum += floor_counts.get(floor_name, 0)
+            
+            col_idx = 6 + col_offset
+            cell = sheet.cell(row=total_row_idx, column=col_idx)
+            if col_sum > 0:
+                cell.value = col_sum
+            cell.font = excel_service.header_style['font']
+            cell.fill = excel_service.header_style['fill']
+            cell.alignment = excel_service.header_style['alignment']
+            cell.border = excel_service.header_style['border']
+            grand_total += col_sum
+        
+        # Grand total in the Total column
+        total_col_idx = 6 + len(floorplan_columns)
+        grand_total_cell = sheet.cell(row=total_row_idx, column=total_col_idx)
+        if grand_total > 0:
+            grand_total_cell.value = grand_total
+        grand_total_cell.font = excel_service.header_style['font']
+        grand_total_cell.fill = excel_service.header_style['fill']
+        grand_total_cell.alignment = excel_service.header_style['alignment']
+        grand_total_cell.border = excel_service.header_style['border']
+        
+        # Apply styling to empty cells in total row (columns 1-4)
+        for col_idx in range(1, 5):
+            cell = sheet.cell(row=total_row_idx, column=col_idx)
+            cell.fill = excel_service.header_style['fill']
+            cell.border = excel_service.header_style['border']
         
         # Auto-adjust column widths
         for column_cells in sheet.columns:
