@@ -27,6 +27,20 @@ class CVService:
             'approx_epsilon': 0.02
         }
         
+        # Template-based circle detection parameters
+        self.template_circle_params = {
+            'search_region_ratio': 0.15,  # Upper-right 15% of image
+            'scale_range': (0.8, 1.2),    # 80% to 120% of template size
+            'scale_steps': 10,            # Number of scale variations
+            'match_threshold': 0.5,       # Minimum correlation score (lower for edge matching)
+            'nms_iou_threshold': 0.3,     # NMS overlap threshold (tighter to avoid duplicates)
+            # Blue color range in HSV (covers typical blue markers)
+            'lower_blue': np.array([100, 50, 50]),
+            'upper_blue': np.array([130, 255, 255]),
+            'template_padding': 5,        # Padding around extracted template
+            'min_circularity': 0.6,       # Minimum circularity score for template detection
+        }
+        
         # Red rectangle detection parameters
         self.red_rect_params = {
             'min_area': 1400,  # Increased to filter small false positives
@@ -130,6 +144,598 @@ class CVService:
                 })
         
         return detected
+    
+    def _extract_template_from_corner(self, img):
+        """Extract a circle template from the upper-right corner of the image.
+        
+        Looks for a blue circle in the upper-right region and extracts it as a template.
+        
+        Args:
+            img: BGR image (numpy array)
+            
+        Returns:
+            Tuple of (template_image, template_center, template_radius) or (None, None, None) if not found
+        """
+        h, w = img.shape[:2]
+        ratio = self.template_circle_params['search_region_ratio']
+        
+        # Crop upper-right region
+        search_w = int(w * ratio)
+        search_h = int(h * ratio)
+        search_region = img[0:search_h, w - search_w:w]
+        
+        # Convert to HSV and filter for blue
+        hsv = cv2.cvtColor(search_region, cv2.COLOR_BGR2HSV)
+        lower_blue = self.template_circle_params['lower_blue']
+        upper_blue = self.template_circle_params['upper_blue']
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        
+        # Find contours in the blue mask
+        contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None, None, None
+        
+        # Find the most circular contour
+        best_contour = None
+        best_circularity = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 100:  # Skip tiny contours
+                continue
+            
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            
+            # Circularity: 4 * pi * area / perimeter^2 (1.0 for perfect circle)
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            if circularity > best_circularity and circularity >= self.template_circle_params['min_circularity']:
+                best_circularity = circularity
+                best_contour = contour
+        
+        if best_contour is None:
+            return None, None, None
+        
+        # Get bounding circle for the best contour
+        (cx, cy), radius = cv2.minEnclosingCircle(best_contour)
+        cx, cy, radius = int(cx), int(cy), int(radius)
+        
+        # Extract template with padding
+        padding = self.template_circle_params['template_padding']
+        x1 = max(0, cx - radius - padding)
+        y1 = max(0, cy - radius - padding)
+        x2 = min(search_region.shape[1], cx + radius + padding)
+        y2 = min(search_region.shape[0], cy + radius + padding)
+        
+        template = search_region[y1:y2, x1:x2].copy()
+        
+        # Return template and its properties (center relative to template, radius)
+        template_center = (cx - x1, cy - y1)
+        
+        return template, template_center, radius
+    
+    def _multi_scale_template_match(self, img, template, scale_range, scale_steps, threshold):
+        """Perform multi-scale template matching using edge detection.
+        
+        Uses Canny edge detection on both template and image to match
+        the circle outline pattern rather than pixel colors (which vary
+        due to different text labels inside each circle).
+        
+        Args:
+            img: Source image (BGR)
+            template: Template image (BGR)
+            scale_range: Tuple of (min_scale, max_scale)
+            scale_steps: Number of scale steps
+            threshold: Minimum correlation threshold
+            
+        Returns:
+            List of (x, y, w, h, score, scale) tuples for all matches
+        """
+        matches = []
+        template_h, template_w = template.shape[:2]
+        
+        # Convert to grayscale and apply edge detection for matching
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img_edges = cv2.Canny(img_gray, 50, 150)
+        
+        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+        template_edges = cv2.Canny(template_gray, 50, 150)
+        
+        # Generate scale factors
+        min_scale, max_scale = scale_range
+        scales = np.linspace(min_scale, max_scale, scale_steps)
+        
+        for scale in scales:
+            # Resize template edges
+            new_w = int(template_w * scale)
+            new_h = int(template_h * scale)
+            
+            if new_w < 10 or new_h < 10:
+                continue
+            
+            scaled_template = cv2.resize(template_edges, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            
+            # Skip if template is larger than image
+            if new_w > img_edges.shape[1] or new_h > img_edges.shape[0]:
+                continue
+            
+            # Template matching on edge images
+            result = cv2.matchTemplate(img_edges, scaled_template, cv2.TM_CCOEFF_NORMED)
+            
+            # Find all locations above threshold
+            locations = np.where(result >= threshold)
+            
+            for pt in zip(*locations[::-1]):  # Switch x and y
+                x, y = pt
+                score = result[y, x]
+                matches.append((x, y, new_w, new_h, score, scale))
+        
+        return matches
+    
+    def _non_maximum_suppression(self, matches, iou_threshold):
+        """Apply non-maximum suppression to remove overlapping detections.
+        
+        Args:
+            matches: List of (x, y, w, h, score, scale) tuples
+            iou_threshold: IoU threshold for suppression
+            
+        Returns:
+            Filtered list of matches
+        """
+        if not matches:
+            return []
+        
+        # Sort by score (descending)
+        matches = sorted(matches, key=lambda m: m[4], reverse=True)
+        
+        kept = []
+        
+        for match in matches:
+            x1, y1, w1, h1, score1, scale1 = match
+            
+            # Check if this match overlaps with any kept match
+            is_suppressed = False
+            
+            for kept_match in kept:
+                x2, y2, w2, h2, _, _ = kept_match
+                
+                # Calculate IoU
+                iou = self._calculate_iou(x1, y1, w1, h1, x2, y2, w2, h2)
+                
+                if iou > iou_threshold:
+                    is_suppressed = True
+                    break
+            
+            if not is_suppressed:
+                kept.append(match)
+        
+        return kept
+    
+    def _calculate_iou(self, x1, y1, w1, h1, x2, y2, w2, h2):
+        """Calculate Intersection over Union for two rectangles.
+        
+        Args:
+            x1, y1, w1, h1: First rectangle
+            x2, y2, w2, h2: Second rectangle
+            
+        Returns:
+            IoU value (0.0 to 1.0)
+        """
+        # Calculate intersection
+        xi1 = max(x1, x2)
+        yi1 = max(y1, y2)
+        xi2 = min(x1 + w1, x2 + w2)
+        yi2 = min(y1 + h1, y2 + h2)
+        
+        if xi2 <= xi1 or yi2 <= yi1:
+            return 0.0
+        
+        intersection = (xi2 - xi1) * (yi2 - yi1)
+        
+        # Calculate union
+        area1 = w1 * h1
+        area2 = w2 * h2
+        union = area1 + area2 - intersection
+        
+        if union == 0:
+            return 0.0
+        
+        return intersection / union
+    
+    def _verify_blue_circle(self, img, x, y, w, h):
+        """Verify that a detected region contains a blue circle outline.
+        
+        Args:
+            img: BGR image
+            x, y, w, h: Bounding box of detected region
+            
+        Returns:
+            True if the region contains significant blue pixels (likely a circle marker)
+        """
+        # Extract region with bounds checking
+        y1 = max(0, y)
+        y2 = min(img.shape[0], y + h)
+        x1 = max(0, x)
+        x2 = min(img.shape[1], x + w)
+        
+        if y2 <= y1 or x2 <= x1:
+            return False
+        
+        region = img[y1:y2, x1:x2]
+        
+        # Convert to HSV and check for blue pixels
+        hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+        lower_blue = self.template_circle_params['lower_blue']
+        upper_blue = self.template_circle_params['upper_blue']
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        
+        # Calculate percentage of blue pixels
+        blue_ratio = np.sum(blue_mask > 0) / blue_mask.size
+        
+        # Expect at least 5% blue pixels for a circle outline
+        return blue_ratio >= 0.05
+    
+    def detect_circles_by_template(self, image_path, params=None):
+        """Detect circles matching the sample from upper-right corner.
+        
+        Uses the sample circle to learn:
+        1. The exact COLOR (BGR values from sample)
+        2. The exact SIZE (radius)
+        
+        Then finds all circles across the floorplan matching the sample.
+        
+        Args:
+            image_path: Path to the image file
+            params: Optional dictionary of detection parameters
+            
+        Returns:
+            List of detected circles with bounding box info
+        """
+        if params:
+            self.template_circle_params.update(params)
+        
+        img, gray = self.load_image(image_path)
+        h, w = img.shape[:2]
+        
+        # Step 1: Extract sample circle from upper-right corner and learn its properties
+        sample_info = self._analyze_sample_circle(img)
+        
+        if sample_info is None:
+            return []  # No sample circle found
+        
+        target_radius = sample_info['radius']
+        sample_bgr = sample_info['bgr_color']
+        sample_location = sample_info.get('location')  # (cx, cy) of sample in full image
+        
+        # Step 2: Create color mask - find pixels similar to sample color
+        # Using BGR color distance
+        b, g, r = cv2.split(img)
+        
+        # Method 1: Blue channel dominant (same as sample detection)
+        threshold = 30
+        blue_dominant = ((b.astype(int) > r.astype(int) + threshold) & 
+                         (b.astype(int) > g.astype(int) + threshold) &
+                         (b > 100))
+        
+        # Method 2: Also check color distance from sample
+        color_dist = np.sqrt(
+            (b.astype(float) - sample_bgr[0]) ** 2 +
+            (g.astype(float) - sample_bgr[1]) ** 2 +
+            (r.astype(float) - sample_bgr[2]) ** 2
+        )
+        color_tolerance = 80  # Allow some color variation
+        color_similar = color_dist < color_tolerance
+        
+        # Combine: pixel must be blue-dominant AND similar to sample color
+        color_mask = (blue_dominant & color_similar).astype(np.uint8) * 255
+        
+        # Step 3: Find circles in the color mask using Hough Circles
+        # Dilate to connect outline pixels
+        kernel = np.ones((2, 2), np.uint8)
+        color_mask_dilated = cv2.dilate(color_mask, kernel, iterations=1)
+        
+        # Blur for better detection
+        color_mask_blurred = cv2.GaussianBlur(color_mask_dilated, (5, 5), 1)
+        
+        # Size tolerance: 25%
+        size_tolerance = 0.25
+        min_radius = max(5, int(target_radius * (1 - size_tolerance)))
+        max_radius = int(target_radius * (1 + size_tolerance))
+        
+        # Hough Circle detection
+        circles = cv2.HoughCircles(
+            color_mask_blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=int(target_radius * 1.5),  # Minimum distance between circles
+            param1=50,
+            param2=15,  # Lower = more sensitive
+            minRadius=min_radius,
+            maxRadius=max_radius
+        )
+        
+        detected = []
+        
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+            
+            for (cx, cy, radius) in circles:
+                # Skip the sample circle itself (in upper-right corner)
+                if sample_location:
+                    sample_cx, sample_cy = sample_location
+                    dist_to_sample = np.sqrt((cx - sample_cx) ** 2 + (cy - sample_cy) ** 2)
+                    if dist_to_sample < target_radius * 2:  # Within 2x radius of sample
+                        continue
+                
+                # Verify this location actually has blue pixels (not a false positive)
+                if not self._verify_circle_has_color(color_mask, cx, cy, radius):
+                    continue
+                
+                # Calculate bounding box
+                x = max(0, cx - radius)
+                y = max(0, cy - radius)
+                width = min(radius * 2, w - x)
+                height = min(radius * 2, h - y)
+                
+                detected.append({
+                    'type': 'circle',
+                    'center_x': int(cx),
+                    'center_y': int(cy),
+                    'radius': int(radius),
+                    'x': int(x),
+                    'y': int(y),
+                    'width': int(width),
+                    'height': int(height),
+                    'confidence': 1.0
+                })
+        
+        # Remove duplicates
+        detected = self._remove_duplicate_circles(detected, min_distance=target_radius)
+        
+        # Sort by position (top-left to bottom-right)
+        detected.sort(key=lambda c: (c['y'], c['x']))
+        
+        return detected
+    
+    def _verify_circle_has_color(self, color_mask, cx, cy, radius):
+        """Verify that a detected circle location actually has colored pixels.
+        
+        Checks that there are colored pixels along the circle perimeter.
+        
+        Args:
+            color_mask: Binary mask of colored pixels
+            cx, cy: Circle center
+            radius: Circle radius
+            
+        Returns:
+            True if the circle perimeter has enough colored pixels
+        """
+        h, w = color_mask.shape
+        
+        # Sample points around the circle perimeter
+        num_samples = 16
+        colored_count = 0
+        
+        for i in range(num_samples):
+            angle = 2 * np.pi * i / num_samples
+            px = int(cx + radius * np.cos(angle))
+            py = int(cy + radius * np.sin(angle))
+            
+            # Check bounds
+            if 0 <= px < w and 0 <= py < h:
+                # Check a small area around the point
+                y1, y2 = max(0, py - 2), min(h, py + 3)
+                x1, x2 = max(0, px - 2), min(w, px + 3)
+                region = color_mask[y1:y2, x1:x2]
+                if np.any(region > 0):
+                    colored_count += 1
+        
+        # At least 50% of perimeter samples should have color
+        return colored_count >= num_samples * 0.5
+    
+    def _analyze_sample_circle(self, img):
+        """Analyze the sample circle in upper-right corner to extract its properties.
+        
+        Returns the size and BGR color of the sample circle.
+        
+        Args:
+            img: BGR image
+            
+        Returns:
+            Dict with 'radius', 'bgr_color' or None if not found
+        """
+        h, w = img.shape[:2]
+        ratio = self.template_circle_params['search_region_ratio']
+        
+        # Crop upper-right region
+        search_w = int(w * ratio)
+        search_h = int(h * ratio)
+        search_region = img[0:search_h, w - search_w:w]
+        
+        # Detect blue pixels: where Blue channel is significantly higher than Red and Green
+        b, g, r = cv2.split(search_region)
+        
+        # Blue pixels: B > R + threshold AND B > G + threshold
+        threshold = 30
+        blue_mask = ((b.astype(int) > r.astype(int) + threshold) & 
+                     (b.astype(int) > g.astype(int) + threshold) &
+                     (b > 100)).astype(np.uint8) * 255
+        
+        # Find contours
+        contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None
+        
+        # Find the most circular contour (likely our sample circle)
+        best_contour = None
+        best_circularity = 0
+        best_radius = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 50:
+                continue
+            
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            # Get radius
+            (cx, cy), radius = cv2.minEnclosingCircle(contour)
+            
+            if circularity > best_circularity and radius > 5:
+                best_circularity = circularity
+                best_contour = contour
+                best_radius = int(radius)
+        
+        if best_contour is None:
+            return None
+        
+        # Get the center location in search region coordinates
+        (cx_local, cy_local), _ = cv2.minEnclosingCircle(best_contour)
+        
+        # Convert to full image coordinates
+        # Search region is upper-right: x starts at (w - search_w), y starts at 0
+        cx_full = int(cx_local) + (w - search_w)
+        cy_full = int(cy_local)
+        
+        # Get the average BGR color of the sample circle pixels
+        mask = np.zeros(blue_mask.shape, dtype=np.uint8)
+        cv2.drawContours(mask, [best_contour], -1, 255, -1)
+        
+        colored_pixels = search_region[mask > 0]
+        if len(colored_pixels) == 0:
+            return None
+        
+        # Average BGR color
+        avg_bgr = np.mean(colored_pixels, axis=0).astype(int)
+        
+        return {
+            'radius': best_radius,
+            'bgr_color': avg_bgr,
+            'circularity': best_circularity,
+            'location': (cx_full, cy_full)  # Sample location in full image
+        }
+    
+    def has_sample_circle(self, image_path):
+        """Check if the image has a sample circle in the upper-right corner.
+        
+        Used for auto-detection to decide between circle and rectangle detection.
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            True if a sample circle is found, False otherwise
+        """
+        img, _ = self.load_image(image_path)
+        sample_info = self._analyze_sample_circle(img)
+        return sample_info is not None
+    
+    def _remove_duplicate_circles(self, circles, min_distance=20):
+        """Remove duplicate circle detections that are too close together.
+        
+        Args:
+            circles: List of detected circles
+            min_distance: Minimum distance between circle centers
+            
+        Returns:
+            Filtered list of circles
+        """
+        if not circles:
+            return circles
+        
+        # Sort by confidence (circularity) descending
+        circles = sorted(circles, key=lambda c: c['confidence'], reverse=True)
+        
+        kept = []
+        for circle in circles:
+            is_duplicate = False
+            for kept_circle in kept:
+                # Calculate distance between centers
+                dist = np.sqrt(
+                    (circle['center_x'] - kept_circle['center_x']) ** 2 +
+                    (circle['center_y'] - kept_circle['center_y']) ** 2
+                )
+                if dist < min_distance:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                kept.append(circle)
+        
+        return kept
+    
+    def _extract_template_fallback(self, img):
+        """Fallback template extraction: scan the entire top row of the image.
+        
+        Args:
+            img: BGR image (numpy array)
+            
+        Returns:
+            Tuple of (template_image, template_center, template_radius) or (None, None, None) if not found
+        """
+        h, w = img.shape[:2]
+        
+        # Scan top 20% of the image
+        search_h = int(h * 0.2)
+        search_region = img[0:search_h, :]
+        
+        # Convert to HSV and filter for blue
+        hsv = cv2.cvtColor(search_region, cv2.COLOR_BGR2HSV)
+        lower_blue = self.template_circle_params['lower_blue']
+        upper_blue = self.template_circle_params['upper_blue']
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        
+        # Find contours in the blue mask
+        contours, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return None, None, None
+        
+        # Find the most circular contour
+        best_contour = None
+        best_circularity = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 100:
+                continue
+            
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            if circularity > best_circularity and circularity >= self.template_circle_params['min_circularity']:
+                best_circularity = circularity
+                best_contour = contour
+        
+        if best_contour is None:
+            return None, None, None
+        
+        # Get bounding circle
+        (cx, cy), radius = cv2.minEnclosingCircle(best_contour)
+        cx, cy, radius = int(cx), int(cy), int(radius)
+        
+        # Extract template with padding
+        padding = self.template_circle_params['template_padding']
+        x1 = max(0, cx - radius - padding)
+        y1 = max(0, cy - radius - padding)
+        x2 = min(search_region.shape[1], cx + radius + padding)
+        y2 = min(search_region.shape[0], cy + radius + padding)
+        
+        template = search_region[y1:y2, x1:x2].copy()
+        template_center = (cx - x1, cy - y1)
+        
+        return template, template_center, radius
     
     def detect_rectangles(self, image_path, params=None):
         """Detect rectangles in an image.

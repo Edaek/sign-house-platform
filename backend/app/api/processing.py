@@ -48,8 +48,8 @@ def detect_shapes(floorplan_id):
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json() or {}
-    # Default to rectangle detection (circle detection is disabled for now)
-    shape_type = data.get('shape_type', 'rectangle')
+    # Default to auto detection - will check for sample circle in upper-right corner
+    shape_type = data.get('shape_type', 'auto')
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
         return jsonify({'error': 'Floorplan image not found'}), 404
@@ -57,15 +57,18 @@ def detect_shapes(floorplan_id):
     try:
         cv_service = CVService()
         
-        # Circle detection is disabled - always use rectangle detection
-        # Use the new red rectangle detection method for better accuracy
-        # on floor plans with red-bordered label boxes
+        # Auto-detect: check if there's a sample circle in upper-right corner
+        if shape_type == 'auto':
+            if cv_service.has_sample_circle(floorplan['image_filepath']):
+                shape_type = 'circle'
+            else:
+                shape_type = 'rectangle'
+        
         if shape_type == 'circle':
-            # Circle detection is temporarily disabled
-            # Return error message to inform user
-            return jsonify({
-                'error': 'Circle detection is temporarily disabled. Please use rectangle detection.'
-            }), 400
+            # Use template-based circle detection
+            # Extracts a reference circle from upper-right corner and finds all similar circles
+            shapes = cv_service.detect_circles_by_template(floorplan['image_filepath'])
+            detected_type = 'circle'
         else:
             # Use red rectangle detection (detects red-bordered boxes with white backgrounds)
             shapes = cv_service.detect_red_rectangles(floorplan['image_filepath'])
@@ -94,6 +97,9 @@ def detect_shapes(floorplan_id):
                     'center_x': shape['center_x'],
                     'center_y': shape['center_y']
                 }
+                # Include confidence score if available (from template matching)
+                if 'confidence' in shape:
+                    shape_data['confidence'] = shape['confidence']
             
             doc = create_extracted_data_doc(
                 shape_index=idx,
@@ -682,12 +688,17 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
     result = mongo.db.processing_jobs.insert_one(job_doc)
     job_doc['_id'] = result.inserted_id
     
+    # Get detection method from form data (default: 'auto')
+    # Options: 'auto' (auto-detect), 'rectangle' (red rectangles), or 'circle' (template-based circle detection)
+    detection_method = request.form.get('detection_method', 'auto')
+    
     # Extract config values needed for processing
     config = {
         'TITLE_REGION_X_START': current_app.config.get('TITLE_REGION_X_START', 60),
         'TITLE_REGION_Y_START': current_app.config.get('TITLE_REGION_Y_START', 85),
         'TITLE_REGION_WIDTH': current_app.config.get('TITLE_REGION_WIDTH', 40),
-        'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15)
+        'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15),
+        'detection_method': detection_method
     }
     
     # Start background processing

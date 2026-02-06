@@ -121,15 +121,32 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 'pages_processed': page_idx + 1
             })
             
-            # Detect shapes
+            # Detect shapes - use detection_method from config (default: 'auto')
+            detection_method = config.get('detection_method', 'auto')
             try:
-                shapes = cv_service.detect_red_rectangles(page_info['image_path'])
+                # Auto-detect: check if there's a sample circle in upper-right corner
+                if detection_method == 'auto':
+                    if cv_service.has_sample_circle(page_info['image_path']):
+                        detection_method = 'circle'
+                        logger.info(f"Auto-detected circle markers on page {page_info['page_number']}")
+                    else:
+                        detection_method = 'rectangle'
+                        logger.info(f"Auto-detected rectangle markers on page {page_info['page_number']}")
+                
+                if detection_method == 'circle':
+                    # Use template-based circle detection
+                    shapes = cv_service.detect_circles_by_template(page_info['image_path'])
+                    shape_type = 'circle'
+                else:
+                    # Use red rectangle detection (default)
+                    shapes = cv_service.detect_red_rectangles(page_info['image_path'])
+                    shape_type = 'rectangle'
                 
                 # Update floorplan with shape type
                 mongo.db.floorplans.update_one(
                     {'_id': ObjectId(floorplan_id)},
                     {'$set': {
-                        'shape_type': 'rectangle',
+                        'shape_type': shape_type,
                         'status': 'processing',
                         'updated_at': datetime.utcnow()
                     }}
@@ -144,10 +161,13 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                             'center_x': shape['center_x'],
                             'center_y': shape['center_y']
                         }
+                        # Include confidence score if available (from template matching)
+                        if 'confidence' in shape:
+                            shape_data['confidence'] = shape['confidence']
                     
                     doc = create_extracted_data_doc(
                         shape_index=idx,
-                        shape_type='rectangle',
+                        shape_type=shape_type,
                         x=shape['x'],
                         y=shape['y'],
                         width=shape['width'],
