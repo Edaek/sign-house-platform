@@ -190,7 +190,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 if ocr_service and shapes:
                     extracted_data = list(mongo.db.extracted_data.find({'floorplan_id': ObjectId(floorplan_id)}))
                     
-                    is_circle = detected_type == 'circle'
+                    is_circle = shape_type == 'circle'
                     
                     for data in extracted_data:
                         try:

@@ -1,6 +1,14 @@
 import os
+import re
 import cv2
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+SIGN_CODE_PATTERN = re.compile(
+    r'^[A-Z]{1,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
+)
 
 
 class CVService:
@@ -8,6 +16,7 @@ class CVService:
     
     def __init__(self):
         """Initialize CV service with default parameters."""
+        self._ocr_engine = None
         # Circle detection parameters
         self.circle_params = {
             'dp': 1.2,
@@ -458,6 +467,9 @@ class CVService:
                         grad_data, cx, cy, radius, raw_color_mask):
                     continue
                 
+                if not self._verify_circle_content(img, cx, cy, radius):
+                    continue
+                
                 x = max(0, cx - radius)
                 y = max(0, cy - radius)
                 width = min(radius * 2, w - x)
@@ -634,6 +646,128 @@ class CVService:
             return False
         if align_score <= 0.50 and outer_density > 0.055:
             return False
+
+        return True
+
+    def _get_ocr_engine(self):
+        """Lazily initialize a PaddleOCR engine for circle content verification."""
+        if self._ocr_engine is None:
+            from paddleocr import PaddleOCR
+            self._ocr_engine = PaddleOCR(
+                lang='en',
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_textline_orientation=False,
+            )
+        return self._ocr_engine
+
+    @staticmethod
+    def _clean_ocr_text(text):
+        """Strip common OCR artifacts from circle text."""
+        text = text.strip(' |])[}{(')
+        text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
+        return text.strip()
+
+    def _verify_circle_content(self, img, cx, cy, radius):
+        """Validate a circle candidate by checking if its interior text
+        matches a sign code pattern. Rejects candidates whose text clearly
+        does NOT look like a sign code (e.g. "FLAT TYPE", "LIVING ROOM").
+
+        Candidates with no readable text are kept (deferred to later OCR).
+
+        Args:
+            img: Full BGR image
+            cx, cy: Circle center
+            radius: Circle radius
+
+        Returns:
+            True if the candidate should be kept
+        """
+        h, w = img.shape[:2]
+        pad = max(3, int(radius * 0.15))
+        x1 = max(0, cx - radius - pad)
+        y1 = max(0, cy - radius - pad)
+        x2 = min(w, cx + radius + pad)
+        y2 = min(h, cy + radius + pad)
+
+        roi = img[y1:y2, x1:x2]
+        if roi.size == 0:
+            return True
+
+        roi_h, roi_w = roi.shape[:2]
+        local_cx = cx - x1
+        local_cy = cy - y1
+        inner_r = max(3, int(radius * 0.90))
+
+        mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+        cv2.circle(mask, (local_cx, local_cy), inner_r, 255, -1)
+
+        if len(roi.shape) == 3:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = roi.copy()
+
+        masked = np.full((roi_h, roi_w), 255, dtype=np.uint8)
+        masked[mask > 0] = gray[mask > 0]
+
+        scale = max(3.0, 120.0 / max(roi_h, 1))
+        scaled = cv2.resize(masked, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+        scaled_bgr = cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
+
+        try:
+            ocr = self._get_ocr_engine()
+            for result in ocr.predict(scaled_bgr):
+                texts = result.get('rec_texts', [])
+                scores = result.get('rec_scores', [])
+
+                combined = ' '.join(t.strip() for t in texts if t.strip())
+                if not combined:
+                    return True
+
+                cleaned = self._clean_ocr_text(combined)
+                if not cleaned:
+                    return True
+
+                if SIGN_CODE_PATTERN.match(cleaned):
+                    return True
+
+                high_conf = [s for s in scores if s > 0.5]
+                if not high_conf:
+                    return True
+
+                words = cleaned.split()
+                if len(words) >= 3:
+                    logger.debug(
+                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (multi-word)"
+                    )
+                    return False
+
+                REJECT_WORDS = {
+                    'flat', 'type', 'room', 'living', 'bedroom', 'kitchen',
+                    'toilet', 'bath', 'hall', 'lobby', 'corridor', 'stair',
+                    'lift', 'block', 'floor', 'roof', 'balcony', 'store',
+                    'utility', 'master', 'common', 'typical', 'plan',
+                    'elevation', 'section', 'detail', 'note', 'ref',
+                }
+                lower_words = [w.lower() for w in words]
+                if any(w in REJECT_WORDS for w in lower_words):
+                    logger.debug(
+                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (known non-sign word)"
+                    )
+                    return False
+
+                if len(words) == 2 and len(cleaned) > 12:
+                    logger.debug(
+                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (too long for sign code)"
+                    )
+                    return False
+
+                return True
+
+        except Exception as e:
+            logger.warning(f"OCR cross-check failed at ({cx},{cy}): {e}")
+            return True
 
         return True
 

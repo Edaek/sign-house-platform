@@ -1,8 +1,7 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies (tesseract removed – now using PaddleOCR)
 RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
     libgl1 \
     libglib2.0-0 \
     poppler-utils \
@@ -13,6 +12,10 @@ WORKDIR /app
 # Copy requirements first for caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download PaddleOCR models so first request isn't slow
+ENV PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='en', use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)"
 
 # Copy application code
 COPY . .
