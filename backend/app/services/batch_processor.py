@@ -190,15 +190,27 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 if ocr_service and shapes:
                     extracted_data = list(mongo.db.extracted_data.find({'floorplan_id': ObjectId(floorplan_id)}))
                     
+                    is_circle = detected_type == 'circle'
+                    
                     for data in extracted_data:
                         try:
-                            text, confidence = ocr_service.extract_text_from_region(
-                                page_info['image_path'],
-                                data['x'], data['y'], data['width'], data['height'],
-                                padding=0,
-                                label_mode=True,
-                                capture_adjacent=False
-                            )
+                            if is_circle and data.get('shape_data'):
+                                sd = data['shape_data']
+                                text, confidence = ocr_service.extract_text_from_circle(
+                                    page_info['image_path'],
+                                    sd.get('center_x', data['x'] + data['width'] // 2),
+                                    sd.get('center_y', data['y'] + data['height'] // 2),
+                                    sd.get('radius', data['width'] // 2),
+                                    padding=3
+                                )
+                            else:
+                                text, confidence = ocr_service.extract_text_from_region(
+                                    page_info['image_path'],
+                                    data['x'], data['y'], data['width'], data['height'],
+                                    padding=0,
+                                    label_mode=True,
+                                    capture_adjacent=False
+                                )
                             
                             quantity = ocr_service.find_multiplier_near_region(
                                 page_info['image_path'],

@@ -390,8 +390,54 @@ class OCRService:
         # No multiplier found
         return 1
     
+    def _preprocess_circle(self, image, radius):
+        """Specialized preprocessing for text inside circle markers.
+        
+        Masks out the circle outline (keeping 90% of interior), scales up,
+        and uses adaptive thresholding optimized for thin architectural fonts.
+        
+        Args:
+            image: Input image (numpy array, BGR) cropped to circle bounding box
+            radius: Detected circle radius
+            
+        Returns:
+            Preprocessed binary image ready for OCR
+        """
+        h, w = image.shape[:2]
+        cx, cy = w // 2, h // 2
+        
+        inner_radius = max(5, int(radius * 0.90))
+        circle_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(circle_mask, (cx, cy), inner_radius, 255, -1)
+        
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+        
+        result = np.full((h, w), 255, dtype=np.uint8)
+        result[circle_mask > 0] = gray[circle_mask > 0]
+        
+        scale = max(5.0, 250.0 / max(h, 1))
+        scaled = cv2.resize(result, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        
+        binary = cv2.adaptiveThreshold(
+            scaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 31, 8
+        )
+        
+        inv = cv2.bitwise_not(binary)
+        inv = cv2.dilate(inv, np.ones((2, 2), np.uint8), iterations=1)
+        binary = cv2.bitwise_not(inv)
+        
+        pad = 20
+        binary = cv2.copyMakeBorder(binary, pad, pad, pad, pad,
+                                     cv2.BORDER_CONSTANT, value=255)
+        
+        return binary
+    
     def extract_text_from_circle(self, image_path, center_x, center_y, radius, padding=5):
-        """Extract text from a circular region.
+        """Extract text from a circular region with circle-aware preprocessing.
         
         Args:
             image_path: Path to the image file
@@ -402,13 +448,59 @@ class OCRService:
         Returns:
             Tuple of (extracted text, confidence)
         """
-        # Convert circle to bounding box
-        x = center_x - radius
-        y = center_y - radius
-        width = radius * 2
-        height = radius * 2
+        img = cv2.imread(image_path)
+        if img is None:
+            raise FileNotFoundError(f"Could not load image: {image_path}")
         
-        return self.extract_text_from_region(image_path, x, y, width, height, padding)
+        # Crop bounding box around circle with padding
+        x1 = max(0, center_x - radius - padding)
+        y1 = max(0, center_y - radius - padding)
+        x2 = min(img.shape[1], center_x + radius + padding)
+        y2 = min(img.shape[0], center_y + radius + padding)
+        
+        roi = img[y1:y2, x1:x2]
+        if roi.size == 0:
+            return '', 0.0
+        
+        preprocessed = self._preprocess_circle(roi, radius)
+        
+        # PSM 7 (single text line) works best for signage codes like SA-15, SC-2
+        config = '--oem 3 --psm 7'
+        data = pytesseract.image_to_data(
+            preprocessed, config=config,
+            output_type=pytesseract.Output.DICT
+        )
+        
+        texts = []
+        confidences = []
+        for i, conf in enumerate(data['conf']):
+            if conf > 0:
+                text = data['text'][i].strip()
+                if text:
+                    texts.append(text)
+                    confidences.append(conf)
+        
+        extracted_text = ' '.join(texts)
+        avg_confidence = sum(confidences) / len(confidences) / 100 if confidences else 0
+        
+        # Fallback to PSM 8 (single word) if PSM 7 got nothing
+        if not extracted_text:
+            data = pytesseract.image_to_data(
+                preprocessed, config='--oem 3 --psm 8',
+                output_type=pytesseract.Output.DICT
+            )
+            texts = []
+            confidences = []
+            for i, conf in enumerate(data['conf']):
+                if conf > 0:
+                    text = data['text'][i].strip()
+                    if text:
+                        texts.append(text)
+                        confidences.append(conf)
+            extracted_text = ' '.join(texts)
+            avg_confidence = sum(confidences) / len(confidences) / 100 if confidences else 0
+        
+        return extracted_text, avg_confidence
     
     def batch_extract(self, image_path, regions, label_mode=False):
         """Extract text from multiple regions.

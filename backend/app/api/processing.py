@@ -159,15 +159,26 @@ def extract_text(floorplan_id):
         ocr_service = OCRService()
         
         results = []
+        is_circle = floorplan.get('shape_type') == 'circle'
+        
         for data in extracted_data:
-            # Extract text from the shape region (use label_mode for red-bordered labels)
-            text, confidence = ocr_service.extract_text_from_region(
-                floorplan['image_filepath'],
-                data['x'], data['y'], data['width'], data['height'],
-                padding=0,  # No padding needed for labels (border removed in preprocessing)
-                label_mode=True,  # Use specialized label preprocessing
-                capture_adjacent=False  # Don't expand region (causes false positives)
-            )
+            if is_circle and data.get('shape_data'):
+                sd = data['shape_data']
+                text, confidence = ocr_service.extract_text_from_circle(
+                    floorplan['image_filepath'],
+                    sd.get('center_x', data['x'] + data['width'] // 2),
+                    sd.get('center_y', data['y'] + data['height'] // 2),
+                    sd.get('radius', data['width'] // 2),
+                    padding=3
+                )
+            else:
+                text, confidence = ocr_service.extract_text_from_region(
+                    floorplan['image_filepath'],
+                    data['x'], data['y'], data['width'], data['height'],
+                    padding=0,
+                    label_mode=True,
+                    capture_adjacent=False
+                )
             
             # Search for multiplier in nearby regions (x2, x3, etc.)
             quantity = ocr_service.find_multiplier_near_region(
