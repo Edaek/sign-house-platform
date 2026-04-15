@@ -403,11 +403,21 @@ class CVService:
         # Combine: pixel must match color type AND be similar to sample color
         color_mask = ((color_dominant > 0) & color_similar).astype(np.uint8) * 255
         
+        raw_color_mask = color_mask.copy()
+        
+        grad_data = None
+        if target_radius <= 20:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            grad_mag = np.sqrt(gx ** 2 + gy ** 2)
+            grad_data = (gx, gy, grad_mag)
+        
         # Dilate to connect outline pixels
         kernel = np.ones((2, 2), np.uint8)
-        color_mask_dilated = cv2.dilate(color_mask, kernel, iterations=1)
+        color_mask = cv2.dilate(color_mask, kernel, iterations=1)
         
-        color_mask_blurred = cv2.GaussianBlur(color_mask_dilated, (5, 5), 1)
+        color_mask_blurred = cv2.GaussianBlur(color_mask, (5, 5), 1)
         
         # Size tolerance: 25%
         size_tolerance = 0.25
@@ -438,6 +448,14 @@ class CVService:
                         continue
                 
                 if not self._verify_circle_has_color(color_mask, cx, cy, radius):
+                    continue
+                
+                if target_radius > 20 and not self._verify_circle_contour(
+                        color_mask, cx, cy, radius, target_radius):
+                    continue
+                
+                if target_radius <= 20 and grad_data and not self._verify_circle_gradient(
+                        grad_data, cx, cy, radius, raw_color_mask):
                     continue
                 
                 x = max(0, cx - radius)
@@ -498,6 +516,127 @@ class CVService:
         # At least 50% of perimeter samples should have color
         return colored_count >= num_samples * 0.5
     
+    def _verify_circle_contour(self, color_mask, cx, cy, radius, target_radius):
+        """Verify a candidate has a ring of colored pixels at the expected radius
+        and a relatively empty interior (to reject text blocks).
+        
+        Real circle outlines have high ring density but low interior density.
+        Red text blocks have high density everywhere.
+        
+        Args:
+            color_mask: Binary mask of colored pixels
+            cx, cy: Candidate circle center
+            radius: Candidate circle radius
+            target_radius: Expected radius from the sample circle
+            
+        Returns:
+            True if the candidate looks like a circle outline, not text
+        """
+        h, w = color_mask.shape
+        thickness = max(3, int(target_radius * 0.08))
+        
+        y1 = max(0, cy - radius - thickness)
+        y2 = min(h, cy + radius + thickness + 1)
+        x1 = max(0, cx - radius - thickness)
+        x2 = min(w, cx + radius + thickness + 1)
+        
+        roi = color_mask[y1:y2, x1:x2]
+        if roi.size == 0:
+            return False
+        
+        local_cx = cx - x1
+        local_cy = cy - y1
+        Y, X = np.ogrid[:roi.shape[0], :roi.shape[1]]
+        dist = np.sqrt((X - local_cx) ** 2 + (Y - local_cy) ** 2)
+        
+        ring = (dist >= radius - thickness) & (dist <= radius + thickness)
+        ring_pixels = roi[ring]
+        if len(ring_pixels) == 0:
+            return False
+        
+        ring_density = np.count_nonzero(ring_pixels) / len(ring_pixels)
+        if ring_density < 0.15:
+            return False
+        
+        # Reject text blocks: real circles have mostly empty interiors,
+        # while text fills the area with colored pixels
+        inner = dist <= radius * 0.6
+        inner_pixels = roi[inner]
+        if len(inner_pixels) > 0:
+            inner_density = np.count_nonzero(inner_pixels) / len(inner_pixels)
+            if ring_density > 0 and inner_density / ring_density > 0.62:
+                return False
+        
+        return True
+    
+    def _verify_circle_gradient(self, grad_data, cx, cy, radius, raw_color_mask):
+        """Reject text false positives for small circles using gradient analysis.
+        
+        Uses two signals:
+        1. Radial gradient alignment: real circle outlines produce gradients
+           that point radially (toward/away from center). Text characters
+           produce randomly-oriented gradients.
+        2. Outer density: text extends beyond the circle boundary while
+           real circle markers are isolated.
+        
+        Only applied for small circles (target_radius <= 20) where the
+        ring density check is unreliable due to dilation effects.
+        
+        Args:
+            grad_data: Tuple of (gx, gy, mag) pre-computed Sobel gradients
+        """
+        gx, gy, mag = grad_data
+        h, w = mag.shape
+        n_samples = 24
+
+        aligned = 0
+        total = 0
+        for i in range(n_samples):
+            angle = 2 * np.pi * i / n_samples
+            for dr in range(-1, 2):
+                px = int(cx + (radius + dr) * np.cos(angle))
+                py = int(cy + (radius + dr) * np.sin(angle))
+                if 0 <= py < h and 0 <= px < w and mag[py, px] > 20:
+                    grad_angle = np.arctan2(gy[py, px], gx[py, px])
+                    radial_angle = np.arctan2(py - cy, px - cx)
+                    diff = abs(grad_angle - radial_angle)
+                    diff = min(diff, 2 * np.pi - diff)
+                    diff = min(diff, abs(diff - np.pi))
+                    total += 1
+                    if diff < np.pi / 4:
+                        aligned += 1
+                    break
+
+        if total == 0:
+            return True
+        align_score = aligned / total
+
+        thickness = max(2, int(radius * 0.15))
+        pad = int(radius * 2)
+        y1 = max(0, cy - radius - pad)
+        y2 = min(raw_color_mask.shape[0], cy + radius + pad + 1)
+        x1 = max(0, cx - radius - pad)
+        x2 = min(raw_color_mask.shape[1], cx + radius + pad + 1)
+        roi = raw_color_mask[y1:y2, x1:x2]
+        if roi.size == 0:
+            return True
+
+        local_cx = cx - x1
+        local_cy = cy - y1
+        Y, X = np.ogrid[:roi.shape[0], :roi.shape[1]]
+        dist = np.sqrt((X - local_cx) ** 2 + (Y - local_cy) ** 2)
+        outer = (dist > radius + thickness) & (dist <= radius * 2)
+        outer_pixels = roi[outer]
+        outer_density = (np.count_nonzero(outer_pixels) / len(outer_pixels)
+                         if len(outer_pixels) > 0 else 0)
+
+        if align_score < 0.55 and outer_density > 0.065:
+            return False
+        if align_score <= 0.50 and outer_density > 0.055:
+            return False
+
+        return True
+
     def _build_color_mask(self, img_region, color_type):
         """Build a binary mask for pixels of a given color type.
         
