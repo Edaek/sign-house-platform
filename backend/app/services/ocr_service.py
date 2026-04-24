@@ -39,15 +39,20 @@ def clean_ocr_text(text):
     return text.strip()
 
 
-def is_valid_sign_code(text):
+def is_valid_sign_code(text, strict=False):
     """Determine whether *text* looks like a valid sign code.
 
     Returns True  -> keep the shape
     Returns False -> discard the shape
 
+    When *strict* is True (used by the CV-level gate), only the regex
+    pattern and the letter+digit heuristic are accepted; the looser
+    fallback rules are skipped and a minimum length of 2 is enforced.
+
     Decision logic (in order):
       1. Empty / whitespace-only  -> False  (nothing readable)
       2. Matches SIGN_CODE_PATTERN -> True
+      -- strict mode stops here (+ letter+digit heuristic) --
       3. 3+ words                 -> False
       4. Contains a known non-sign word -> False
       5. 2 words AND >12 chars    -> False
@@ -61,8 +66,19 @@ def is_valid_sign_code(text):
     if not cleaned:
         return False
 
+    if strict and len(cleaned) < 2:
+        return False
+
     if SIGN_CODE_PATTERN.match(cleaned):
         return True
+
+    has_digit = any(c.isdigit() for c in cleaned)
+    has_alpha = any(c.isalpha() for c in cleaned)
+
+    if strict:
+        if ' ' in cleaned:
+            return False
+        return has_digit and has_alpha and len(cleaned) <= 8
 
     words = cleaned.split()
 
@@ -75,8 +91,6 @@ def is_valid_sign_code(text):
     if len(words) == 2 and len(cleaned) > 12:
         return False
 
-    has_digit = any(c.isdigit() for c in cleaned)
-    has_alpha = any(c.isalpha() for c in cleaned)
     if has_digit and has_alpha and len(cleaned) <= 8:
         return True
 

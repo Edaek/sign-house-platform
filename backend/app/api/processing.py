@@ -134,7 +134,7 @@ def detect_shapes(floorplan_id):
                 floorplan_id=floorplan_id,
                 shape_data=shape_data
             )
-            doc['extracted_text'] = text
+            doc['extracted_text'] = cleaned
             doc['confidence'] = confidence
             doc['quantity'] = quantity
 

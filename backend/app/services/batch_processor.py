@@ -208,7 +208,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 floorplan_id=floorplan_id,
                                 shape_data=shape_data
                             )
-                            doc['extracted_text'] = text
+                            doc['extracted_text'] = cleaned
                             doc['confidence'] = confidence
                             doc['quantity'] = quantity
                             

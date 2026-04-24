@@ -482,7 +482,7 @@ class CVService:
                     'confidence': 1.0,
                 }
                 
-                keep, text, conf = self._verify_shape_content(img, candidate)
+                keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
                 if not keep:
                     continue
                 
@@ -666,7 +666,7 @@ class CVService:
             )
         return self._ocr_engine
 
-    def _verify_shape_content(self, img, shape):
+    def _verify_shape_content(self, img, shape, color_type=None):
         """Validate a detected shape by running OCR and checking if the text
         matches a sign code pattern.
 
@@ -674,6 +674,8 @@ class CVService:
             img: Full BGR image (numpy array)
             shape: Dict with at least 'type', 'x', 'y', 'width', 'height'.
                    Circles also need 'center_x', 'center_y', 'radius'.
+            color_type: 'blue' or 'red' — the circle outline color, used to
+                        filter out foreign-colored text from the crop.
 
         Returns:
             Tuple of (keep: bool, text: str, confidence: float)
@@ -684,7 +686,7 @@ class CVService:
             cx = shape['center_x']
             cy = shape['center_y']
             radius = shape['radius']
-            cropped_bgr = self._crop_circle_for_ocr(img, cx, cy, radius)
+            cropped_bgr = self._crop_circle_for_ocr(img, cx, cy, radius, color_type=color_type)
         else:
             x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
             cropped_bgr = self._crop_rect_for_ocr(img, x, y, w, h)
@@ -705,7 +707,7 @@ class CVService:
                 if not cleaned:
                     return (False, '', avg_conf)
 
-                keep = is_valid_sign_code(cleaned)
+                keep = is_valid_sign_code(cleaned, strict=True)
                 if not keep:
                     logger.debug(
                         f"Shape {shape.get('type')} at ({shape.get('x')},{shape.get('y')}) "
@@ -719,8 +721,13 @@ class CVService:
 
         return (False, '', 0.0)
 
-    def _crop_circle_for_ocr(self, img, cx, cy, radius):
-        """Crop and preprocess a circle region for OCR verification."""
+    def _crop_circle_for_ocr(self, img, cx, cy, radius, color_type=None):
+        """Crop and preprocess a circle region for OCR verification.
+
+        When *color_type* is provided, pixels belonging to the **opposite**
+        color are erased (set to white) before OCR so that overlapping
+        foreign-colored text does not contaminate the reading.
+        """
         h, w = img.shape[:2]
         pad = max(3, int(radius * 0.15))
         x1 = max(0, cx - radius - pad)
@@ -728,14 +735,21 @@ class CVService:
         x2 = min(w, cx + radius + pad)
         y2 = min(h, cy + radius + pad)
 
-        roi = img[y1:y2, x1:x2]
+        roi = img[y1:y2, x1:x2].copy()
         if roi.size == 0:
             return None
+
+        if color_type and len(roi.shape) == 3:
+            foreign_types = [ct for ct in ('blue', 'red') if ct != color_type]
+            for ft in foreign_types:
+                foreign_mask = self._build_color_mask(roi, ft)
+                foreign_mask = cv2.dilate(foreign_mask, np.ones((3, 3), np.uint8), iterations=1)
+                roi[foreign_mask > 0] = (255, 255, 255)
 
         roi_h, roi_w = roi.shape[:2]
         local_cx = cx - x1
         local_cy = cy - y1
-        inner_r = max(3, int(radius * 0.98))
+        inner_r = max(3, int(radius * 0.85))
 
         mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
         cv2.circle(mask, (local_cx, local_cy), inner_r, 255, -1)
