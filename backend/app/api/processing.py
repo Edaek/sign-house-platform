@@ -14,7 +14,7 @@ from app.models import (
     processing_job_to_dict
 )
 from app.services.cv_service import CVService
-from app.services.ocr_service import OCRService
+from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 from app.services.batch_processor import start_batch_processing
 from app.utils.permissions import require_project_access, require_project_modify
 
@@ -56,24 +56,23 @@ def detect_shapes(floorplan_id):
     
     try:
         cv_service = CVService()
-        
+        ocr_service = OCRService()
+        image_path = floorplan['image_filepath']
+
         # Auto-detect: check if there's a sample circle in upper-right corner
         if shape_type == 'auto':
-            if cv_service.has_sample_circle(floorplan['image_filepath']):
+            if cv_service.has_sample_circle(image_path):
                 shape_type = 'circle'
             else:
                 shape_type = 'rectangle'
-        
+
         if shape_type == 'circle':
-            # Use template-based circle detection
-            # Extracts a reference circle from upper-right corner and finds all similar circles
-            shapes = cv_service.detect_circles_by_template(floorplan['image_filepath'])
+            shapes = cv_service.detect_circles_by_template(image_path)
             detected_type = 'circle'
         else:
-            # Use red rectangle detection (detects red-bordered boxes with white backgrounds)
-            shapes = cv_service.detect_red_rectangles(floorplan['image_filepath'])
+            shapes = cv_service.detect_red_rectangles(image_path)
             detected_type = 'rectangle'
-        
+
         # Update floorplan
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
@@ -83,24 +82,48 @@ def detect_shapes(floorplan_id):
                 'updated_at': datetime.utcnow()
             }}
         )
-        
+
         # Clear old extracted data
         mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
-        
-        # Create extracted data records for each shape
-        extracted_records = []
+
+        # --- Merged OCR + filter + save ---
+        is_circle = detected_type == 'circle'
+        ocr_results = []
+
         for idx, shape in enumerate(shapes):
+            # Run full OCR (higher quality than the quick cross-check in detection)
+            if is_circle and shape.get('center_x') is not None:
+                text, confidence = ocr_service.extract_text_from_circle(
+                    image_path,
+                    shape['center_x'], shape['center_y'], shape['radius'],
+                    padding=3
+                )
+            else:
+                text, confidence = ocr_service.extract_text_from_region(
+                    image_path,
+                    shape['x'], shape['y'], shape['width'], shape['height'],
+                    padding=0, label_mode=True, capture_adjacent=False
+                )
+
+            cleaned = clean_ocr_text(text)
+            if not is_valid_sign_code(cleaned):
+                continue
+
+            quantity = ocr_service.find_multiplier_near_region(
+                image_path,
+                shape['x'], shape['y'], shape['width'], shape['height']
+            )
+
             shape_data = None
             if 'radius' in shape:
                 shape_data = {
                     'radius': shape['radius'],
                     'center_x': shape['center_x'],
-                    'center_y': shape['center_y']
+                    'center_y': shape['center_y'],
                 }
-                # Include confidence score if available (from template matching)
                 if 'confidence' in shape:
                     shape_data['confidence'] = shape['confidence']
-            
+
             doc = create_extracted_data_doc(
                 shape_index=idx,
                 shape_type=detected_type,
@@ -111,17 +134,67 @@ def detect_shapes(floorplan_id):
                 floorplan_id=floorplan_id,
                 shape_data=shape_data
             )
-            
+            doc['extracted_text'] = text
+            doc['confidence'] = confidence
+            doc['quantity'] = quantity
+
             result = mongo.db.extracted_data.insert_one(doc)
             doc['_id'] = result.inserted_id
-            extracted_records.append(serialize_doc(doc))
-        
+            doc['display_text'] = text
+            ocr_results.append(doc)
+
+        # Group duplicates
+        grouping_result = ocr_service.group_ocr_results(ocr_results)
+        grouped_results = grouping_result['grouped']
+        deleted_ids = grouping_result['deleted_ids']
+        merge_info = grouping_result['merge_info']
+
+        for res in grouped_results:
+            result_id = res['_id']
+            if str(result_id) in merge_info:
+                info = merge_info[str(result_id)]
+                mongo.db.extracted_data.update_one(
+                    {'_id': result_id},
+                    {'$set': {
+                        'quantity': info['total_quantity'],
+                        'merged_count': info['merged_count'],
+                        'original_shape_indices': info['original_indices'],
+                        'all_bounding_boxes': info['all_bounding_boxes'],
+                        'updated_at': datetime.utcnow()
+                    }}
+                )
+                res['merged_count'] = info['merged_count']
+                res['original_shape_indices'] = info['original_indices']
+                res['all_bounding_boxes'] = info['all_bounding_boxes']
+
+        if deleted_ids:
+            mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
+
+        mongo.db.floorplans.update_one(
+            {'_id': ObjectId(floorplan_id)},
+            {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
+        )
+
+        response_results = [serialize_doc(d) for d in grouped_results]
+        for res in response_results:
+            res['display_text'] = res.get('manual_text') or res.get('extracted_text')
+
+        total_merged = sum(info['merged_count'] for info in merge_info.values())
+        message = f'Detected and OCR\'d {len(response_results)} unique {detected_type}s'
+        if deleted_ids:
+            message += f' ({total_merged} original detections grouped)'
+
         return jsonify({
-            'message': f'Detected {len(shapes)} {detected_type}s',
+            'message': message,
             'shape_type': detected_type,
-            'shapes': extracted_records
+            'shapes': response_results,
+            'grouping_info': {
+                'total_unique': len(response_results),
+                'total_detected': len(shapes),
+                'merged_count': len(deleted_ids)
+            }
         }), 200
-        
+
     except Exception as e:
         return jsonify({'error': f'Shape detection failed: {str(e)}'}), 500
 

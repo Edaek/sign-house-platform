@@ -10,7 +10,7 @@ from app import mongo
 from app.models import create_floorplan_doc, create_extracted_data_doc, serialize_doc
 from app.services.pdf_service import PDFService
 from app.services.cv_service import CVService
-from app.services.ocr_service import OCRService
+from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 
 logger = logging.getLogger(__name__)
 
@@ -134,15 +134,12 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                         logger.info(f"Auto-detected rectangle markers on page {page_info['page_number']}")
                 
                 if detection_method == 'circle':
-                    # Use template-based circle detection
                     shapes = cv_service.detect_circles_by_template(page_info['image_path'])
                     shape_type = 'circle'
                 else:
-                    # Use red rectangle detection (default)
                     shapes = cv_service.detect_red_rectangles(page_info['image_path'])
                     shape_type = 'rectangle'
                 
-                # Update floorplan with shape type
                 mongo.db.floorplans.update_one(
                     {'_id': ObjectId(floorplan_id)},
                     {'$set': {
@@ -152,88 +149,80 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     }}
                 )
                 
-                # Create extracted data records
-                for idx, shape in enumerate(shapes):
-                    shape_data = None
-                    if 'radius' in shape:
-                        shape_data = {
-                            'radius': shape['radius'],
-                            'center_x': shape['center_x'],
-                            'center_y': shape['center_y']
-                        }
-                        # Include confidence score if available (from template matching)
-                        if 'confidence' in shape:
-                            shape_data['confidence'] = shape['confidence']
-                    
-                    doc = create_extracted_data_doc(
-                        shape_index=idx,
-                        shape_type=shape_type,
-                        x=shape['x'],
-                        y=shape['y'],
-                        width=shape['width'],
-                        height=shape['height'],
-                        floorplan_id=floorplan_id,
-                        shape_data=shape_data
-                    )
-                    mongo.db.extracted_data.insert_one(doc)
-                
                 total_shapes_detected += len(shapes)
                 
-                # Update progress - running OCR
                 update_file_status(job_id, file_index, {
                     'status': 'ocr',
                     'progress': int(page_progress + 20),
                     'shapes_detected': total_shapes_detected
                 })
                 
-                # Run OCR on detected shapes
-                if ocr_service and shapes:
-                    extracted_data = list(mongo.db.extracted_data.find({'floorplan_id': ObjectId(floorplan_id)}))
-                    
-                    is_circle = shape_type == 'circle'
-                    
-                    for data in extracted_data:
+                # Merged OCR + sign-code filter + save
+                is_circle = shape_type == 'circle'
+                ocr_results = []
+                
+                if ocr_service:
+                    for idx, shape in enumerate(shapes):
                         try:
-                            if is_circle and data.get('shape_data'):
-                                sd = data['shape_data']
+                            if is_circle and shape.get('center_x') is not None:
                                 text, confidence = ocr_service.extract_text_from_circle(
                                     page_info['image_path'],
-                                    sd.get('center_x', data['x'] + data['width'] // 2),
-                                    sd.get('center_y', data['y'] + data['height'] // 2),
-                                    sd.get('radius', data['width'] // 2),
-                                    padding=3
+                                    shape['center_x'], shape['center_y'],
+                                    shape['radius'], padding=3
                                 )
                             else:
                                 text, confidence = ocr_service.extract_text_from_region(
                                     page_info['image_path'],
-                                    data['x'], data['y'], data['width'], data['height'],
-                                    padding=0,
-                                    label_mode=True,
-                                    capture_adjacent=False
+                                    shape['x'], shape['y'],
+                                    shape['width'], shape['height'],
+                                    padding=0, label_mode=True, capture_adjacent=False
                                 )
+                            
+                            cleaned = clean_ocr_text(text)
+                            if not is_valid_sign_code(cleaned):
+                                continue
                             
                             quantity = ocr_service.find_multiplier_near_region(
                                 page_info['image_path'],
-                                data['x'], data['y'], data['width'], data['height']
+                                shape['x'], shape['y'],
+                                shape['width'], shape['height']
                             )
                             
-                            mongo.db.extracted_data.update_one(
-                                {'_id': data['_id']},
-                                {'$set': {
-                                    'extracted_text': text,
-                                    'confidence': confidence,
-                                    'quantity': quantity,
-                                    'updated_at': datetime.utcnow()
-                                }}
+                            shape_data = None
+                            if 'radius' in shape:
+                                shape_data = {
+                                    'radius': shape['radius'],
+                                    'center_x': shape['center_x'],
+                                    'center_y': shape['center_y'],
+                                }
+                                if 'confidence' in shape:
+                                    shape_data['confidence'] = shape['confidence']
+                            
+                            doc = create_extracted_data_doc(
+                                shape_index=idx,
+                                shape_type=shape_type,
+                                x=shape['x'],
+                                y=shape['y'],
+                                width=shape['width'],
+                                height=shape['height'],
+                                floorplan_id=floorplan_id,
+                                shape_data=shape_data
                             )
+                            doc['extracted_text'] = text
+                            doc['confidence'] = confidence
+                            doc['quantity'] = quantity
+                            
+                            result_insert = mongo.db.extracted_data.insert_one(doc)
+                            doc['_id'] = result_insert.inserted_id
+                            ocr_results.append(doc)
                         except Exception as e:
-                            logger.warning(f"OCR failed for shape {data['_id']}: {str(e)}")
+                            logger.warning(f"OCR failed for shape idx {idx}: {str(e)}")
                     
                     # Group OCR results
-                    extracted_data = list(mongo.db.extracted_data.find({'floorplan_id': ObjectId(floorplan_id)}))
-                    grouping_result = ocr_service.group_ocr_results([serialize_doc(d) for d in extracted_data])
+                    grouping_result = ocr_service.group_ocr_results(
+                        [serialize_doc(d) for d in ocr_results]
+                    )
                     
-                    # Update grouped records and delete duplicates
                     for result_item in grouping_result['grouped']:
                         result_id = result_item['_id']
                         if str(result_id) in grouping_result['merge_info']:
@@ -251,7 +240,10 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     
                     if grouping_result['deleted_ids']:
                         mongo.db.extracted_data.delete_many({
-                            '_id': {'$in': [ObjectId(id) if isinstance(id, str) else id for id in grouping_result['deleted_ids']]}
+                            '_id': {'$in': [
+                                ObjectId(id) if isinstance(id, str) else id
+                                for id in grouping_result['deleted_ids']
+                            ]}
                         })
                 
                 # Mark floorplan as completed

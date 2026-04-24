@@ -4,11 +4,9 @@ import cv2
 import numpy as np
 import logging
 
-logger = logging.getLogger(__name__)
+from app.services.ocr_service import clean_ocr_text, is_valid_sign_code
 
-SIGN_CODE_PATTERN = re.compile(
-    r'^[A-Z]{1,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
-)
+logger = logging.getLogger(__name__)
 
 
 class CVService:
@@ -467,15 +465,12 @@ class CVService:
                         grad_data, cx, cy, radius, raw_color_mask):
                     continue
                 
-                if not self._verify_circle_content(img, cx, cy, radius):
-                    continue
-                
                 x = max(0, cx - radius)
                 y = max(0, cy - radius)
                 width = min(radius * 2, w - x)
                 height = min(radius * 2, h - y)
                 
-                detected.append({
+                candidate = {
                     'type': 'circle',
                     'center_x': int(cx),
                     'center_y': int(cy),
@@ -484,8 +479,18 @@ class CVService:
                     'y': int(y),
                     'width': int(width),
                     'height': int(height),
-                    'confidence': 1.0
-                })
+                    'confidence': 1.0,
+                }
+                
+                keep, text, conf = self._verify_shape_content(img, candidate)
+                if not keep:
+                    continue
+                
+                if text:
+                    candidate['extracted_text'] = text
+                    candidate['ocr_confidence'] = conf
+                
+                detected.append(candidate)
         
         detected = self._remove_duplicate_circles(detected, min_distance=target_radius)
         detected.sort(key=lambda c: (c['y'], c['x']))
@@ -661,28 +666,61 @@ class CVService:
             )
         return self._ocr_engine
 
-    @staticmethod
-    def _clean_ocr_text(text):
-        """Strip common OCR artifacts from circle text."""
-        text = text.strip(' |])[}{(')
-        text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
-        return text.strip()
-
-    def _verify_circle_content(self, img, cx, cy, radius):
-        """Validate a circle candidate by checking if its interior text
-        matches a sign code pattern. Rejects candidates whose text clearly
-        does NOT look like a sign code (e.g. "FLAT TYPE", "LIVING ROOM").
-
-        Candidates with no readable text are kept (deferred to later OCR).
+    def _verify_shape_content(self, img, shape):
+        """Validate a detected shape by running OCR and checking if the text
+        matches a sign code pattern.
 
         Args:
-            img: Full BGR image
-            cx, cy: Circle center
-            radius: Circle radius
+            img: Full BGR image (numpy array)
+            shape: Dict with at least 'type', 'x', 'y', 'width', 'height'.
+                   Circles also need 'center_x', 'center_y', 'radius'.
 
         Returns:
-            True if the candidate should be kept
+            Tuple of (keep: bool, text: str, confidence: float)
         """
+        is_circle = shape.get('type') == 'circle'
+
+        if is_circle:
+            cx = shape['center_x']
+            cy = shape['center_y']
+            radius = shape['radius']
+            cropped_bgr = self._crop_circle_for_ocr(img, cx, cy, radius)
+        else:
+            x, y, w, h = shape['x'], shape['y'], shape['width'], shape['height']
+            cropped_bgr = self._crop_rect_for_ocr(img, x, y, w, h)
+
+        if cropped_bgr is None or cropped_bgr.size == 0:
+            return (False, '', 0.0)
+
+        try:
+            ocr = self._get_ocr_engine()
+            for result in ocr.predict(cropped_bgr):
+                texts = result.get('rec_texts', [])
+                scores = result.get('rec_scores', [])
+
+                combined = ' '.join(t.strip() for t in texts if t.strip())
+                cleaned = clean_ocr_text(combined)
+                avg_conf = sum(scores) / len(scores) if scores else 0.0
+
+                if not cleaned:
+                    return (False, '', avg_conf)
+
+                keep = is_valid_sign_code(cleaned)
+                if not keep:
+                    logger.debug(
+                        f"Shape {shape.get('type')} at ({shape.get('x')},{shape.get('y')}) "
+                        f"rejected: OCR='{cleaned}'"
+                    )
+                return (keep, cleaned, avg_conf)
+
+        except Exception as e:
+            logger.warning(f"OCR cross-check failed for shape at ({shape.get('x')},{shape.get('y')}): {e}")
+            return (True, '', 0.0)
+
+        return (False, '', 0.0)
+
+    def _crop_circle_for_ocr(self, img, cx, cy, radius):
+        """Crop and preprocess a circle region for OCR verification."""
         h, w = img.shape[:2]
         pad = max(3, int(radius * 0.15))
         x1 = max(0, cx - radius - pad)
@@ -692,12 +730,12 @@ class CVService:
 
         roi = img[y1:y2, x1:x2]
         if roi.size == 0:
-            return True
+            return None
 
         roi_h, roi_w = roi.shape[:2]
         local_cx = cx - x1
         local_cy = cy - y1
-        inner_r = max(3, int(radius * 0.90))
+        inner_r = max(3, int(radius * 0.98))
 
         mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
         cv2.circle(mask, (local_cx, local_cy), inner_r, 255, -1)
@@ -712,64 +750,29 @@ class CVService:
 
         scale = max(3.0, 120.0 / max(roi_h, 1))
         scaled = cv2.resize(masked, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        return cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
 
-        scaled_bgr = cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
+    @staticmethod
+    def _crop_rect_for_ocr(img, x, y, w, h):
+        """Crop and preprocess a rectangle region for OCR verification."""
+        img_h, img_w = img.shape[:2]
+        pad = max(2, min(w, h) // 8)
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(img_w, x + w + pad)
+        y2 = min(img_h, y + h + pad)
 
-        try:
-            ocr = self._get_ocr_engine()
-            for result in ocr.predict(scaled_bgr):
-                texts = result.get('rec_texts', [])
-                scores = result.get('rec_scores', [])
+        roi = img[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
 
-                combined = ' '.join(t.strip() for t in texts if t.strip())
-                if not combined:
-                    return True
+        roi_h, roi_w = roi.shape[:2]
+        scale = max(3.0, 120.0 / max(roi_h, 1))
+        scaled = cv2.resize(roi, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
-                cleaned = self._clean_ocr_text(combined)
-                if not cleaned:
-                    return True
-
-                if SIGN_CODE_PATTERN.match(cleaned):
-                    return True
-
-                high_conf = [s for s in scores if s > 0.5]
-                if not high_conf:
-                    return True
-
-                words = cleaned.split()
-                if len(words) >= 3:
-                    logger.debug(
-                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (multi-word)"
-                    )
-                    return False
-
-                REJECT_WORDS = {
-                    'flat', 'type', 'room', 'living', 'bedroom', 'kitchen',
-                    'toilet', 'bath', 'hall', 'lobby', 'corridor', 'stair',
-                    'lift', 'block', 'floor', 'roof', 'balcony', 'store',
-                    'utility', 'master', 'common', 'typical', 'plan',
-                    'elevation', 'section', 'detail', 'note', 'ref',
-                }
-                lower_words = [w.lower() for w in words]
-                if any(w in REJECT_WORDS for w in lower_words):
-                    logger.debug(
-                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (known non-sign word)"
-                    )
-                    return False
-
-                if len(words) == 2 and len(cleaned) > 12:
-                    logger.debug(
-                        f"Circle ({cx},{cy} r={radius}) rejected: OCR='{cleaned}' (too long for sign code)"
-                    )
-                    return False
-
-                return True
-
-        except Exception as e:
-            logger.warning(f"OCR cross-check failed at ({cx},{cy}): {e}")
-            return True
-
-        return True
+        if len(scaled.shape) == 2:
+            scaled = cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
+        return scaled
 
     def _build_color_mask(self, img_region, color_type):
         """Build a binary mask for pixels of a given color type.
@@ -1202,14 +1205,24 @@ class CVService:
             has_white = self._has_white_interior(gray, x, y, w, h)
             
             if has_red and has_white:
-                seen_rects.add(rect_key)
-                detected.append({
+                candidate = {
                     'type': 'rectangle',
                     'x': int(x),
                     'y': int(y),
                     'width': int(w),
-                    'height': int(h)
-                })
+                    'height': int(h),
+                }
+
+                keep, text, conf = self._verify_shape_content(img, candidate)
+                if not keep:
+                    continue
+
+                if text:
+                    candidate['extracted_text'] = text
+                    candidate['ocr_confidence'] = conf
+
+                seen_rects.add(rect_key)
+                detected.append(candidate)
         
         # Sort by position (top-left to bottom-right)
         detected.sort(key=lambda r: (r['y'], r['x']))

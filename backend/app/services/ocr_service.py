@@ -1,4 +1,5 @@
 import os
+import re
 import cv2
 import numpy as np
 import logging
@@ -11,6 +12,75 @@ for _name in ('paddleocr', 'paddlex', 'ppocr', 'paddle'):
     logging.getLogger(_name).setLevel(logging.WARNING)
 
 os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
+
+SIGN_CODE_PATTERN = re.compile(
+    r'^[A-Z]{1,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
+)
+
+_REJECT_WORDS = frozenset({
+    'flat', 'type', 'room', 'living', 'bedroom', 'kitchen',
+    'toilet', 'bath', 'hall', 'lobby', 'corridor', 'stair',
+    'lift', 'block', 'floor', 'roof', 'balcony', 'store',
+    'utility', 'master', 'common', 'typical', 'plan',
+    'elevation', 'section', 'detail', 'note', 'ref',
+})
+
+
+def clean_ocr_text(text):
+    """Strip common OCR artifacts from sign code text.
+
+    Removes brackets, pipes, trailing dots, and replaces $ with S.
+    """
+    if not text:
+        return ''
+    text = text.replace('$', 'S')
+    text = text.strip(' |])[}{(.')
+    text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
+    return text.strip()
+
+
+def is_valid_sign_code(text):
+    """Determine whether *text* looks like a valid sign code.
+
+    Returns True  -> keep the shape
+    Returns False -> discard the shape
+
+    Decision logic (in order):
+      1. Empty / whitespace-only  -> False  (nothing readable)
+      2. Matches SIGN_CODE_PATTERN -> True
+      3. 3+ words                 -> False
+      4. Contains a known non-sign word -> False
+      5. 2 words AND >12 chars    -> False
+      6. Has letter+digit AND <=8 chars -> True
+      7. Everything else          -> False
+    """
+    if not text or not text.strip():
+        return False
+
+    cleaned = clean_ocr_text(text)
+    if not cleaned:
+        return False
+
+    if SIGN_CODE_PATTERN.match(cleaned):
+        return True
+
+    words = cleaned.split()
+
+    if len(words) >= 3:
+        return False
+
+    if any(w.lower() in _REJECT_WORDS for w in words):
+        return False
+
+    if len(words) == 2 and len(cleaned) > 12:
+        return False
+
+    has_digit = any(c.isdigit() for c in cleaned)
+    has_alpha = any(c.isalpha() for c in cleaned)
+    if has_digit and has_alpha and len(cleaned) <= 8:
+        return True
+
+    return False
 
 
 class OCRService:
@@ -201,7 +271,7 @@ class OCRService:
         h, w = image.shape[:2]
         cx, cy = w // 2, h // 2
 
-        inner_radius = max(5, int(radius * 0.90))
+        inner_radius = max(5, int(radius * 0.98))
         circle_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(circle_mask, (cx, cy), inner_radius, 255, -1)
 
