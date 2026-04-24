@@ -749,7 +749,7 @@ class CVService:
         roi_h, roi_w = roi.shape[:2]
         local_cx = cx - x1
         local_cy = cy - y1
-        inner_r = max(3, int(radius * 0.85))
+        inner_r = max(3, int(radius * 0.92))
 
         mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
         cv2.circle(mask, (local_cx, local_cy), inner_r, 255, -1)

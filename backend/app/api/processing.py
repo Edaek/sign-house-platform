@@ -96,7 +96,7 @@ def detect_shapes(floorplan_id):
                 text, confidence = ocr_service.extract_text_from_circle(
                     image_path,
                     shape['center_x'], shape['center_y'], shape['radius'],
-                    padding=3
+                    padding=10
                 )
             else:
                 text, confidence = ocr_service.extract_text_from_region(

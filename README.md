@@ -59,7 +59,7 @@ sudo apt-get install tesseract-ocr
 ```
 
 **Windows:**
-Download from: https://github.com/UB-Mannheim/tesseract/wiki
+Download from: [https://github.com/UB-Mannheim/tesseract/wiki](https://github.com/UB-Mannheim/tesseract/wiki)
 
 ## Installation
 
@@ -118,7 +118,7 @@ source venv/bin/activate
 python run.py
 ```
 
-Backend runs on: http://localhost:5000
+Backend runs on: [http://localhost:5000](http://localhost:5000)
 
 **Terminal 2 - Frontend:**
 
@@ -127,7 +127,7 @@ cd frontend
 npm run dev
 ```
 
-Frontend runs on: http://localhost:3000
+Frontend runs on: [http://localhost:3000](http://localhost:3000)
 
 ### Production Build
 
@@ -242,6 +242,7 @@ sign-house-v3/
 
 ### Environment Variables
 
+
 | Variable         | Description            | Default                                   |
 | ---------------- | ---------------------- | ----------------------------------------- |
 | `FLASK_CONFIG`   | Config environment     | `development`                             |
@@ -249,6 +250,7 @@ sign-house-v3/
 | `JWT_SECRET_KEY` | JWT signing key        | -                                         |
 | `MONGO_URI`      | MongoDB connection URI | `mongodb://localhost:27017/signhouse_dev` |
 | `TESSERACT_CMD`  | Tesseract path         | `/usr/local/bin/tesseract`                |
+
 
 ## Shape Detection Tips
 

@@ -168,7 +168,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 text, confidence = ocr_service.extract_text_from_circle(
                                     page_info['image_path'],
                                     shape['center_x'], shape['center_y'],
-                                    shape['radius'], padding=3
+                                    shape['radius'], padding=10
                                 )
                             else:
                                 text, confidence = ocr_service.extract_text_from_region(
