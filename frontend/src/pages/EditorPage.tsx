@@ -18,7 +18,11 @@ import {
   Move,
   Loader2,
   Scissors,
-  Layers
+  Layers,
+  Brain,
+  ChevronDown,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import api from '../lib/api'
@@ -57,7 +61,11 @@ export default function EditorPage() {
     updateFloorplan,
     deleteFloorplan,
     splitFloorplan,
-    isLoading 
+    isLoading,
+    shapeTemplates,
+    fetchShapeTemplates,
+    deleteShapeTemplate,
+    toggleShapeTemplate
   } = useProjectStore()
   
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -95,6 +103,14 @@ export default function EditorPage() {
   const [editingCropName, setEditingCropName] = useState<string | null>(null)
   const [editCropName, setEditCropName] = useState('')
   const [deleteOriginalAfterSplit, setDeleteOriginalAfterSplit] = useState(false)
+  
+  // Learned templates panel
+  const [showTemplatesPanel, setShowTemplatesPanel] = useState(false)
+
+  // Fetch shape templates on mount
+  useEffect(() => {
+    fetchShapeTemplates()
+  }, [fetchShapeTemplates])
   
   // Fetch project and floorplan data
   useEffect(() => {
@@ -175,10 +191,13 @@ export default function EditorPage() {
     if (currentFloorplan?.extracted_data) {
       currentFloorplan.extracted_data.forEach((shape, index) => {
         const isSelected = selectedShape === shape.id
+        const isLearned = shape.detection_method === 'learned'
         
-        ctx.strokeStyle = isSelected ? '#ed751d' : '#3b9df6'
+        const defaultStroke = isLearned ? '#f59e0b' : '#3b9df6'
+        const defaultFill = isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)'
+        ctx.strokeStyle = isSelected ? '#ed751d' : defaultStroke
         ctx.lineWidth = isSelected ? 3 / scale : 2 / scale
-        ctx.fillStyle = isSelected ? 'rgba(237, 117, 29, 0.1)' : 'rgba(59, 157, 246, 0.1)'
+        ctx.fillStyle = isSelected ? 'rgba(237, 117, 29, 0.1)' : defaultFill
         
         // If this shape has merged bounding boxes, draw all of them
         const boxesToDraw = shape.all_bounding_boxes || [{
@@ -207,9 +226,8 @@ export default function EditorPage() {
           }
         })
         
-        // Draw shape number on the first box
         const firstBox = boxesToDraw[0]
-        ctx.fillStyle = isSelected ? '#ed751d' : '#3b9df6'
+        ctx.fillStyle = isSelected ? '#ed751d' : defaultStroke
         ctx.font = `bold ${14 / scale}px sans-serif`
         ctx.fillText(`${index + 1}`, firstBox.x + 4, firstBox.y + 16)
       })
@@ -438,20 +456,30 @@ export default function EditorPage() {
           const center_y = Math.round(y + height / 2)
           const radius = Math.round(Math.min(width, height) / 2)
           try {
-            await ocrRegion(floorId, {
+            const result = await ocrRegion(floorId, {
               x: Math.round(x), y: Math.round(y),
               width: Math.round(width), height: Math.round(height),
               shape_type: 'circle',
               shape_data: { center_x, center_y, radius }
             })
-            toast.success('Text extracted!')
+            if (result?._template_saved) {
+              toast.success('Text extracted! Shape saved as template for future detection.')
+              fetchShapeTemplates()
+            } else {
+              toast.success('Text extracted!')
+            }
           } catch {
             toast.error('Failed to extract text')
           }
         } else {
           try {
-            await ocrRegion(floorId, { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
-            toast.success('Text extracted!')
+            const result = await ocrRegion(floorId, { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
+            if (result?._template_saved) {
+              toast.success('Text extracted! Shape saved as template for future detection.')
+              fetchShapeTemplates()
+            } else {
+              toast.success('Text extracted!')
+            }
           } catch {
             toast.error('Failed to extract text')
           }
@@ -1112,6 +1140,94 @@ export default function EditorPage() {
                 )}
               </button>
             </div>
+
+            {/* Learned Templates Section */}
+            {shapeTemplates.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                <button
+                  onClick={() => setShowTemplatesPanel(!showTemplatesPanel)}
+                  className="flex items-center justify-between w-full text-sm"
+                >
+                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                    <Brain className="w-4 h-4" />
+                    <span className="font-medium">
+                      Learned Templates ({shapeTemplates.filter(t => t.is_active).length})
+                    </span>
+                  </div>
+                  <ChevronDown className={clsx(
+                    'w-4 h-4 text-slate-400 transition-transform',
+                    showTemplatesPanel && 'rotate-180'
+                  )} />
+                </button>
+
+                {showTemplatesPanel && (
+                  <div className="mt-2 space-y-1.5 max-h-48 overflow-auto">
+                    {shapeTemplates.length === 0 ? (
+                      <p className="text-xs text-slate-500">
+                        No templates yet. Draw shapes manually to teach the system.
+                      </p>
+                    ) : (
+                      shapeTemplates.map((tmpl) => (
+                        <div
+                          key={tmpl.id}
+                          className={clsx(
+                            'flex items-center justify-between p-2 rounded-lg text-xs',
+                            tmpl.is_active
+                              ? 'bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800'
+                              : 'bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 opacity-60'
+                          )}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className={clsx(
+                              'w-2 h-2 rounded-full flex-shrink-0',
+                              tmpl.is_active ? 'bg-amber-400' : 'bg-slate-400'
+                            )} />
+                            <span className="text-slate-700 dark:text-slate-300 truncate font-mono">
+                              {tmpl.extracted_text || tmpl.shape_type}
+                            </span>
+                            <span className="text-slate-400 flex-shrink-0">
+                              {tmpl.width}×{tmpl.height}
+                            </span>
+                            {tmpl.match_count > 0 && (
+                              <span className="text-amber-500 flex-shrink-0" title="Times matched">
+                                {tmpl.match_count}×
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+                            <button
+                              onClick={() => toggleShapeTemplate(tmpl.id, !tmpl.is_active)}
+                              className={clsx(
+                                'p-1 rounded transition-colors',
+                                tmpl.is_active
+                                  ? 'text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+                                  : 'text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                              )}
+                              title={tmpl.is_active ? 'Disable template' : 'Enable template'}
+                            >
+                              {tmpl.is_active
+                                ? <ToggleRight className="w-4 h-4" />
+                                : <ToggleLeft className="w-4 h-4" />
+                              }
+                            </button>
+                            <button
+                              onClick={() => {
+                                deleteShapeTemplate(tmpl.id)
+                                toast.success('Template deactivated')
+                              }}
+                              className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors"
+                              title="Remove template"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Selected Shape Info */}
@@ -1288,6 +1404,11 @@ export default function EditorPage() {
                         {data.is_manual && (
                           <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                             manual
+                          </span>
+                        )}
+                        {data.detection_method === 'learned' && (
+                          <span className="text-xs px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded" title="Detected via learned template">
+                            learned
                           </span>
                         )}
                         {(data.merged_count && data.merged_count > 1) && (

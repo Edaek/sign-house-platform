@@ -140,6 +140,20 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     shapes = cv_service.detect_red_rectangles(page_info['image_path'])
                     shape_type = 'rectangle'
                 
+                # Learned template matching pass
+                try:
+                    active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
+                    if active_templates:
+                        raw_learned = cv_service.detect_from_learned_templates(
+                            page_info['image_path'], active_templates, shape_type=shape_type
+                        )
+                        learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                        if learned_unique:
+                            logger.info(f"Batch: learned templates added {len(learned_unique)} shapes on page {page_info['page_number']}")
+                            shapes = shapes + learned_unique
+                except Exception as tmpl_err:
+                    logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
+                
                 mongo.db.floorplans.update_one(
                     {'_id': ObjectId(floorplan_id)},
                     {'$set': {
@@ -211,6 +225,10 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                             doc['extracted_text'] = cleaned
                             doc['confidence'] = confidence
                             doc['quantity'] = quantity
+
+                            if shape.get('detection_method') == 'learned':
+                                doc['detection_method'] = 'learned'
+                                doc['template_id'] = shape.get('template_id')
                             
                             result_insert = mongo.db.extracted_data.insert_one(doc)
                             doc['_id'] = result_insert.inserted_id

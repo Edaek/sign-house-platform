@@ -24,7 +24,9 @@ __all__ = [
     'sign_table_to_dict',
     'create_processing_job_doc',
     'create_processing_file_doc',
-    'processing_job_to_dict'
+    'processing_job_to_dict',
+    'create_shape_template_doc',
+    'shape_template_to_dict'
 ]
 
 
@@ -139,12 +141,14 @@ def create_extracted_data_doc(shape_index, shape_type, x, y, width, height, floo
         'shape_data': shape_data,
         'extracted_text': None,
         'confidence': None,
-        'quantity': 1,  # Default quantity (no multiplier)
-        'merged_count': 1,  # Number of items merged (1 = not merged)
-        'original_shape_indices': None,  # Array of shape indices that were merged
-        'all_bounding_boxes': None,  # Array of all bounding boxes for merged items
+        'quantity': 1,
+        'merged_count': 1,
+        'original_shape_indices': None,
+        'all_bounding_boxes': None,
         'is_manual': False,
         'manual_text': None,
+        'detection_method': 'auto',  # 'auto' | 'manual' | 'learned'
+        'template_id': None,  # Reference to shape_template that matched (for 'learned')
         'floorplan_id': ObjectId(floorplan_id),
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
@@ -345,4 +349,48 @@ def processing_job_to_dict(job_doc):
         'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
         'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
         'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None
+    }
+
+
+def create_shape_template_doc(shape_type, image_path, width, height,
+                               color_profile=None, source_floorplan_id=None,
+                               extracted_text=None, created_by=None):
+    """Create a shape template document for self-learning detection.
+
+    Templates are cropped from user-drawn manual corrections and used
+    in future detection runs via multi-scale template matching.
+    """
+    return {
+        'shape_type': shape_type,
+        'image_path': image_path,
+        'width': width,
+        'height': height,
+        'color_profile': color_profile,
+        'source_floorplan_id': ObjectId(source_floorplan_id) if source_floorplan_id else None,
+        'extracted_text': extracted_text,
+        'created_by': ObjectId(created_by) if created_by else None,
+        'is_active': True,
+        'match_count': 0,
+        'created_at': datetime.utcnow(),
+    }
+
+
+def shape_template_to_dict(template_doc):
+    """Convert shape template document to dict for JSON response."""
+    if not template_doc:
+        return None
+
+    return {
+        'id': str(template_doc['_id']),
+        'shape_type': template_doc.get('shape_type', ''),
+        'image_path': template_doc.get('image_path', ''),
+        'width': template_doc.get('width', 0),
+        'height': template_doc.get('height', 0),
+        'color_profile': template_doc.get('color_profile'),
+        'source_floorplan_id': str(template_doc['source_floorplan_id']) if template_doc.get('source_floorplan_id') else None,
+        'extracted_text': template_doc.get('extracted_text'),
+        'created_by': str(template_doc['created_by']) if template_doc.get('created_by') else None,
+        'is_active': template_doc.get('is_active', True),
+        'match_count': template_doc.get('match_count', 0),
+        'created_at': template_doc['created_at'].isoformat() if template_doc.get('created_at') else None,
     }

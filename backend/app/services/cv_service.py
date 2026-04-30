@@ -1663,3 +1663,148 @@ class CVService:
         height, width = img.shape[:2]
         return width, height
 
+    def extract_color_profile(self, image):
+        """Extract a compact HSV color profile from an image region.
+
+        Returns a dict with dominant hue/sat ranges suitable for
+        pre-filtering templates against target images.
+        """
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        h, s, v = cv2.split(hsv)
+
+        h_hist = cv2.calcHist([h], [0], None, [180], [0, 180]).flatten()
+        s_hist = cv2.calcHist([s], [0], None, [256], [0, 256]).flatten()
+
+        dominant_hue = int(np.argmax(h_hist))
+        dominant_sat = int(np.argmax(s_hist))
+
+        h_nonzero = np.where(h_hist > h_hist.max() * 0.1)[0]
+        s_nonzero = np.where(s_hist > s_hist.max() * 0.1)[0]
+
+        return {
+            'dominant_hue': dominant_hue,
+            'dominant_sat': dominant_sat,
+            'hue_range': [int(h_nonzero.min()), int(h_nonzero.max())] if len(h_nonzero) else [0, 180],
+            'sat_range': [int(s_nonzero.min()), int(s_nonzero.max())] if len(s_nonzero) else [0, 256],
+        }
+
+    def detect_from_learned_templates(self, image_path, templates, shape_type=None):
+        """Run learned templates against an image to find matching shapes.
+
+        Uses multi-scale edge-based template matching with wider scale range
+        to account for DPI variation across floorplans.
+
+        Args:
+            image_path: Path to the floorplan image
+            templates: List of dicts with 'image_path', 'shape_type', 'width', 'height', '_id'
+            shape_type: Optional filter — only use templates of this type
+
+        Returns:
+            List of shape dicts in the standard detection output format,
+            each with 'detection_method': 'learned' and 'template_id'.
+        """
+        if not templates:
+            return []
+
+        img, gray = self.load_image(image_path)
+        if img is None:
+            logger.error(f"Could not load image: {image_path}")
+            return []
+
+        img_h, img_w = img.shape[:2]
+        all_matches = []
+
+        for tmpl_info in templates:
+            if shape_type and tmpl_info.get('shape_type') != shape_type:
+                continue
+
+            tmpl_path = tmpl_info.get('image_path', '')
+            if not os.path.exists(tmpl_path):
+                logger.warning(f"Template image not found: {tmpl_path}")
+                continue
+
+            template_img = cv2.imread(tmpl_path)
+            if template_img is None:
+                continue
+
+            tmpl_h, tmpl_w = template_img.shape[:2]
+            if tmpl_h < 10 or tmpl_w < 10:
+                continue
+
+            size_ratio = max(img_w / tmpl_w, img_h / tmpl_h)
+            min_scale = max(0.5, 1.0 / size_ratio) if size_ratio > 2 else 0.5
+            max_scale = min(3.0, size_ratio) if size_ratio > 1 else 2.0
+
+            matches = self._multi_scale_template_match(
+                img, template_img,
+                scale_range=(min_scale, max_scale),
+                scale_steps=15,
+                threshold=0.45
+            )
+
+            nms_matches = self._non_maximum_suppression(matches, iou_threshold=0.3)
+
+            tmpl_id = str(tmpl_info.get('_id', ''))
+            tmpl_shape_type = tmpl_info.get('shape_type', 'rectangle')
+
+            for match in nms_matches:
+                x, y, w, h, score, scale = match
+
+                if x < 0 or y < 0 or x + w > img_w or y + h > img_h:
+                    continue
+
+                shape = {
+                    'type': tmpl_shape_type,
+                    'x': int(x),
+                    'y': int(y),
+                    'width': int(w),
+                    'height': int(h),
+                    'confidence': float(score),
+                    'detection_method': 'learned',
+                    'template_id': tmpl_id,
+                }
+
+                if tmpl_shape_type == 'circle':
+                    cx = int(x + w / 2)
+                    cy = int(y + h / 2)
+                    radius = int(min(w, h) / 2)
+                    shape['center_x'] = cx
+                    shape['center_y'] = cy
+                    shape['radius'] = radius
+
+                all_matches.append(shape)
+
+        logger.info(f"Learned template matching found {len(all_matches)} candidates from {len(templates)} templates")
+        return all_matches
+
+    def deduplicate_with_existing(self, learned_shapes, existing_shapes, iou_threshold=0.5):
+        """Remove learned detections that overlap with existing standard detections.
+
+        Args:
+            learned_shapes: Shapes from template matching
+            existing_shapes: Shapes from the standard CV pipeline
+            iou_threshold: Overlap threshold above which a learned shape is dropped
+
+        Returns:
+            Filtered list of learned shapes with no significant overlap.
+        """
+        if not existing_shapes:
+            return learned_shapes
+
+        unique = []
+        for ls in learned_shapes:
+            is_dup = False
+            for es in existing_shapes:
+                iou = self._calculate_iou(
+                    ls['x'], ls['y'], ls['width'], ls['height'],
+                    es['x'], es['y'], es['width'], es['height']
+                )
+                if iou > iou_threshold:
+                    is_dup = True
+                    break
+            if not is_dup:
+                unique.append(ls)
+
+        logger.info(f"Dedup: {len(learned_shapes)} learned → {len(unique)} unique (vs {len(existing_shapes)} existing)")
+        return unique
+

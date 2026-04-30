@@ -11,7 +11,9 @@ from app.models import (
     create_floorplan_doc,
     create_processing_job_doc,
     create_processing_file_doc,
-    processing_job_to_dict
+    processing_job_to_dict,
+    create_shape_template_doc,
+    shape_template_to_dict
 )
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
@@ -73,6 +75,22 @@ def detect_shapes(floorplan_id):
             shapes = cv_service.detect_red_rectangles(image_path)
             detected_type = 'rectangle'
 
+        # Learned template matching pass
+        learned_shapes = []
+        try:
+            active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
+            if active_templates:
+                raw_learned = cv_service.detect_from_learned_templates(
+                    image_path, active_templates, shape_type=detected_type
+                )
+                learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                if learned_shapes:
+                    current_app.logger.info(
+                        f"Learned templates added {len(learned_shapes)} new detections"
+                    )
+        except Exception as tmpl_err:
+            current_app.logger.warning(f"Learned template matching failed: {tmpl_err}")
+
         # Update floorplan
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
@@ -86,11 +104,14 @@ def detect_shapes(floorplan_id):
         # Clear old extracted data
         mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
 
+        # Combine standard and learned shapes
+        all_shapes = shapes + learned_shapes
+
         # --- Merged OCR + filter + save ---
         is_circle = detected_type == 'circle'
         ocr_results = []
 
-        for idx, shape in enumerate(shapes):
+        for idx, shape in enumerate(all_shapes):
             # Run full OCR (higher quality than the quick cross-check in detection)
             if is_circle and shape.get('center_x') is not None:
                 text, confidence = ocr_service.extract_text_from_circle(
@@ -138,6 +159,10 @@ def detect_shapes(floorplan_id):
             doc['confidence'] = confidence
             doc['quantity'] = quantity
 
+            if shape.get('detection_method') == 'learned':
+                doc['detection_method'] = 'learned'
+                doc['template_id'] = shape.get('template_id')
+
             result = mongo.db.extracted_data.insert_one(doc)
             doc['_id'] = result.inserted_id
             doc['display_text'] = text
@@ -170,6 +195,21 @@ def detect_shapes(floorplan_id):
         if deleted_ids:
             mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
 
+        # Increment match_count for templates that produced valid detections
+        matched_template_ids = set()
+        for res in grouped_results:
+            tid = res.get('template_id')
+            if tid and res.get('detection_method') == 'learned':
+                matched_template_ids.add(tid)
+        for tid in matched_template_ids:
+            try:
+                mongo.db.shape_templates.update_one(
+                    {'_id': ObjectId(tid)},
+                    {'$inc': {'match_count': 1}}
+                )
+            except Exception:
+                pass
+
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
             {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
@@ -180,9 +220,12 @@ def detect_shapes(floorplan_id):
             res['display_text'] = res.get('manual_text') or res.get('extracted_text')
 
         total_merged = sum(info['merged_count'] for info in merge_info.values())
+        learned_count = sum(1 for r in grouped_results if r.get('detection_method') == 'learned')
         message = f'Detected and OCR\'d {len(response_results)} unique {detected_type}s'
         if deleted_ids:
             message += f' ({total_merged} original detections grouped)'
+        if learned_count:
+            message += f' ({learned_count} from learned templates)'
 
         return jsonify({
             'message': message,
@@ -190,8 +233,9 @@ def detect_shapes(floorplan_id):
             'shapes': response_results,
             'grouping_info': {
                 'total_unique': len(response_results),
-                'total_detected': len(shapes),
-                'merged_count': len(deleted_ids)
+                'total_detected': len(all_shapes),
+                'merged_count': len(deleted_ids),
+                'learned_count': learned_count
             }
         }), 200
 
@@ -429,15 +473,66 @@ def ocr_manual_region(floorplan_id):
         doc['confidence'] = confidence
         doc['quantity'] = quantity
         doc['is_manual'] = True
+        doc['detection_method'] = 'manual'
         
         result = mongo.db.extracted_data.insert_one(doc)
         doc['_id'] = result.inserted_id
         doc['display_text'] = text
         
-        return jsonify({
+        # Auto-save as shape template for self-learning
+        template_id = None
+        try:
+            import cv2
+            img = cv2.imread(floorplan['image_filepath'])
+            if img is not None:
+                ix, iy = int(x), int(y)
+                iw, ih = int(width), int(height)
+                img_h, img_w = img.shape[:2]
+                ix = max(0, ix)
+                iy = max(0, iy)
+                iw = min(iw, img_w - ix)
+                ih = min(ih, img_h - iy)
+
+                if iw > 10 and ih > 10:
+                    cropped = img[iy:iy+ih, ix:ix+iw]
+
+                    cv_service = CVService()
+                    color_profile = cv_service.extract_color_profile(cropped)
+
+                    tmpl_doc = create_shape_template_doc(
+                        shape_type=shape_type,
+                        image_path='',  # placeholder, set after insert
+                        width=iw,
+                        height=ih,
+                        color_profile=color_profile,
+                        source_floorplan_id=floorplan_id,
+                        extracted_text=text,
+                        created_by=user_id
+                    )
+                    tmpl_result = mongo.db.shape_templates.insert_one(tmpl_doc)
+                    template_id = str(tmpl_result.inserted_id)
+
+                    templates_folder = current_app.config['SHAPE_TEMPLATES_FOLDER']
+                    tmpl_path = os.path.join(templates_folder, f'{template_id}.png')
+                    cv2.imwrite(tmpl_path, cropped)
+
+                    mongo.db.shape_templates.update_one(
+                        {'_id': tmpl_result.inserted_id},
+                        {'$set': {'image_path': tmpl_path}}
+                    )
+                    current_app.logger.info(f"Saved shape template {template_id} from manual correction")
+        except Exception as tmpl_err:
+            current_app.logger.warning(f"Failed to save shape template: {tmpl_err}")
+        
+        response_data = {
             'message': 'Text extracted successfully',
             'result': serialize_doc(doc)
-        }), 200
+        }
+        if template_id:
+            response_data['template_id'] = template_id
+            response_data['template_saved'] = True
+
+        return jsonify(response_data), 200
         
     except Exception as e:
         return jsonify({'error': f'OCR failed: {str(e)}'}), 500
@@ -513,6 +608,90 @@ def delete_extracted_data(data_id):
     mongo.db.extracted_data.delete_one({'_id': ObjectId(data_id)})
     
     return jsonify({'message': 'Data deleted successfully'}), 200
+
+
+@processing_bp.route('/templates', methods=['GET'])
+@jwt_required()
+def list_shape_templates():
+    """List all shape templates used for self-learning detection."""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    shape_type_filter = request.args.get('shape_type')
+    active_only = request.args.get('active_only', 'true').lower() == 'true'
+
+    query = {}
+    if active_only:
+        query['is_active'] = True
+    if shape_type_filter:
+        query['shape_type'] = shape_type_filter
+
+    total = mongo.db.shape_templates.count_documents(query)
+    templates = list(
+        mongo.db.shape_templates.find(query)
+        .sort('created_at', -1)
+        .skip((page - 1) * per_page)
+        .limit(per_page)
+    )
+
+    return jsonify({
+        'templates': [shape_template_to_dict(t) for t in templates],
+        'total': total,
+        'page': page,
+        'per_page': per_page
+    }), 200
+
+
+@processing_bp.route('/templates/<template_id>', methods=['PUT'])
+@jwt_required()
+def update_shape_template(template_id):
+    """Toggle a shape template active/inactive."""
+    try:
+        tmpl = mongo.db.shape_templates.find_one({'_id': ObjectId(template_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid template ID'}), 400
+
+    if not tmpl:
+        return jsonify({'error': 'Template not found'}), 404
+
+    data = request.get_json() or {}
+    update_fields = {}
+
+    if 'is_active' in data:
+        update_fields['is_active'] = bool(data['is_active'])
+
+    if not update_fields:
+        return jsonify({'error': 'No valid fields to update'}), 400
+
+    mongo.db.shape_templates.update_one(
+        {'_id': ObjectId(template_id)},
+        {'$set': update_fields}
+    )
+
+    updated = mongo.db.shape_templates.find_one({'_id': ObjectId(template_id)})
+    return jsonify({
+        'message': 'Template updated',
+        'template': shape_template_to_dict(updated)
+    }), 200
+
+
+@processing_bp.route('/templates/<template_id>', methods=['DELETE'])
+@jwt_required()
+def delete_shape_template(template_id):
+    """Soft-delete a shape template (set is_active to False)."""
+    try:
+        tmpl = mongo.db.shape_templates.find_one({'_id': ObjectId(template_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid template ID'}), 400
+
+    if not tmpl:
+        return jsonify({'error': 'Template not found'}), 404
+
+    mongo.db.shape_templates.update_one(
+        {'_id': ObjectId(template_id)},
+        {'$set': {'is_active': False}}
+    )
+
+    return jsonify({'message': 'Template deactivated'}), 200
 
 
 @processing_bp.route('/image/<floorplan_id>', methods=['GET'])

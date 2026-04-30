@@ -23,9 +23,9 @@ interface ExtractedData {
   }
   extracted_text: string | null
   confidence: number | null
-  quantity: number  // Quantity multiplier (defaults to 1)
-  merged_count?: number  // Number of items merged (undefined or 1 = not merged)
-  original_shape_indices?: number[]  // Array of shape indices that were merged
+  quantity: number
+  merged_count?: number
+  original_shape_indices?: number[]
   all_bounding_boxes?: Array<{
     x: number
     y: number
@@ -37,10 +37,27 @@ interface ExtractedData {
       center_x?: number
       center_y?: number
     }
-  }>  // All bounding boxes for merged items
+  }>
   is_manual: boolean
   manual_text: string | null
   display_text: string | null
+  detection_method?: 'auto' | 'manual' | 'learned'
+  template_id?: string | null
+}
+
+interface ShapeTemplate {
+  id: string
+  shape_type: string
+  image_path: string
+  width: number
+  height: number
+  color_profile: Record<string, number | number[]> | null
+  source_floorplan_id: string | null
+  extracted_text: string | null
+  created_by: string | null
+  is_active: boolean
+  match_count: number
+  created_at: string | null
 }
 
 interface FloorPlan {
@@ -112,6 +129,9 @@ interface ProjectState {
   // Batch upload state
   currentBatchJob: BatchUploadJob | null
   isBatchUploading: boolean
+
+  // Shape templates (self-learning)
+  shapeTemplates: ShapeTemplate[]
   
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
@@ -136,6 +156,10 @@ interface ProjectState {
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
   deleteExtractedData: (dataId: string) => Promise<void>
+
+  fetchShapeTemplates: () => Promise<void>
+  deleteShapeTemplate: (templateId: string) => Promise<void>
+  toggleShapeTemplate: (templateId: string, isActive: boolean) => Promise<void>
   
   clearError: () => void
 }
@@ -148,6 +172,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   error: null,
   currentBatchJob: null,
   isBatchUploading: false,
+  shapeTemplates: [],
   
   fetchProjects: async () => {
     set({ isLoading: true, error: null })
@@ -452,6 +477,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     try {
       const response = await api.post(`/processing/ocr-region/${floorplanId}`, region)
       const result = response.data.result
+      result._template_saved = response.data.template_saved || false
       
       set((state) => ({
         currentFloorplan: state.currentFloorplan ? {
@@ -504,6 +530,41 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
+  fetchShapeTemplates: async () => {
+    try {
+      const response = await api.get('/processing/templates', { params: { active_only: 'false' } })
+      set({ shapeTemplates: response.data.templates })
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to fetch shape templates' })
+    }
+  },
+
+  deleteShapeTemplate: async (templateId: string) => {
+    try {
+      await api.delete(`/processing/templates/${templateId}`)
+      set((state) => ({
+        shapeTemplates: state.shapeTemplates.map(t =>
+          t.id === templateId ? { ...t, is_active: false } : t
+        )
+      }))
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to delete template' })
+    }
+  },
+
+  toggleShapeTemplate: async (templateId: string, isActive: boolean) => {
+    try {
+      await api.put(`/processing/templates/${templateId}`, { is_active: isActive })
+      set((state) => ({
+        shapeTemplates: state.shapeTemplates.map(t =>
+          t.id === templateId ? { ...t, is_active: isActive } : t
+        )
+      }))
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to update template' })
+    }
+  },
+
   clearError: () => set({ error: null })
 }))
 

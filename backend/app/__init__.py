@@ -24,6 +24,7 @@ def create_app(config_name=None):
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'pdfs'), exist_ok=True)
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'templates'), exist_ok=True)
     os.makedirs(os.path.join(app.config['UPLOAD_FOLDER'], 'images'), exist_ok=True)
+    os.makedirs(app.config['SHAPE_TEMPLATES_FOLDER'], exist_ok=True)
     
     # Initialize extensions
     mongo.init_app(app)
@@ -104,6 +105,9 @@ def create_app(config_name=None):
         mongo.db.processing_jobs.create_index('job_id', unique=True)
         mongo.db.processing_jobs.create_index('project_id')
         mongo.db.processing_jobs.create_index([('project_id', 1), ('created_at', -1)])
+        # Shape templates indexes (self-learning)
+        mongo.db.shape_templates.create_index('shape_type')
+        mongo.db.shape_templates.create_index('is_active')
     
     # Register blueprints
     from app.api.health import health_bp
