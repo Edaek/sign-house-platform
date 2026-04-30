@@ -5,11 +5,11 @@ import fitz  # PyMuPDF
 class PDFService:
     """Service for PDF processing and conversion."""
     
-    def __init__(self, dpi=200):
+    def __init__(self, dpi=300):
         """Initialize PDF service.
         
         Args:
-            dpi: Resolution for image conversion (default 200)
+            dpi: Resolution for image conversion (default 300)
         """
         self.dpi = dpi
         self.zoom = dpi / 72  # 72 is the default PDF DPI

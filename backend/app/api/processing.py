@@ -378,6 +378,8 @@ def ocr_manual_region(floorplan_id):
     y = data.get('y')
     width = data.get('width')
     height = data.get('height')
+    shape_type = data.get('shape_type', 'manual')
+    shape_data = data.get('shape_data')
     
     if not all([x is not None, y is not None, width, height]):
         return jsonify({'error': 'x, y, width, and height are required'}), 400
@@ -415,12 +417,13 @@ def ocr_manual_region(floorplan_id):
         # Create new extracted data record
         doc = create_extracted_data_doc(
             shape_index=next_index,
-            shape_type='manual',
+            shape_type=shape_type,
             x=int(x),
             y=int(y),
             width=int(width),
             height=int(height),
-            floorplan_id=floorplan_id
+            floorplan_id=floorplan_id,
+            shape_data=shape_data
         )
         doc['extracted_text'] = text
         doc['confidence'] = confidence

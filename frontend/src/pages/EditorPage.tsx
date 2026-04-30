@@ -64,7 +64,7 @@ export default function EditorPage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   
-  const [tool, setTool] = useState<'select' | 'draw' | 'crop'>('select')
+  const [tool, setTool] = useState<'select' | 'draw' | 'draw-circle' | 'crop'>('select')
   const [shapeType, setShapeType] = useState<'auto' | 'circle' | 'rectangle'>('auto')
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
@@ -215,14 +215,21 @@ export default function EditorPage() {
       })
     }
     
-    // Draw current drawing rectangle
     if (drawingRect) {
       ctx.strokeStyle = tool === 'crop' ? '#10b981' : '#ed751d'
       ctx.lineWidth = 2 / scale
       ctx.fillStyle = tool === 'crop' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(237, 117, 29, 0.2)'
       ctx.setLineDash([5 / scale, 5 / scale])
       ctx.beginPath()
-      ctx.rect(drawingRect.startX, drawingRect.startY, drawingRect.width, drawingRect.height)
+      if (tool === 'draw-circle') {
+        const cx = drawingRect.startX + drawingRect.width / 2
+        const cy = drawingRect.startY + drawingRect.height / 2
+        const rx = Math.abs(drawingRect.width) / 2
+        const ry = Math.abs(drawingRect.height) / 2
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+      } else {
+        ctx.rect(drawingRect.startX, drawingRect.startY, drawingRect.width, drawingRect.height)
+      }
       ctx.fill()
       ctx.stroke()
       ctx.setLineDash([])
@@ -327,7 +334,7 @@ export default function EditorPage() {
       return
     }
     
-    if (tool === 'draw' || tool === 'crop') {
+    if (tool === 'draw' || tool === 'draw-circle' || tool === 'crop') {
       setIsDrawing(true)
       setDrawingRect({ startX: coords.x, startY: coords.y, width: 0, height: 0 })
     } else {
@@ -426,8 +433,22 @@ export default function EditorPage() {
           setCropRegions([...cropRegions, newRegion])
           setSelectedCropRegion(newRegion.id)
           toast.success('Crop region added!')
+        } else if (tool === 'draw-circle') {
+          const center_x = Math.round(x + width / 2)
+          const center_y = Math.round(y + height / 2)
+          const radius = Math.round(Math.min(width, height) / 2)
+          try {
+            await ocrRegion(floorId, {
+              x: Math.round(x), y: Math.round(y),
+              width: Math.round(width), height: Math.round(height),
+              shape_type: 'circle',
+              shape_data: { center_x, center_y, radius }
+            })
+            toast.success('Text extracted!')
+          } catch {
+            toast.error('Failed to extract text')
+          }
         } else {
-          // Draw tool - OCR region
           try {
             await ocrRegion(floorId, { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) })
             toast.success('Text extracted!')
@@ -788,6 +809,17 @@ export default function EditorPage() {
           </button>
           
           <button
+            onClick={() => setTool('draw-circle')}
+            className={clsx(
+              'p-3 rounded-lg transition-colors',
+              tool === 'draw-circle' ? 'bg-sign-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+            )}
+            title="Draw Circle Region (O)"
+          >
+            <Circle className="w-5 h-5" />
+          </button>
+          
+          <button
             onClick={() => setTool('crop')}
             className={clsx(
               'p-3 rounded-lg transition-colors',
@@ -838,7 +870,7 @@ export default function EditorPage() {
             onMouseLeave={handleMouseUp}
             className={clsx(
               'absolute inset-0',
-              (tool === 'draw' || tool === 'crop') ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : 'cursor-grab'
+              (tool === 'draw' || tool === 'draw-circle' || tool === 'crop') ? 'cursor-crosshair' : isPanning ? 'cursor-grabbing' : 'cursor-grab'
             )}
           />
           

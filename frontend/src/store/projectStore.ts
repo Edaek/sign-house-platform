@@ -133,7 +133,7 @@ interface ProjectState {
   
   detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
-  ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number }) => Promise<ExtractedData>
+  ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
   deleteExtractedData: (dataId: string) => Promise<void>
   
@@ -448,7 +448,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  ocrRegion: async (floorplanId: string, region: { x: number; y: number; width: number; height: number }) => {
+  ocrRegion: async (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => {
     try {
       const response = await api.post(`/processing/ocr-region/${floorplanId}`, region)
       const result = response.data.result

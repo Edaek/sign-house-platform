@@ -435,9 +435,9 @@ class CVService:
             color_mask_blurred,
             cv2.HOUGH_GRADIENT,
             dp=1.2,
-            minDist=int(target_radius * 1.5),
+            minDist=int(target_radius * 1.0),
             param1=50,
-            param2=15,
+            param2=12,
             minRadius=min_radius,
             maxRadius=max_radius
         )
@@ -492,7 +492,66 @@ class CVService:
                 
                 detected.append(candidate)
         
-        detected = self._remove_duplicate_circles(detected, min_distance=target_radius)
+        # --- Contour-based detection pass (catches circles Hough misses) ---
+        kern_size = max(3, int(target_radius * 0.15))
+        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kern_size, kern_size))
+        contour_mask = cv2.morphologyEx(raw_color_mask, cv2.MORPH_OPEN, open_kernel)
+        contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        radius_lo = target_radius * 0.65
+        radius_hi = target_radius * 1.35
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 200:
+                continue
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            if circularity < 0.4:
+                continue
+            (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
+            if not (radius_lo <= cradius <= radius_hi):
+                continue
+
+            ccx, ccy = int(ccx), int(ccy)
+
+            if sample_location:
+                dist_to_sample = np.sqrt(
+                    (ccx - sample_location[0]) ** 2 + (ccy - sample_location[1]) ** 2
+                )
+                if dist_to_sample < target_radius * 2:
+                    continue
+
+            already_found = any(
+                np.sqrt((ccx - d['center_x']) ** 2 + (ccy - d['center_y']) ** 2) < target_radius
+                for d in detected
+            )
+            if already_found:
+                continue
+
+            candidate = {
+                'type': 'circle',
+                'center_x': ccx,
+                'center_y': ccy,
+                'radius': int(target_radius),
+                'x': max(0, ccx - int(target_radius)),
+                'y': max(0, ccy - int(target_radius)),
+                'width': min(int(target_radius * 2), w - max(0, ccx - int(target_radius))),
+                'height': min(int(target_radius * 2), h - max(0, ccy - int(target_radius))),
+                'confidence': float(circularity),
+            }
+
+            keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
+            if not keep:
+                continue
+            if text:
+                candidate['extracted_text'] = text
+                candidate['ocr_confidence'] = conf
+            detected.append(candidate)
+
+        detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
         detected.sort(key=lambda c: (c['y'], c['x']))
         
         return detected
@@ -575,14 +634,16 @@ class CVService:
         if ring_density < 0.15:
             return False
         
-        # Reject text blocks: real circles have mostly empty interiors,
-        # while text fills the area with colored pixels
-        inner = dist <= radius * 0.6
-        inner_pixels = roi[inner]
-        if len(inner_pixels) > 0:
-            inner_density = np.count_nonzero(inner_pixels) / len(inner_pixels)
-            if ring_density > 0 and inner_density / ring_density > 0.62:
-                return False
+        # A strong ring is enough — OCR will reject non-sign content.
+        # Only block extreme interior fill (solid colored blobs with no
+        # discernible ring/interior contrast).
+        if ring_density < 0.20:
+            inner = dist <= radius * 0.6
+            inner_pixels = roi[inner]
+            if len(inner_pixels) > 0:
+                inner_density = np.count_nonzero(inner_pixels) / len(inner_pixels)
+                if ring_density > 0 and inner_density / ring_density > 0.95:
+                    return False
         
         return True
     
@@ -647,9 +708,9 @@ class CVService:
         outer_density = (np.count_nonzero(outer_pixels) / len(outer_pixels)
                          if len(outer_pixels) > 0 else 0)
 
-        if align_score < 0.55 and outer_density > 0.065:
+        if align_score < 0.45 and outer_density > 0.10:
             return False
-        if align_score <= 0.50 and outer_density > 0.055:
+        if align_score <= 0.40 and outer_density > 0.08:
             return False
 
         return True
@@ -717,7 +778,7 @@ class CVService:
 
         except Exception as e:
             logger.warning(f"OCR cross-check failed for shape at ({shape.get('x')},{shape.get('y')}): {e}")
-            return (True, '', 0.0)
+            return (False, '', 0.0)
 
         return (False, '', 0.0)
 

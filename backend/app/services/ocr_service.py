@@ -62,11 +62,19 @@ def is_valid_sign_code(text, strict=False):
     if not text or not text.strip():
         return False
 
+    stripped = text.strip()
+    if len(stripped) > 2 and re.search(r'[(){}\[\]]', stripped[1:-1]):
+        return False
+
     cleaned = clean_ocr_text(text)
     if not cleaned:
         return False
 
     if strict and len(cleaned) < 2:
+        return False
+
+    code_part = re.sub(r'\s*[xX]\d+$', '', cleaned)
+    if any(c.islower() for c in code_part):
         return False
 
     if SIGN_CODE_PATTERN.match(cleaned):
