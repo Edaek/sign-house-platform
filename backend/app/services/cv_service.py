@@ -1688,20 +1688,88 @@ class CVService:
             'sat_range': [int(s_nonzero.min()), int(s_nonzero.max())] if len(s_nonzero) else [0, 256],
         }
 
-    def detect_from_learned_templates(self, image_path, templates, shape_type=None):
-        """Run learned templates against an image to find matching shapes.
+    def _get_learned_scales(self):
+        """Build a scale set that always includes 1.0 and clusters steps nearby."""
+        near = [0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2]
+        wide = [0.5, 0.65, 0.8, 1.4, 1.7, 2.0, 2.5]
+        return sorted(set(near + wide))
 
-        Uses multi-scale edge-based template matching with wider scale range
-        to account for DPI variation across floorplans.
+    def _multi_scale_match_on_prepared(self, img_prepared, tmpl_prepared,
+                                        scales, threshold, max_per_scale=50):
+        """Run matchTemplate at multiple scales on already-prepared images.
+
+        Both img_prepared and tmpl_prepared must be single-channel uint8.
+        Keeps only the top max_per_scale matches per scale to bound runtime.
+        Returns list of (x, y, w, h, score, scale) tuples.
+        """
+        matches = []
+        tmpl_h, tmpl_w = tmpl_prepared.shape[:2]
+
+        for scale in scales:
+            new_w = int(tmpl_w * scale)
+            new_h = int(tmpl_h * scale)
+            if new_w < 10 or new_h < 10:
+                continue
+            if new_w > img_prepared.shape[1] or new_h > img_prepared.shape[0]:
+                continue
+
+            scaled = cv2.resize(tmpl_prepared, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            result = cv2.matchTemplate(img_prepared, scaled, cv2.TM_CCOEFF_NORMED)
+            locations = np.where(result >= threshold)
+
+            scale_matches = []
+            for pt in zip(*locations[::-1]):
+                x, y = pt
+                score = result[y, x]
+                scale_matches.append((x, y, new_w, new_h, float(score), scale))
+
+            if len(scale_matches) > max_per_scale:
+                scale_matches.sort(key=lambda m: m[4], reverse=True)
+                scale_matches = scale_matches[:max_per_scale]
+
+            matches.extend(scale_matches)
+
+        return matches
+
+    def _build_hsv_color_mask(self, bgr_image, color_profile):
+        """Build a binary mask isolating the dominant color from a color profile."""
+        if not color_profile or color_profile.get('dominant_sat', 0) < 50:
+            return None
+
+        hsv = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2HSV)
+        hue_range = color_profile.get('hue_range', [0, 180])
+        sat_range = color_profile.get('sat_range', [0, 256])
+
+        h_lo = max(0, hue_range[0] - 10)
+        h_hi = min(180, hue_range[1] + 10)
+        s_lo = max(30, sat_range[0] - 20)
+        s_hi = min(255, sat_range[1] + 20)
+
+        if h_lo > h_hi:
+            mask1 = cv2.inRange(hsv, np.array([0, s_lo, 50]), np.array([h_hi, s_hi, 255]))
+            mask2 = cv2.inRange(hsv, np.array([h_lo, s_lo, 50]), np.array([180, s_hi, 255]))
+            return cv2.bitwise_or(mask1, mask2)
+
+        return cv2.inRange(hsv, np.array([h_lo, s_lo, 50]), np.array([h_hi, s_hi, 255]))
+
+    def detect_from_learned_templates(self, image_path, templates, shape_type=None):
+        """Run learned templates against an image using multiple matching strategies.
+
+        Strategies:
+          1. Raw grayscale matching — best for same-DPI / same-floorplan
+          2. Dilated edge matching — tolerant to minor shifts, cross-DPI
+          3. Color-mask matching — for shapes with distinctive color borders
+
+        Candidates are filtered against the legend's color rules so only
+        shapes matching the floorplan's color scheme are kept.
 
         Args:
             image_path: Path to the floorplan image
-            templates: List of dicts with 'image_path', 'shape_type', 'width', 'height', '_id'
+            templates: List of dicts from shape_templates collection
             shape_type: Optional filter — only use templates of this type
 
         Returns:
-            List of shape dicts in the standard detection output format,
-            each with 'detection_method': 'learned' and 'template_id'.
+            List of shape dicts in the standard detection output format.
         """
         if not templates:
             return []
@@ -1712,6 +1780,14 @@ class CVService:
             return []
 
         img_h, img_w = img.shape[:2]
+        scales = self._get_learned_scales()
+
+        img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        img_edges = cv2.Canny(img_gray, 50, 150)
+        kernel = np.ones((3, 3), np.uint8)
+        img_edges_dilated = cv2.dilate(img_edges, kernel, iterations=1)
+        img_edges_smooth = cv2.GaussianBlur(img_edges_dilated, (3, 3), 0)
+
         all_matches = []
 
         for tmpl_info in templates:
@@ -1731,21 +1807,51 @@ class CVService:
             if tmpl_h < 10 or tmpl_w < 10:
                 continue
 
-            size_ratio = max(img_w / tmpl_w, img_h / tmpl_h)
-            min_scale = max(0.5, 1.0 / size_ratio) if size_ratio > 2 else 0.5
-            max_scale = min(3.0, size_ratio) if size_ratio > 1 else 2.0
-
-            matches = self._multi_scale_template_match(
-                img, template_img,
-                scale_range=(min_scale, max_scale),
-                scale_steps=15,
-                threshold=0.45
-            )
-
-            nms_matches = self._non_maximum_suppression(matches, iou_threshold=0.3)
-
             tmpl_id = str(tmpl_info.get('_id', ''))
             tmpl_shape_type = tmpl_info.get('shape_type', 'rectangle')
+            color_profile = tmpl_info.get('color_profile')
+
+            # Prepare template variants
+            tmpl_gray = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
+            tmpl_edges = cv2.Canny(tmpl_gray, 50, 150)
+            tmpl_edges_dilated = cv2.dilate(tmpl_edges, kernel, iterations=1)
+            tmpl_edges_smooth = cv2.GaussianBlur(tmpl_edges_dilated, (3, 3), 0)
+
+            raw_matches = []
+            edge_matches = []
+            color_matches = []
+
+            # Strategy 1: Raw grayscale (high threshold — pixel-exact match)
+            raw_matches = self._multi_scale_match_on_prepared(
+                img_gray, tmpl_gray, scales, threshold=0.7
+            )
+
+            # Strategy 2: Dilated + blurred edges
+            edge_matches = self._multi_scale_match_on_prepared(
+                img_edges_smooth, tmpl_edges_smooth, scales, threshold=0.55
+            )
+
+            # Strategy 3: Color mask (only if template has a colored border)
+            if color_profile and color_profile.get('dominant_sat', 0) >= 50:
+                tmpl_color_mask = self._build_hsv_color_mask(template_img, color_profile)
+                img_color_mask = self._build_hsv_color_mask(img, color_profile)
+                if tmpl_color_mask is not None and img_color_mask is not None:
+                    color_matches = self._multi_scale_match_on_prepared(
+                        img_color_mask, tmpl_color_mask, scales, threshold=0.5
+                    )
+
+            raw_best = max((m[4] for m in raw_matches), default=0)
+            edge_best = max((m[4] for m in edge_matches), default=0)
+            color_best = max((m[4] for m in color_matches), default=0)
+            logger.info(
+                f"Template {tmpl_id[:8]}: "
+                f"raw={len(raw_matches)}(best:{raw_best:.2f}) "
+                f"edge={len(edge_matches)}(best:{edge_best:.2f}) "
+                f"color={len(color_matches)}(best:{color_best:.2f})"
+            )
+
+            combined = raw_matches + edge_matches + color_matches
+            nms_matches = self._non_maximum_suppression(combined, iou_threshold=0.3)
 
             for match in nms_matches:
                 x, y, w, h, score, scale = match
@@ -1774,8 +1880,43 @@ class CVService:
 
                 all_matches.append(shape)
 
-        logger.info(f"Learned template matching found {len(all_matches)} candidates from {len(templates)} templates")
-        return all_matches
+        pre_filter = len(all_matches)
+
+        circle_color_mask = None
+        rect_red_mask = None
+        has_circle_types = any(s['type'] == 'circle' for s in all_matches)
+        has_rect_types = any(s['type'] == 'rectangle' for s in all_matches)
+
+        if has_circle_types:
+            sample_info = self._analyze_sample_circle(img)
+            if sample_info is not None:
+                color_type = sample_info.get('color_type', 'blue')
+                circle_color_mask = self._build_color_mask(img, color_type)
+
+        if has_rect_types:
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            mask_low = cv2.inRange(hsv, np.array([0, 60, 60]), np.array([10, 255, 255]))
+            mask_high = cv2.inRange(hsv, np.array([165, 60, 60]), np.array([180, 255, 255]))
+            rect_red_mask = cv2.bitwise_or(mask_low, mask_high)
+
+        verified = []
+        for s in all_matches:
+            if s['type'] == 'circle' and circle_color_mask is not None:
+                cx = s.get('center_x', s['x'] + s['width'] // 2)
+                cy = s.get('center_y', s['y'] + s['height'] // 2)
+                radius = s.get('radius', min(s['width'], s['height']) // 2)
+                if radius < 5 or not self._verify_circle_has_color(circle_color_mask, cx, cy, radius):
+                    continue
+            elif s['type'] == 'rectangle' and rect_red_mask is not None:
+                if not self._has_complete_red_border(rect_red_mask, s['x'], s['y'], s['width'], s['height']):
+                    continue
+            verified.append(s)
+
+        logger.info(
+            f"Learned template matching found {pre_filter} candidates from {len(templates)} templates, "
+            f"{len(verified)} passed color verification"
+        )
+        return verified
 
     def deduplicate_with_existing(self, learned_shapes, existing_shapes, iou_threshold=0.5):
         """Remove learned detections that overlap with existing standard detections.
