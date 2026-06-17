@@ -1,15 +1,16 @@
 import os
+import gc
 import fitz  # PyMuPDF
 
 
 class PDFService:
     """Service for PDF processing and conversion."""
     
-    def __init__(self, dpi=300):
+    def __init__(self, dpi=200):
         """Initialize PDF service.
         
         Args:
-            dpi: Resolution for image conversion (default 300)
+            dpi: Resolution for image conversion (default 200)
         """
         self.dpi = dpi
         self.zoom = dpi / 72  # 72 is the default PDF DPI
@@ -28,13 +29,14 @@ class PDFService:
         doc.close()
         return count
     
-    def convert_to_images(self, pdf_path, output_dir, format='png'):
+    def convert_to_images(self, pdf_path, output_dir, format='png', preview_dpi=None):
         """Convert PDF pages to images.
         
         Args:
             pdf_path: Path to the PDF file
             output_dir: Directory to save images
             format: Image format (png or jpg)
+            preview_dpi: If set, also generates a lower-res preview at this DPI
             
         Returns:
             List of dictionaries with page info and image paths
@@ -44,32 +46,46 @@ class PDFService:
         
         os.makedirs(output_dir, exist_ok=True)
         
+        preview_dir = None
+        if preview_dpi:
+            preview_dir = os.path.join(output_dir, 'previews')
+            os.makedirs(preview_dir, exist_ok=True)
+        
         doc = fitz.open(pdf_path)
         pages = []
         
-        # Create transformation matrix for resolution
         mat = fitz.Matrix(self.zoom, self.zoom)
+        preview_mat = fitz.Matrix(preview_dpi / 72, preview_dpi / 72) if preview_dpi else None
         
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
             
-            # Render page to image
             pix = page.get_pixmap(matrix=mat)
             
-            # Generate output filename
             base_name = os.path.splitext(os.path.basename(pdf_path))[0]
             image_filename = f"{base_name}_page_{page_num + 1}.{format}"
             image_path = os.path.join(output_dir, image_filename)
             
-            # Save image
             pix.save(image_path)
             
-            pages.append({
+            page_info = {
                 'page_number': page_num + 1,
                 'image_path': image_path,
                 'width': pix.width,
                 'height': pix.height
-            })
+            }
+            
+            del pix
+            
+            if preview_mat and preview_dir:
+                preview_pix = page.get_pixmap(matrix=preview_mat)
+                preview_path = os.path.join(preview_dir, image_filename)
+                preview_pix.save(preview_path)
+                page_info['preview_path'] = preview_path
+                del preview_pix
+            
+            pages.append(page_info)
+            gc.collect()
         
         doc.close()
         
@@ -96,13 +112,11 @@ class PDFService:
             doc.close()
             raise ValueError(f"Invalid page number: {page_number}")
         
-        # Create transformation matrix for resolution
         mat = fitz.Matrix(self.zoom, self.zoom)
         
-        page = doc.load_page(page_number - 1)  # 0-indexed
+        page = doc.load_page(page_number - 1)
         pix = page.get_pixmap(matrix=mat)
         
-        # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
         pix.save(output_path)
@@ -113,6 +127,9 @@ class PDFService:
             'width': pix.width,
             'height': pix.height
         }
+        
+        del pix
+        gc.collect()
         
         doc.close()
         
@@ -144,4 +161,3 @@ class PDFService:
         doc.close()
         
         return pages
-

@@ -394,6 +394,9 @@ class CVService:
         color_type = sample_info.get('color_type', 'blue')
         sample_location = sample_info.get('location')
         
+        # Detect legend box in upper-left corner to exclude from detection
+        legend_bbox = self._detect_legend_region(img)
+        
         # Build color mask using detected color type
         color_dominant = self._build_color_mask(img, color_type)
         
@@ -465,16 +468,18 @@ class CVService:
                         grad_data, cx, cy, radius, raw_color_mask):
                     continue
                 
-                x = max(0, cx - radius)
-                y = max(0, cy - radius)
-                width = min(radius * 2, w - x)
-                height = min(radius * 2, h - y)
+                # Adjust radius inward to match ring midline (outer boundary - half stroke)
+                adj_radius = radius - 2
+                x = max(0, cx - adj_radius)
+                y = max(0, cy - adj_radius)
+                width = min(adj_radius * 2, w - x)
+                height = min(adj_radius * 2, h - y)
                 
                 candidate = {
                     'type': 'circle',
                     'center_x': int(cx),
                     'center_y': int(cy),
-                    'radius': int(radius),
+                    'radius': int(adj_radius),
                     'x': int(x),
                     'y': int(y),
                     'width': int(width),
@@ -515,7 +520,13 @@ class CVService:
             if not (radius_lo <= cradius <= radius_hi):
                 continue
 
-            ccx, ccy = int(ccx), int(ccy)
+            # Use moments centroid for more accurate center (handles partial arcs)
+            M = cv2.moments(contour)
+            if M['m00'] > 0:
+                ccx = M['m10'] / M['m00']
+                ccy = M['m01'] / M['m00']
+
+            ccx, ccy = int(round(ccx)), int(round(ccy))
 
             if sample_location:
                 dist_to_sample = np.sqrt(
@@ -535,11 +546,11 @@ class CVService:
                 'type': 'circle',
                 'center_x': ccx,
                 'center_y': ccy,
-                'radius': int(target_radius),
-                'x': max(0, ccx - int(target_radius)),
-                'y': max(0, ccy - int(target_radius)),
-                'width': min(int(target_radius * 2), w - max(0, ccx - int(target_radius))),
-                'height': min(int(target_radius * 2), h - max(0, ccy - int(target_radius))),
+                'radius': int(round(cradius)) - 2,
+                'x': max(0, ccx - int(round(cradius)) + 2),
+                'y': max(0, ccy - int(round(cradius)) + 2),
+                'width': min((int(round(cradius)) - 2) * 2, w - max(0, ccx - int(round(cradius)) + 2)),
+                'height': min((int(round(cradius)) - 2) * 2, h - max(0, ccy - int(round(cradius)) + 2)),
                 'confidence': float(circularity),
             }
 
@@ -552,9 +563,302 @@ class CVService:
             detected.append(candidate)
 
         detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
+        
+        # Secondary pass: detect yellow circles if primary color is not yellow
+        if color_type != 'yellow':
+            yellow_detected = self._detect_secondary_color_circles(
+                img, gray, target_radius, 'yellow', detected, sample_location)
+            detected.extend(yellow_detected)
+            detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
+        
+        # Exclude circles inside the legend region
+        if legend_bbox:
+            lx, ly, lw, lh = legend_bbox
+            detected = [d for d in detected
+                        if not (lx <= d['center_x'] <= lx + lw and ly <= d['center_y'] <= ly + lh)]
+        
+        # Exclude circles inside the title block region (right-bottom corner)
+        title_x = int(w * 0.70)
+        title_y = int(h * 0.60)
+        detected = [d for d in detected
+                    if not (d['center_x'] >= title_x and d['center_y'] >= title_y)]
+        
         detected.sort(key=lambda c: (c['y'], c['x']))
         
         return detected
+    
+    def _detect_secondary_color_circles(self, img, gray, target_radius, sec_color, existing, sample_location):
+        """Run a secondary detection pass for circles of a different color.
+        
+        For filled circles (like yellow), independently estimates the actual
+        radius from contour analysis rather than relying on the primary sample's
+        target_radius.
+        """
+        h, w = img.shape[:2]
+        
+        color_mask = self._build_color_mask(img, sec_color)
+        
+        if cv2.countNonZero(color_mask) < 100:
+            return []
+        
+        # Clean up the mask
+        kernel = np.ones((3, 3), np.uint8)
+        color_mask_clean = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+        color_mask_clean = cv2.morphologyEx(color_mask_clean, cv2.MORPH_OPEN, kernel)
+        
+        # --- Step 1: Estimate actual yellow circle radius from contours ---
+        est_contours, _ = cv2.findContours(
+            color_mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        radii = []
+        for c in est_contours:
+            area = cv2.contourArea(c)
+            if area < 300:
+                continue
+            peri = cv2.arcLength(c, True)
+            if peri == 0:
+                continue
+            circ = 4 * np.pi * area / (peri * peri)
+            if circ > 0.85:
+                _, r = cv2.minEnclosingCircle(c)
+                radii.append(r)
+        
+        if radii:
+            yellow_target = int(np.median(radii))
+            yellow_target = max(int(target_radius * 0.5), min(yellow_target, int(target_radius * 2.0)))
+            min_radius = max(5, int(min(radii) * 0.7))
+            max_radius = int(max(radii) * 1.3)
+            max_radius = min(max_radius, int(target_radius * 2.5))
+        else:
+            yellow_target = target_radius
+            min_radius = max(5, int(target_radius * 0.5))
+            max_radius = int(target_radius * 2.0)
+        
+        # --- Step 2: Hough detection on Canny edges (no blur) ---
+        edges = cv2.Canny(color_mask_clean, 50, 150)
+        
+        # Pre-compute connected component labels for shape validation
+        num_labels, labels, cc_stats, _ = cv2.connectedComponentsWithStats(color_mask_clean)
+        
+        circles = cv2.HoughCircles(
+            edges,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=int(yellow_target * 0.8),
+            param1=50,
+            param2=8,
+            minRadius=min_radius,
+            maxRadius=max_radius
+        )
+        
+        detected = []
+        
+        if circles is not None:
+            circles = np.round(circles[0, :]).astype("int")
+            
+            for (cx, cy, radius) in circles:
+                if sample_location:
+                    dist_to_sample = np.sqrt(
+                        (cx - sample_location[0]) ** 2 + (cy - sample_location[1]) ** 2)
+                    if dist_to_sample < yellow_target * 2:
+                        continue
+                
+                if not self._verify_circle_has_color(color_mask_clean, cx, cy, radius):
+                    continue
+                
+                # Verify the connected component at this point is roughly circular
+                if 0 <= cy < h and 0 <= cx < w:
+                    label_id = labels[cy, cx]
+                    if label_id > 0:
+                        cc_w = cc_stats[label_id, cv2.CC_STAT_WIDTH]
+                        cc_h = cc_stats[label_id, cv2.CC_STAT_HEIGHT]
+                        cc_area = cc_stats[label_id, cv2.CC_STAT_AREA]
+                        cc_aspect = min(cc_w, cc_h) / max(cc_w, cc_h) if max(cc_w, cc_h) > 0 else 0
+                        expected_area = np.pi * radius * radius
+                        if cc_aspect < 0.5 or cc_area > expected_area * 4:
+                            continue
+                
+                too_close = any(
+                    np.sqrt((cx - d['center_x']) ** 2 + (cy - d['center_y']) ** 2) < yellow_target * 0.7
+                    for d in existing
+                )
+                if too_close:
+                    continue
+                
+                adj_radius = radius
+                x = max(0, cx - adj_radius)
+                y = max(0, cy - adj_radius)
+                bw = min(adj_radius * 2, w - x)
+                bh = min(adj_radius * 2, h - y)
+                
+                candidate = {
+                    'type': 'circle',
+                    'center_x': int(cx),
+                    'center_y': int(cy),
+                    'radius': int(adj_radius),
+                    'x': int(x),
+                    'y': int(y),
+                    'width': int(bw),
+                    'height': int(bh),
+                    'confidence': 1.0,
+                }
+                
+                keep, text, conf = self._verify_shape_content(img, candidate, color_type=sec_color)
+                if keep:
+                    if text:
+                        candidate['extracted_text'] = text
+                        candidate['ocr_confidence'] = conf
+                    detected.append(candidate)
+                else:
+                    region_circ = self._measure_mask_circularity(color_mask_clean, cx, cy, radius)
+                    if region_circ > 0.7:
+                        candidate['extracted_text'] = text or ''
+                        candidate['ocr_confidence'] = conf
+                        detected.append(candidate)
+        
+        # --- Step 3: Contour-based pass with independent radius range ---
+        contours, _ = cv2.findContours(
+            color_mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        radius_lo = min_radius * 0.85
+        radius_hi = max_radius * 1.1
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < 300:
+                continue
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            if circularity < 0.4:
+                continue
+            (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
+            if not (radius_lo <= cradius <= radius_hi):
+                continue
+            
+            M = cv2.moments(contour)
+            if M['m00'] > 0:
+                ccx = M['m10'] / M['m00']
+                ccy = M['m01'] / M['m00']
+            ccx, ccy = int(round(ccx)), int(round(ccy))
+            
+            too_close = any(
+                np.sqrt((ccx - d['center_x']) ** 2 + (ccy - d['center_y']) ** 2) < yellow_target * 0.7
+                for d in existing + detected
+            )
+            if too_close:
+                continue
+            
+            adj_r = int(round(cradius))
+            candidate = {
+                'type': 'circle',
+                'center_x': ccx,
+                'center_y': ccy,
+                'radius': adj_r,
+                'x': max(0, ccx - adj_r),
+                'y': max(0, ccy - adj_r),
+                'width': min(adj_r * 2, w - max(0, ccx - adj_r)),
+                'height': min(adj_r * 2, h - max(0, ccy - adj_r)),
+                'confidence': float(circularity),
+            }
+            
+            keep, text, conf = self._verify_shape_content(img, candidate, color_type=sec_color)
+            if keep:
+                if text:
+                    candidate['extracted_text'] = text
+                    candidate['ocr_confidence'] = conf
+                detected.append(candidate)
+            elif circularity > 0.7:
+                candidate['extracted_text'] = text or ''
+                candidate['ocr_confidence'] = conf
+                detected.append(candidate)
+        
+        return detected
+    
+    def _measure_mask_circularity(self, mask, cx, cy, radius):
+        """Measure how circular the mask fill is within a given circle region.
+        
+        Returns the ratio of filled pixels to total circle area.
+        A solid circular region gives ~0.9+, a rectangular bar gives <<0.5.
+        """
+        h, w = mask.shape[:2]
+        x1 = max(0, cx - radius)
+        y1 = max(0, cy - radius)
+        x2 = min(w, cx + radius)
+        y2 = min(h, cy + radius)
+        
+        region = mask[y1:y2, x1:x2]
+        if region.size == 0:
+            return 0.0
+        
+        rh, rw = region.shape
+        local_cx = cx - x1
+        local_cy = cy - y1
+        
+        Y, X = np.ogrid[:rh, :rw]
+        dist = np.sqrt((X - local_cx) ** 2 + (Y - local_cy) ** 2)
+        circle_mask = dist <= radius
+        
+        circle_area = np.count_nonzero(circle_mask)
+        if circle_area == 0:
+            return 0.0
+        
+        filled = np.count_nonzero(region[circle_mask])
+        return filled / circle_area
+    
+    def _detect_legend_region(self, img):
+        """Detect a legend/key box in the upper-left corner of the image.
+        
+        Looks for a bordered rectangle in the top-left area that typically
+        contains sample circles and text labels (not actual sign locations).
+        
+        Returns:
+            Tuple (x, y, w, h) of the legend bounding box, or None if not found.
+        """
+        h, w = img.shape[:2]
+        
+        # Search in the upper-left 25% x 30% of the image
+        search_w = int(w * 0.25)
+        search_h = int(h * 0.30)
+        region = img[0:search_h, 0:search_w]
+        
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        
+        # Detect edges and find rectangular contours (the legend border)
+        edges = cv2.Canny(gray, 50, 150)
+        kernel = np.ones((3, 3), np.uint8)
+        edges = cv2.dilate(edges, kernel, iterations=1)
+        
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        min_legend_area = search_w * search_h * 0.05
+        
+        best_box = None
+        best_area = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_legend_area:
+                continue
+            
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+            
+            if len(approx) >= 4:
+                x, y, bw, bh = cv2.boundingRect(contour)
+                aspect = bw / bh if bh > 0 else 0
+                if 0.3 < aspect < 4.0 and area > best_area:
+                    best_area = area
+                    best_box = (x, y, bw, bh)
+        
+        if best_box:
+            # Add small padding around the detected box
+            pad = 10
+            bx, by, bw, bh = best_box
+            return (max(0, bx - pad), max(0, by - pad), bw + pad * 2, bh + pad * 2)
+        
+        return None
     
     def _verify_circle_has_color(self, color_mask, cx, cy, radius):
         """Verify that a detected circle location actually has colored pixels.
@@ -800,12 +1104,24 @@ class CVService:
         if roi.size == 0:
             return None
 
-        if color_type and len(roi.shape) == 3:
-            foreign_types = [ct for ct in ('blue', 'red') if ct != color_type]
+        if color_type and color_type != 'yellow' and len(roi.shape) == 3:
+            foreign_types = [ct for ct in ('blue', 'red', 'yellow') if ct != color_type]
             for ft in foreign_types:
                 foreign_mask = self._build_color_mask(roi, ft)
                 foreign_mask = cv2.dilate(foreign_mask, np.ones((3, 3), np.uint8), iterations=1)
                 roi[foreign_mask > 0] = (255, 255, 255)
+        elif color_type == 'yellow' and len(roi.shape) == 3:
+            # For yellow filled circles: neutralize the yellow background to white
+            # but keep the dark/red text intact for OCR
+            yellow_mask = self._build_color_mask(roi, 'yellow')
+            yellow_mask = cv2.dilate(yellow_mask, np.ones((3, 3), np.uint8), iterations=1)
+            roi[yellow_mask > 0] = (255, 255, 255)
+            # Enhance remaining text contrast with adaptive threshold
+            gray_tmp = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            enhanced = cv2.adaptiveThreshold(
+                gray_tmp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 15, 8)
+            roi = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
 
         roi_h, roi_w = roi.shape[:2]
         local_cx = cx - x1
@@ -854,7 +1170,7 @@ class CVService:
         
         Args:
             img_region: BGR image region
-            color_type: 'blue' or 'red'
+            color_type: 'blue', 'red', or 'yellow'
             
         Returns:
             Binary mask (uint8, 0 or 255)
@@ -872,6 +1188,9 @@ class CVService:
             mask_low = cv2.inRange(hsv, np.array([0, 60, 60]), np.array([10, 255, 255]))
             mask_high = cv2.inRange(hsv, np.array([165, 60, 60]), np.array([180, 255, 255]))
             mask = cv2.bitwise_or(mask_low, mask_high)
+        elif color_type == 'yellow':
+            hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array([12, 60, 80]), np.array([42, 255, 255]))
         else:
             mask = np.zeros(img_region.shape[:2], dtype=np.uint8)
         
@@ -912,7 +1231,8 @@ class CVService:
             if circularity > best_circularity and radius > min_radius:
                 best_circularity = circularity
                 best_contour = contour
-                best_radius = int(radius)
+                # Adjust inward by ~2px to get ring midline instead of outer boundary
+                best_radius = max(min_radius, int(radius) - 2)
         
         return best_contour, best_circularity, best_radius
     
@@ -958,8 +1278,13 @@ class CVService:
         color_mask = best['color_mask']
         
         (cx_local, cy_local), _ = cv2.minEnclosingCircle(best_contour)
-        cx_full = int(cx_local) + (w - search_w)
-        cy_full = int(cy_local)
+        # Use moments centroid for more accurate center
+        M = cv2.moments(best_contour)
+        if M['m00'] > 0:
+            cx_local = M['m10'] / M['m00']
+            cy_local = M['m01'] / M['m00']
+        cx_full = int(round(cx_local)) + (w - search_w)
+        cy_full = int(round(cy_local))
         
         # Sample BGR from the colored pixels only (outline), not the filled interior
         # This avoids averaging with white background inside thin-outline circles
@@ -1006,6 +1331,9 @@ class CVService:
     def _remove_duplicate_circles(self, circles, min_distance=20):
         """Remove duplicate circle detections that are too close together.
         
+        Uses both center distance and overlap checks to eliminate redundant
+        detections (e.g., phantom circles formed at intersection of two outlines).
+        
         Args:
             circles: List of detected circles
             min_distance: Minimum distance between circle centers
@@ -1016,19 +1344,22 @@ class CVService:
         if not circles:
             return circles
         
-        # Sort by confidence (circularity) descending
         circles = sorted(circles, key=lambda c: c['confidence'], reverse=True)
         
         kept = []
         for circle in circles:
             is_duplicate = False
+            cr = circle.get('radius', 0)
             for kept_circle in kept:
-                # Calculate distance between centers
+                kr = kept_circle.get('radius', 0)
                 dist = np.sqrt(
                     (circle['center_x'] - kept_circle['center_x']) ** 2 +
                     (circle['center_y'] - kept_circle['center_y']) ** 2
                 )
                 if dist < min_distance:
+                    is_duplicate = True
+                    break
+                if dist < (cr + kr) * 0.7:
                     is_duplicate = True
                     break
             

@@ -58,11 +58,13 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         })
         
         # Convert PDF to images
-        pdf_service = PDFService()
+        pdf_service = PDFService(dpi=config.get('PDF_DPI', 200))
         image_dir = os.path.join(upload_folder, 'images', project_id)
         os.makedirs(image_dir, exist_ok=True)
         
-        pages = pdf_service.convert_to_images(file_path, image_dir)
+        pages = pdf_service.convert_to_images(
+            file_path, image_dir, preview_dpi=config.get('PDF_PREVIEW_DPI', 150)
+        )
         
         update_file_status(job_id, file_index, {
             'status': 'converting',
@@ -110,6 +112,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 image_filepath=page_info['image_path'],
                 project_id=project_id
             )
+            floorplan_doc['preview_filepath'] = page_info.get('preview_path', '')
             result = mongo.db.floorplans.insert_one(floorplan_doc)
             floorplan_id = str(result.inserted_id)
             floorplan_ids.append(floorplan_id)

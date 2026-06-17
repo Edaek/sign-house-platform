@@ -721,6 +721,37 @@ def get_floorplan_image(floorplan_id):
     return send_file(floorplan['image_filepath'], mimetype='image/png')
 
 
+@processing_bp.route('/image/<floorplan_id>/preview', methods=['GET'])
+@jwt_required()
+def get_floorplan_preview(floorplan_id):
+    """Get the low-resolution preview of a floorplan image."""
+    user_id = get_jwt_identity()
+
+    try:
+        floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
+    except:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+
+    project = mongo.db.projects.find_one({
+        '_id': floorplan['project_id'],
+        'user_id': ObjectId(user_id)
+    })
+    if not project:
+        return jsonify({'error': 'Access denied'}), 403
+
+    preview_path = floorplan.get('preview_filepath', '')
+    if preview_path and os.path.exists(preview_path):
+        return send_file(preview_path, mimetype='image/png')
+
+    if not os.path.exists(floorplan.get('image_filepath', '')):
+        return jsonify({'error': 'Image not found'}), 404
+
+    return send_file(floorplan['image_filepath'], mimetype='image/png')
+
+
 @processing_bp.route('/split/<floorplan_id>', methods=['POST'])
 @jwt_required()
 def split_floorplan(floorplan_id):

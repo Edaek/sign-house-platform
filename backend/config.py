@@ -29,6 +29,10 @@ class Config:
     # Tesseract Configuration
     TESSERACT_CMD = os.environ.get('TESSERACT_CMD', '/usr/local/bin/tesseract')
     
+    # PDF Processing Configuration
+    PDF_DPI = int(os.environ.get('PDF_DPI', 200))
+    PDF_PREVIEW_DPI = int(os.environ.get('PDF_PREVIEW_DPI', 150))
+    
     # Title Block Extraction Configuration (for floor plan title extraction)
     TITLE_REGION_X_START = int(os.environ.get('TITLE_REGION_X_START', 60))  # 60% from left
     TITLE_REGION_Y_START = int(os.environ.get('TITLE_REGION_Y_START', 85))  # 85% from top

@@ -141,6 +141,16 @@ export default function EditorPage() {
         img.onload = () => {
           imageRef.current = img
           setImageLoaded(true)
+          const container = containerRef.current
+          if (container) {
+            const cw = container.clientWidth
+            const ch = container.clientHeight
+            const fitScale = Math.min(cw / img.naturalWidth, ch / img.naturalHeight, 1) * 0.95
+            const fitOffsetX = (cw - img.naturalWidth * fitScale) / 2
+            const fitOffsetY = (ch - img.naturalHeight * fitScale) / 2
+            setScale(fitScale)
+            setOffset({ x: fitOffsetX, y: fitOffsetY })
+          }
           drawCanvas()
         }
         img.onerror = () => {

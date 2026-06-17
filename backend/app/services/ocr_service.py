@@ -14,7 +14,7 @@ for _name in ('paddleocr', 'paddlex', 'ppocr', 'paddle'):
 os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
 
 SIGN_CODE_PATTERN = re.compile(
-    r'^[A-Z]{1,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
+    r'^[A-Z][a-zA-Z]{0,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
 )
 
 _REJECT_WORDS = frozenset({
@@ -26,15 +26,34 @@ _REJECT_WORDS = frozenset({
 })
 
 
+def _normalize_unicode_punctuation(text):
+    """Normalize full-width and Unicode punctuation to ASCII equivalents."""
+    replacements = {
+        '\uff0c': ',', '\u3001': ',', '\uff0e': '.', '\u3002': '.',
+        '\uff01': '!', '\uff1f': '?', '\uff1a': ':', '\uff1b': ';',
+        '\uff08': '(', '\uff09': ')', '\uff3b': '[', '\uff3d': ']',
+        '\uff5b': '{', '\uff5d': '}', '\uff0d': '-', '\u2013': '-',
+        '\u2014': '-', '\u2018': "'", '\u2019': "'", '\u201c': '"',
+        '\u201d': '"', '\uff02': '"', '\uff07': "'", '\uff5c': '|',
+        '\uff0f': '/', '\uff3c': '\\', '\uff04': 'S', '\u00b7': '.',
+        '\u2022': '.', '\u00a0': ' ',
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
+
 def clean_ocr_text(text):
     """Strip common OCR artifacts from sign code text.
 
-    Removes brackets, pipes, trailing dots, and replaces $ with S.
+    Normalizes Unicode punctuation, removes brackets, pipes, trailing dots,
+    and strips all characters not valid in sign codes.
     """
     if not text:
         return ''
+    text = _normalize_unicode_punctuation(text)
     text = text.replace('$', 'S')
-    text = text.strip(' |])[}{(.')
+    text = text.strip(' |])[}{(.!@#%^&*+=:;"\'<>,?/~`')
     text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
     return text.strip()
 
@@ -73,12 +92,12 @@ def is_valid_sign_code(text, strict=False):
     if strict and len(cleaned) < 2:
         return False
 
+    if SIGN_CODE_PATTERN.match(cleaned):
+        return True
+
     code_part = re.sub(r'\s*[xX]\d+$', '', cleaned)
     if any(c.islower() for c in code_part):
         return False
-
-    if SIGN_CODE_PATTERN.match(cleaned):
-        return True
 
     has_digit = any(c.isdigit() for c in cleaned)
     has_alpha = any(c.isalpha() for c in cleaned)
@@ -388,6 +407,7 @@ class OCRService:
         texts, scores = self._run_ocr(preprocessed)
 
         extracted_text = ' '.join(t for t in texts if t.strip())
+        extracted_text = clean_ocr_text(extracted_text)
         avg_confidence = sum(scores) / len(scores) if scores else 0.0
 
         return extracted_text, avg_confidence
@@ -585,7 +605,8 @@ class OCRService:
         """Clean up common OCR errors in label text."""
         import re
 
-        text = text.strip('|])[}')
+        text = _normalize_unicode_punctuation(text)
+        text = text.strip('|])[}{(.!@#%^&*+=:;"\'<>,?/~`')
         text = ' '.join(text.split())
 
         replacements = {
@@ -613,6 +634,9 @@ class OCRService:
 
         text = re.sub(r'S0\s+1', 'S1', text)
         text = re.sub(r'S\s+(\d)', r'S\1', text)
+
+        text = re.sub(r'^[^A-Za-z0-9]+', '', text)
+        text = re.sub(r'[^A-Za-z0-9xX]+$', '', text)
 
         text = ' '.join(text.split())
         return text
