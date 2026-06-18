@@ -96,6 +96,8 @@ def is_valid_sign_code(text, strict=False):
         return True
 
     code_part = re.sub(r'\s*[xX]\d+$', '', cleaned)
+    if not code_part:
+        return False
     if any(c.islower() for c in code_part):
         return False
 
@@ -103,6 +105,8 @@ def is_valid_sign_code(text, strict=False):
     has_alpha = any(c.isalpha() for c in cleaned)
 
     if strict:
+        if not has_alpha:
+            return False
         if ' ' in cleaned:
             return False
         return has_digit and has_alpha and len(cleaned) <= 8
