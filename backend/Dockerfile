@@ -13,10 +13,7 @@ WORKDIR /app
 # Copy requirements first for caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install PaddlePaddle from official source (not available on standard PyPI)
-RUN pip install --no-cache-dir paddlepaddle==3.3.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-RUN pip install --no-cache-dir paddleocr==3.7.0
+RUN pip install --no-cache-dir paddlepaddle==3.3.0 paddleocr==3.7.0
 
 # Pre-download PaddleOCR models so first request isn't slow
 ENV PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
