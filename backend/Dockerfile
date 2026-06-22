@@ -13,7 +13,6 @@ WORKDIR /app
 # Copy requirements first for caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir paddlepaddle==3.3.0 paddleocr==3.7.0
 
 # Pre-download PaddleOCR models so first request isn't slow
 ENV PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
