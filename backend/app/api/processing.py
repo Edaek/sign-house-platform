@@ -1,4 +1,7 @@
 import os
+import time
+import traceback
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -19,6 +22,8 @@ from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 from app.services.batch_processor import start_batch_processing
 from app.utils.permissions import require_project_access, require_project_modify
+
+logger = logging.getLogger(__name__)
 
 processing_bp = Blueprint('processing', __name__)
 
@@ -56,18 +61,21 @@ def detect_shapes(floorplan_id):
     if not os.path.exists(floorplan.get('image_filepath', '')):
         return jsonify({'error': 'Floorplan image not found'}), 404
     
+    t0 = time.time()
+    stage = 'init'
     try:
         cv_service = CVService()
         ocr_service = OCRService()
         image_path = floorplan['image_filepath']
 
-        # Auto-detect: check if there's a sample circle in upper-right corner
+        stage = 'auto_detect'
         if shape_type == 'auto':
             if cv_service.has_sample_circle(image_path):
                 shape_type = 'circle'
             else:
                 shape_type = 'rectangle'
 
+        stage = 'shape_detection'
         if shape_type == 'circle':
             shapes = cv_service.detect_circles_by_template(image_path)
             detected_type = 'circle'
@@ -75,7 +83,10 @@ def detect_shapes(floorplan_id):
             shapes = cv_service.detect_red_rectangles(image_path)
             detected_type = 'rectangle'
 
-        # Learned template matching pass
+        logger.info(f"[detect] floorplan={floorplan_id} type={detected_type} "
+                     f"shapes={len(shapes)} elapsed={time.time()-t0:.1f}s")
+
+        stage = 'learned_templates'
         learned_shapes = []
         try:
             active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
@@ -85,13 +96,13 @@ def detect_shapes(floorplan_id):
                 )
                 learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
                 if learned_shapes:
-                    current_app.logger.info(
+                    logger.info(
                         f"Learned templates added {len(learned_shapes)} new detections"
                     )
         except Exception as tmpl_err:
-            current_app.logger.warning(f"Learned template matching failed: {tmpl_err}")
+            logger.warning(f"Learned template matching failed: {tmpl_err}")
 
-        # Update floorplan
+        stage = 'db_update'
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
             {'$set': {
@@ -101,18 +112,15 @@ def detect_shapes(floorplan_id):
             }}
         )
 
-        # Clear old extracted data
         mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
 
-        # Combine standard and learned shapes
         all_shapes = shapes + learned_shapes
 
-        # --- Merged OCR + filter + save ---
+        stage = 'ocr'
         is_circle = detected_type == 'circle'
         ocr_results = []
 
         for idx, shape in enumerate(all_shapes):
-            # Run full OCR (higher quality than the quick cross-check in detection)
             if is_circle and shape.get('center_x') is not None:
                 text, confidence = ocr_service.extract_text_from_circle(
                     image_path,
@@ -168,7 +176,7 @@ def detect_shapes(floorplan_id):
             doc['display_text'] = text
             ocr_results.append(doc)
 
-        # Group duplicates
+        stage = 'grouping'
         grouping_result = ocr_service.group_ocr_results(ocr_results)
         grouped_results = grouping_result['grouped']
         deleted_ids = grouping_result['deleted_ids']
@@ -195,7 +203,6 @@ def detect_shapes(floorplan_id):
         if deleted_ids:
             mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
 
-        # Increment match_count for templates that produced valid detections
         matched_template_ids = set()
         for res in grouped_results:
             tid = res.get('template_id')
@@ -221,11 +228,15 @@ def detect_shapes(floorplan_id):
 
         total_merged = sum(info['merged_count'] for info in merge_info.values())
         learned_count = sum(1 for r in grouped_results if r.get('detection_method') == 'learned')
+        elapsed = time.time() - t0
         message = f'Detected and OCR\'d {len(response_results)} unique {detected_type}s'
         if deleted_ids:
             message += f' ({total_merged} original detections grouped)'
         if learned_count:
             message += f' ({learned_count} from learned templates)'
+
+        logger.info(f"[detect] floorplan={floorplan_id} completed in {elapsed:.1f}s — "
+                     f"{len(response_results)} results from {len(all_shapes)} shapes")
 
         return jsonify({
             'message': message,
@@ -240,7 +251,16 @@ def detect_shapes(floorplan_id):
         }), 200
 
     except Exception as e:
-        return jsonify({'error': f'Shape detection failed: {str(e)}'}), 500
+        elapsed = time.time() - t0
+        logger.error(
+            f"[detect] floorplan={floorplan_id} FAILED at stage='{stage}' "
+            f"after {elapsed:.1f}s: {e}\n{traceback.format_exc()}"
+        )
+        return jsonify({
+            'error': f'Shape detection failed: {str(e)}',
+            'stage': stage,
+            'elapsed': round(elapsed, 1),
+        }), 500
 
 
 @processing_bp.route('/ocr/<floorplan_id>', methods=['POST'])
@@ -390,6 +410,7 @@ def extract_text(floorplan_id):
         }), 200
         
     except Exception as e:
+        logger.error(f"[ocr] floorplan={floorplan_id} FAILED: {e}\n{traceback.format_exc()}")
         return jsonify({'error': f'OCR failed: {str(e)}'}), 500
 
 
@@ -535,6 +556,7 @@ def ocr_manual_region(floorplan_id):
         return jsonify(response_data), 200
         
     except Exception as e:
+        logger.error(f"[ocr-region] floorplan={floorplan_id} FAILED: {e}\n{traceback.format_exc()}")
         return jsonify({'error': f'OCR failed: {str(e)}'}), 500
 
 

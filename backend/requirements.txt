@@ -16,8 +16,6 @@ PyMuPDF==1.23.7
 opencv-python==4.8.1.78
 numpy==1.26.2
 Pillow==10.1.0
-paddlepaddle
-paddleocr
 pytesseract==0.3.10
 
 # Excel handling

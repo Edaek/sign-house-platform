@@ -510,8 +510,11 @@ export default function EditorPage() {
     try {
       await detectShapes(floorId, shapeType)
       toast.success('Shapes detected!')
-    } catch {
-      toast.error('Shape detection failed')
+    } catch (err: any) {
+      const detail = err?.response?.data?.error || 'Shape detection failed'
+      const stage = err?.response?.data?.stage
+      const msg = stage ? `${detail} (stage: ${stage})` : detail
+      toast.error(msg)
     } finally {
       setIsDetectingShapes(false)
     }
