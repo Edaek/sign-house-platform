@@ -11,6 +11,7 @@ import AdminPage from './pages/AdminPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import DictionaryPage from './pages/DictionaryPage'
 
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
   
