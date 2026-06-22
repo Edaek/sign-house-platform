@@ -1,8 +1,21 @@
 """Health check endpoints for monitoring and orchestration."""
+import subprocess
 from flask import Blueprint, jsonify
 from app import mongo
 
 health_bp = Blueprint('health', __name__)
+
+
+def _get_git_commit():
+    """Get current git commit hash, or 'unknown' if not in a git repo."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip() if result.returncode == 0 else 'unknown'
+    except Exception:
+        return 'unknown'
 
 
 @health_bp.route('/health', methods=['GET'])
@@ -94,4 +107,41 @@ def liveness_check():
               example: true
     """
     return jsonify({'alive': True}), 200
+
+
+@health_bp.route('/diagnostics', methods=['GET'])
+def diagnostics():
+    """Diagnostics endpoint for verifying deployment status and dependencies."""
+    info = {
+        'commit': _get_git_commit(),
+        'paddleocr': 'unknown',
+        'opencv': 'unknown',
+        'numpy': 'unknown',
+    }
+
+    try:
+        import cv2
+        info['opencv'] = cv2.__version__
+    except Exception as e:
+        info['opencv'] = f'error: {e}'
+
+    try:
+        import numpy as np
+        info['numpy'] = np.__version__
+    except Exception as e:
+        info['numpy'] = f'error: {e}'
+
+    try:
+        from paddleocr import PaddleOCR
+        info['paddleocr'] = 'available'
+    except Exception as e:
+        info['paddleocr'] = f'error: {e}'
+
+    try:
+        mongo.db.command('ping')
+        info['database'] = 'healthy'
+    except Exception as e:
+        info['database'] = f'unhealthy: {e}'
+
+    return jsonify(info), 200
 

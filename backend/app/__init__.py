@@ -119,6 +119,7 @@ def create_app(config_name=None):
     from app.api.dictionary import dictionary_bp
     
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
+    app.register_blueprint(health_bp, url_prefix='/api', name='health_api')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(projects_bp, url_prefix='/api/projects')
     app.register_blueprint(processing_bp, url_prefix='/api/processing')
