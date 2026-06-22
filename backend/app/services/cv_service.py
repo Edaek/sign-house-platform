@@ -849,55 +849,121 @@ class CVService:
     
     def _detect_legend_region(self, img):
         """Detect a legend/key box in the upper-left corner of the image.
-        
-        Looks for a bordered rectangle in the top-left area that typically
-        contains sample circles and text labels (not actual sign locations).
-        
+
+        Three-layer fallback strategy:
+        1. Border contour detection (fast, works when legend has a clear border)
+        2. OCR keyword detection (searches for "scope", "legend", etc.)
+        3. Fixed fallback region (conservative upper-left 15% x 20%)
+
         Returns:
             Tuple (x, y, w, h) of the legend bounding box, or None if not found.
         """
+        box = self._detect_legend_by_contour(img)
+        if box:
+            return box
+
+        box = self._detect_legend_by_keywords(img)
+        if box:
+            return box
+
         h, w = img.shape[:2]
-        
-        # Search in the upper-left 25% x 30% of the image
+        return (0, 0, int(w * 0.20), int(h * 0.15))
+
+    def _detect_legend_by_contour(self, img):
+        """Detect legend region by finding a bordered rectangle in the upper-left."""
+        h, w = img.shape[:2]
+
         search_w = int(w * 0.25)
         search_h = int(h * 0.30)
         region = img[0:search_h, 0:search_w]
-        
+
         gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-        
-        # Detect edges and find rectangular contours (the legend border)
+
         edges = cv2.Canny(gray, 50, 150)
         kernel = np.ones((3, 3), np.uint8)
         edges = cv2.dilate(edges, kernel, iterations=1)
-        
+
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+
         min_legend_area = search_w * search_h * 0.05
-        
+
         best_box = None
         best_area = 0
-        
+
         for contour in contours:
             area = cv2.contourArea(contour)
             if area < min_legend_area:
                 continue
-            
+
             peri = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
-            
+
             if len(approx) >= 4:
                 x, y, bw, bh = cv2.boundingRect(contour)
                 aspect = bw / bh if bh > 0 else 0
                 if 0.3 < aspect < 4.0 and area > best_area:
                     best_area = area
                     best_box = (x, y, bw, bh)
-        
+
         if best_box:
-            # Add small padding around the detected box
             pad = 10
             bx, by, bw, bh = best_box
             return (max(0, bx - pad), max(0, by - pad), bw + pad * 2, bh + pad * 2)
-        
+
+        return None
+
+    def _detect_legend_by_keywords(self, img):
+        """Detect legend region by running OCR on the upper-left and searching
+        for keywords like 'scope', 'legend', 'note', 'not under', etc.
+        """
+        h, w = img.shape[:2]
+
+        search_w = int(w * 0.30)
+        search_h = int(h * 0.35)
+        region = img[0:search_h, 0:search_w]
+
+        keywords = ['scope', 'legend', 'note', 'not under', 'following signage',
+                    'signage not', 'not in our', 'not included']
+
+        try:
+            ocr = self._get_ocr_engine()
+            for result in ocr.predict(region):
+                texts = result.get('rec_texts', [])
+                boxes = result.get('dt_polys', [])
+
+                if not texts or not boxes:
+                    continue
+
+                min_x, min_y = search_w, search_h
+                max_x, max_y = 0, 0
+                found = False
+
+                for text, box in zip(texts, boxes):
+                    text_lower = text.lower().strip()
+                    if any(kw in text_lower for kw in keywords):
+                        found = True
+                        box_arr = np.array(box)
+                        bx_min = int(box_arr[:, 0].min())
+                        by_min = int(box_arr[:, 1].min())
+                        bx_max = int(box_arr[:, 0].max())
+                        by_max = int(box_arr[:, 1].max())
+                        min_x = min(min_x, bx_min)
+                        min_y = min(min_y, by_min)
+                        max_x = max(max_x, bx_max)
+                        max_y = max(max_y, by_max)
+
+                if found:
+                    pad_x = int(search_w * 0.05)
+                    pad_y = int(search_h * 0.15)
+                    rx = max(0, min_x - pad_x)
+                    ry = max(0, min_y - pad_x)
+                    rw = min(search_w, max_x + pad_x) - rx
+                    rh = min(search_h, max_y + pad_y) - ry
+                    return (rx, ry, rw, rh)
+
+        except Exception:
+            pass
+
         return None
     
     def _verify_circle_has_color(self, color_mask, cx, cy, radius):
@@ -1414,10 +1480,12 @@ class CVService:
     def _remove_contained_circles(self, circles):
         """Remove circles that are fully contained within a larger circle.
 
-        When a small circle's center + radius falls entirely inside a larger
-        circle, the smaller one is suppressed. This prevents false positives
-        from small color markers (e.g., a blue 'S' marker inside a larger red
-        'S121' circle).
+        Uses two strategies:
+        1. OCR text comparison: if the smaller circle's text is a substring of
+           the larger circle's text (or identical), and its center is inside the
+           larger circle, remove the smaller one.
+        2. Geometric containment: if the smaller circle is mostly inside the
+           larger one (dist + small_r < large_r * 0.85), remove it.
         """
         if len(circles) < 2:
             return circles
@@ -1425,19 +1493,30 @@ class CVService:
         circles = sorted(circles, key=lambda c: c.get('radius', 0), reverse=True)
         kept = []
 
-        for i, circle in enumerate(circles):
+        for circle in circles:
             cr = circle.get('radius', 0)
+            c_text = circle.get('extracted_text', '').strip()
             is_contained = False
 
             for larger in kept:
                 lr = larger.get('radius', 0)
-                if lr <= cr * 1.3:
+                if lr <= cr * 1.2:
                     continue
                 dist = np.sqrt(
                     (circle['center_x'] - larger['center_x']) ** 2 +
                     (circle['center_y'] - larger['center_y']) ** 2
                 )
-                if dist + cr < lr * 0.95:
+
+                l_text = larger.get('extracted_text', '').strip()
+                text_is_subset = (
+                    c_text and l_text and
+                    (c_text in l_text or l_text in c_text or c_text == l_text)
+                )
+
+                if text_is_subset and dist < lr:
+                    is_contained = True
+                    break
+                elif dist + cr < lr * 0.85:
                     is_contained = True
                     break
 
