@@ -2368,6 +2368,9 @@ class CVService:
 
                 all_matches.append(shape)
 
+        # Cross-template deduplication: remove overlapping matches from different templates
+        all_matches = self._deduplicate_learned_matches(all_matches)
+
         pre_filter = len(all_matches)
 
         circle_color_mask = None
@@ -2400,9 +2403,24 @@ class CVService:
                     continue
             verified.append(s)
 
+        # Exclude shapes in legend region (upper-left)
+        legend_bbox = self._detect_legend_region(img)
+        if legend_bbox:
+            lx, ly, lw, lh = legend_bbox
+            verified = [s for s in verified
+                        if not (lx <= s.get('center_x', s['x'] + s['width'] // 2) <= lx + lw
+                                and ly <= s.get('center_y', s['y'] + s['height'] // 2) <= ly + lh)]
+
+        # Exclude shapes in title block region (lower-right)
+        title_x = int(img_w * 0.70)
+        title_y = int(img_h * 0.60)
+        verified = [s for s in verified
+                    if not (s.get('center_x', s['x'] + s['width'] // 2) >= title_x
+                            and s.get('center_y', s['y'] + s['height'] // 2) >= title_y)]
+
         logger.info(
             f"Learned template matching found {pre_filter} candidates from {len(templates)} templates, "
-            f"{len(verified)} passed color verification"
+            f"{len(verified)} passed color verification + region exclusion"
         )
         return verified
 
@@ -2436,4 +2454,24 @@ class CVService:
 
         logger.info(f"Dedup: {len(learned_shapes)} learned → {len(unique)} unique (vs {len(existing_shapes)} existing)")
         return unique
+
+    def _deduplicate_learned_matches(self, matches, iou_threshold=0.3):
+        """Remove overlapping detections across different templates."""
+        if not matches:
+            return []
+        matches = sorted(matches, key=lambda m: m['confidence'], reverse=True)
+        kept = []
+        for m in matches:
+            is_dup = False
+            for k in kept:
+                iou = self._calculate_iou(
+                    m['x'], m['y'], m['width'], m['height'],
+                    k['x'], k['y'], k['width'], k['height']
+                )
+                if iou > iou_threshold:
+                    is_dup = True
+                    break
+            if not is_dup:
+                kept.append(m)
+        return kept
 
