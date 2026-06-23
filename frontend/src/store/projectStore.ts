@@ -43,6 +43,7 @@ interface ExtractedData {
   display_text: string | null
   detection_method?: 'auto' | 'manual' | 'learned'
   template_id?: string | null
+  _template_saved?: boolean
 }
 
 interface ShapeTemplate {
