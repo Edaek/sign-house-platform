@@ -423,8 +423,8 @@ class CVService:
             grad_mag = np.sqrt(gx ** 2 + gy ** 2)
             grad_data = (gx, gy, grad_mag)
         
-        # Dilate to connect outline pixels
-        kernel = np.ones((2, 2), np.uint8)
+        # Dilate to connect outline pixels (symmetric kernel to avoid directional bias)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         color_mask = cv2.dilate(color_mask, kernel, iterations=1)
         
         color_mask_blurred = cv2.GaussianBlur(color_mask, (5, 5), 1)
@@ -437,10 +437,10 @@ class CVService:
         circles = cv2.HoughCircles(
             color_mask_blurred,
             cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=int(target_radius * 1.0),
+            dp=1.0,
+            minDist=int(target_radius * 0.8),
             param1=50,
-            param2=11,
+            param2=14,
             minRadius=min_radius,
             maxRadius=max_radius
         )
@@ -468,29 +468,48 @@ class CVService:
                         grad_data, cx, cy, radius, raw_color_mask):
                     continue
                 
-                # Refine center using color mask moments on the ring only
-                r_pad = int(radius * 1.2)
+                # Refine center using raw (undilated) color mask on the ring region
+                r_pad = int(radius * 1.3)
                 y1c = max(0, cy - r_pad)
                 y2c = min(h, cy + r_pad)
                 x1c = max(0, cx - r_pad)
                 x2c = min(w, cx + r_pad)
-                roi_mask = color_mask[y1c:y2c, x1c:x2c]
-                # Create ring mask to isolate perimeter pixels only
-                roi_h, roi_w = roi_mask.shape[:2]
+                roi_raw = raw_color_mask[y1c:y2c, x1c:x2c]
+                roi_h, roi_w = roi_raw.shape[:2]
                 local_cx_r = cx - x1c
                 local_cy_r = cy - y1c
                 outer_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
                 inner_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
-                cv2.circle(outer_mask, (local_cx_r, local_cy_r), int(radius * 1.15), 255, -1)
-                cv2.circle(inner_mask, (local_cx_r, local_cy_r), int(radius * 0.75), 255, -1)
-                ring_mask = cv2.bitwise_and(roi_mask, outer_mask)
+                cv2.circle(outer_mask, (local_cx_r, local_cy_r), int(radius * 1.2), 255, -1)
+                cv2.circle(inner_mask, (local_cx_r, local_cy_r), int(radius * 0.7), 255, -1)
+                ring_mask = cv2.bitwise_and(roi_raw, outer_mask)
                 ring_mask = cv2.bitwise_and(ring_mask, cv2.bitwise_not(inner_mask))
-                M = cv2.moments(ring_mask)
-                if M['m00'] > 0:
-                    refined_cx = int(x1c + M['m10'] / M['m00'])
-                    refined_cy = int(y1c + M['m01'] / M['m00'])
-                    if abs(refined_cx - cx) < radius * 0.3 and abs(refined_cy - cy) < radius * 0.3:
-                        cx, cy = refined_cx, refined_cy
+                
+                # Try fitEllipse for sub-pixel precision
+                ring_points = np.column_stack(np.where(ring_mask > 0))
+                if len(ring_points) >= 5:
+                    try:
+                        ellipse = cv2.fitEllipse(ring_points[:, ::-1])  # fitEllipse expects (x,y)
+                        ecx, ecy = ellipse[0]
+                        refined_cx = int(round(x1c + ecx))
+                        refined_cy = int(round(y1c + ecy))
+                        if abs(refined_cx - cx) < radius * 0.3 and abs(refined_cy - cy) < radius * 0.3:
+                            cx, cy = refined_cx, refined_cy
+                    except cv2.error:
+                        # Fallback to moments if fitEllipse fails
+                        M = cv2.moments(ring_mask)
+                        if M['m00'] > 0:
+                            refined_cx = int(round(x1c + M['m10'] / M['m00']))
+                            refined_cy = int(round(y1c + M['m01'] / M['m00']))
+                            if abs(refined_cx - cx) < radius * 0.3 and abs(refined_cy - cy) < radius * 0.3:
+                                cx, cy = refined_cx, refined_cy
+                else:
+                    M = cv2.moments(ring_mask)
+                    if M['m00'] > 0:
+                        refined_cx = int(round(x1c + M['m10'] / M['m00']))
+                        refined_cy = int(round(y1c + M['m01'] / M['m00']))
+                        if abs(refined_cx - cx) < radius * 0.3 and abs(refined_cy - cy) < radius * 0.3:
+                            cx, cy = refined_cx, refined_cy
                 
                 # Tight fit: reduce by 1px to align with circle ring midline
                 adj_radius = radius - 1
@@ -544,11 +563,26 @@ class CVService:
             if not (radius_lo <= cradius <= radius_hi):
                 continue
 
-            # Use moments centroid for more accurate center (handles partial arcs)
-            M = cv2.moments(contour)
-            if M['m00'] > 0:
-                ccx = M['m10'] / M['m00']
-                ccy = M['m01'] / M['m00']
+            # Use equivalent radius from area for more robust radius estimate
+            equiv_radius = np.sqrt(area / np.pi)
+            # Average with minEnclosingCircle radius (weighted toward equiv)
+            cradius = equiv_radius * 0.7 + cradius * 0.3
+
+            # Use fitEllipse for sub-pixel center when enough points available
+            if len(contour) >= 5:
+                try:
+                    ellipse = cv2.fitEllipse(contour)
+                    ccx, ccy = ellipse[0]
+                except cv2.error:
+                    M = cv2.moments(contour)
+                    if M['m00'] > 0:
+                        ccx = M['m10'] / M['m00']
+                        ccy = M['m01'] / M['m00']
+            else:
+                M = cv2.moments(contour)
+                if M['m00'] > 0:
+                    ccx = M['m10'] / M['m00']
+                    ccy = M['m01'] / M['m00']
 
             ccx, ccy = int(round(ccx)), int(round(ccy))
 
@@ -607,10 +641,11 @@ class CVService:
                         if not (lx <= d['center_x'] <= lx + lw and ly <= d['center_y'] <= ly + lh)]
         
         # Exclude circles inside the title block region (right-bottom corner)
-        title_x = int(w * 0.70)
-        title_y = int(h * 0.60)
-        detected = [d for d in detected
-                    if not (d['center_x'] >= title_x and d['center_y'] >= title_y)]
+        title_bbox = self._detect_title_block(img)
+        if title_bbox:
+            tx, ty, tw, th = title_bbox
+            detected = [d for d in detected
+                        if not (tx <= d['center_x'] <= tx + tw and ty <= d['center_y'] <= ty + th)]
         
         detected.sort(key=lambda c: (c['y'], c['x']))
         
@@ -672,10 +707,10 @@ class CVService:
         circles = cv2.HoughCircles(
             edges,
             cv2.HOUGH_GRADIENT,
-            dp=1.2,
+            dp=1.0,
             minDist=int(yellow_target * 0.8),
             param1=50,
-            param2=12 if sec_color == 'red' else 8,
+            param2=14 if sec_color == 'red' else 10,
             minRadius=min_radius,
             maxRadius=max_radius
         )
@@ -722,6 +757,34 @@ class CVService:
                         break
                 if too_close:
                     continue
+                
+                # Refine center using color mask ring moments + fitEllipse
+                r_pad = int(radius * 1.3)
+                y1c = max(0, cy - r_pad)
+                y2c = min(h, cy + r_pad)
+                x1c = max(0, cx - r_pad)
+                x2c = min(w, cx + r_pad)
+                roi_sec = color_mask_clean[y1c:y2c, x1c:x2c]
+                roi_h_s, roi_w_s = roi_sec.shape[:2]
+                local_cx_s = cx - x1c
+                local_cy_s = cy - y1c
+                outer_m = np.zeros((roi_h_s, roi_w_s), dtype=np.uint8)
+                inner_m = np.zeros((roi_h_s, roi_w_s), dtype=np.uint8)
+                cv2.circle(outer_m, (local_cx_s, local_cy_s), int(radius * 1.2), 255, -1)
+                cv2.circle(inner_m, (local_cx_s, local_cy_s), int(radius * 0.6), 255, -1)
+                ring_sec = cv2.bitwise_and(roi_sec, outer_m)
+                ring_sec = cv2.bitwise_and(ring_sec, cv2.bitwise_not(inner_m))
+                ring_pts = np.column_stack(np.where(ring_sec > 0))
+                if len(ring_pts) >= 5:
+                    try:
+                        ell = cv2.fitEllipse(ring_pts[:, ::-1])
+                        ecx_s, ecy_s = ell[0]
+                        rcx = int(round(x1c + ecx_s))
+                        rcy = int(round(y1c + ecy_s))
+                        if abs(rcx - cx) < radius * 0.3 and abs(rcy - cy) < radius * 0.3:
+                            cx, cy = rcx, rcy
+                    except cv2.error:
+                        pass
                 
                 adj_radius = radius
                 x = max(0, cx - adj_radius)
@@ -773,10 +836,25 @@ class CVService:
             if not (radius_lo <= cradius <= radius_hi):
                 continue
             
-            M = cv2.moments(contour)
-            if M['m00'] > 0:
-                ccx = M['m10'] / M['m00']
-                ccy = M['m01'] / M['m00']
+            # Use equivalent radius for more robust estimate
+            equiv_radius = np.sqrt(area / np.pi)
+            cradius = equiv_radius * 0.7 + cradius * 0.3
+            
+            # Use fitEllipse for sub-pixel center
+            if len(contour) >= 5:
+                try:
+                    ellipse = cv2.fitEllipse(contour)
+                    ccx, ccy = ellipse[0]
+                except cv2.error:
+                    M = cv2.moments(contour)
+                    if M['m00'] > 0:
+                        ccx = M['m10'] / M['m00']
+                        ccy = M['m01'] / M['m00']
+            else:
+                M = cv2.moments(contour)
+                if M['m00'] > 0:
+                    ccx = M['m10'] / M['m00']
+                    ccy = M['m01'] / M['m00']
             ccx, ccy = int(round(ccx)), int(round(ccy))
             
             too_close = False
@@ -963,6 +1041,68 @@ class CVService:
 
         except Exception:
             pass
+
+        return None
+    
+    def _detect_title_block(self, img):
+        """Detect the title block region in the bottom-right corner of the image.
+        
+        Searches for a bordered rectangle anchored to the bottom-right corner.
+        The title block must touch (or nearly touch) both the right and bottom edges.
+        
+        Returns:
+            Tuple (x, y, w, h) in full image coordinates, or None.
+        """
+        h, w = img.shape[:2]
+
+        search_w = int(w * 0.35)
+        search_h = int(h * 0.45)
+        offset_x = w - search_w
+        offset_y = h - search_h
+        region = img[offset_y:h, offset_x:w]
+
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        kern = np.ones((3, 3), np.uint8)
+        edges = cv2.dilate(edges, kern, iterations=1)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        min_title_area = search_w * search_h * 0.08
+        max_title_area = w * h * 0.15
+
+        best_box = None
+        best_area = 0
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_title_area or area > max_title_area:
+                continue
+
+            peri = cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+
+            if len(approx) >= 4:
+                x, y, bw, bh = cv2.boundingRect(contour)
+                aspect = bw / bh if bh > 0 else 0
+                if 0.5 < aspect < 5.0 and area > best_area:
+                    # Must be anchored to the bottom-right corner of the search region
+                    right_edge = x + bw
+                    bottom_edge = y + bh
+                    margin = 30
+                    if right_edge >= search_w - margin and bottom_edge >= search_h - margin:
+                        best_area = area
+                        best_box = (x, y, bw, bh)
+
+        if best_box:
+            pad = 10
+            bx, by, bw, bh = best_box
+            return (
+                max(0, offset_x + bx - pad),
+                max(0, offset_y + by - pad),
+                bw + pad * 2,
+                bh + pad * 2
+            )
 
         return None
     
