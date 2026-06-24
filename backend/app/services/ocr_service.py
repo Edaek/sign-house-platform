@@ -25,6 +25,10 @@ _REJECT_WORDS = frozenset({
     'elevation', 'section', 'detail', 'note', 'ref',
 })
 
+_PURE_ALPHA_SIGN_CODES = frozenset({
+    'D', 'CS', 'EX', 'S', 'N', 'W', 'E',
+})
+
 
 def _normalize_unicode_punctuation(text):
     """Normalize full-width and Unicode punctuation to ASCII equivalents."""
@@ -88,6 +92,9 @@ def is_valid_sign_code(text, strict=False):
     cleaned = clean_ocr_text(text)
     if not cleaned:
         return False
+
+    if cleaned in _PURE_ALPHA_SIGN_CODES:
+        return True
 
     if strict and len(cleaned) < 2:
         return False
