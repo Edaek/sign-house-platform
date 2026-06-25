@@ -2592,11 +2592,12 @@ class CVService:
                                 and ly <= s.get('center_y', s['y'] + s['height'] // 2) <= ly + lh)]
 
         # Exclude shapes in title block region (lower-right)
-        title_x = int(img_w * 0.70)
-        title_y = int(img_h * 0.60)
-        verified = [s for s in verified
-                    if not (s.get('center_x', s['x'] + s['width'] // 2) >= title_x
-                            and s.get('center_y', s['y'] + s['height'] // 2) >= title_y)]
+        title_bbox = self._detect_title_block(img)
+        if title_bbox:
+            tx, ty, tw, th = title_bbox
+            verified = [s for s in verified
+                        if not (tx <= s.get('center_x', s['x'] + s['width'] // 2) <= tx + tw
+                                and ty <= s.get('center_y', s['y'] + s['height'] // 2) <= ty + th)]
 
         logger.info(
             f"Learned template matching found {pre_filter} candidates from {len(templates)} templates, "
