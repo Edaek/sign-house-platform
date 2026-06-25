@@ -924,7 +924,42 @@ class CVService:
         
         filled = np.count_nonzero(region[circle_mask])
         return filled / circle_area
-    
+
+    def _verify_circle_circularity(self, color_mask, cx, cy, radius, min_circularity=0.40):
+        """Verify that a detected circle region contains a sufficiently circular contour.
+
+        Crops the color mask around the circle, finds contours, and checks
+        if the best contour has circularity above the threshold.
+        """
+        h, w = color_mask.shape[:2]
+        pad = int(radius * 0.3)
+        x1 = max(0, cx - radius - pad)
+        y1 = max(0, cy - radius - pad)
+        x2 = min(w, cx + radius + pad)
+        y2 = min(h, cy + radius + pad)
+
+        region = color_mask[y1:y2, x1:x2]
+        if region.size == 0:
+            return False
+
+        contours, _ = cv2.findContours(region, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return False
+
+        best_circularity = 0.0
+        min_area = np.pi * (radius * 0.4) ** 2
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            best_circularity = max(best_circularity, circularity)
+
+        return best_circularity >= min_circularity
+
     def _detect_legend_region(self, img):
         """Detect a legend/key box in the upper-left corner of the image.
 
@@ -2537,6 +2572,11 @@ class CVService:
                 cy = s.get('center_y', s['y'] + s['height'] // 2)
                 radius = s.get('radius', min(s['width'], s['height']) // 2)
                 if radius < 5 or not self._verify_circle_has_color(circle_color_mask, cx, cy, radius):
+                    continue
+                if not self._verify_circle_circularity(circle_color_mask, cx, cy, radius):
+                    logger.debug(
+                        f"Learned circle at ({cx},{cy}) r={radius} rejected: low circularity"
+                    )
                     continue
             elif s['type'] == 'rectangle' and rect_red_mask is not None:
                 if not self._has_complete_red_border(rect_red_mask, s['x'], s['y'], s['width'], s['height']):
