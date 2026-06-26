@@ -761,9 +761,11 @@ function ChineseSelectCell({
 
 // Sign Table Preview Component
 function SignTablePreview({ 
-  projectId 
+  projectId,
+  onColumnsReady
 }: { 
   projectId: string
+  onColumnsReady?: (columns: string[]) => void
 }) {
   const [signTable, setSignTable] = useState<SignTable | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -780,6 +782,7 @@ function SignTablePreview({
     try {
       const response = await getSignTableData(projectId)
       setSignTable(response.sign_table)
+      onColumnsReady?.(response.sign_table.floorplan_columns)
       // Reset fetched rows when table is reloaded
       setFetchedRows(new Set())
       setChineseOptions({})
@@ -1141,6 +1144,12 @@ export default function ExportPage() {
   const navigate = useNavigate()
   const { currentProject, fetchProject } = useProjectStore()
   const [isLoading, setIsLoading] = useState(true)
+  const [allFloorColumns, setAllFloorColumns] = useState<string[]>([])
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [exportSelectedIdxs, setExportSelectedIdxs] = useState<Set<number>>(new Set())
+  const [exportSelectedFixed, setExportSelectedFixed] = useState<Set<string>>(new Set())
+
+  const FIXED_COLUMNS = ['Sign No.', 'Sign', 'English', 'Chinese'] as const
   
   useEffect(() => {
     if (projectId) {
@@ -1148,13 +1157,27 @@ export default function ExportPage() {
       setIsLoading(false)
     }
   }, [projectId])
+
+  const openExportModal = () => {
+    setExportSelectedIdxs(new Set(allFloorColumns.map((_, i) => i)))
+    setExportSelectedFixed(new Set(FIXED_COLUMNS))
+    setShowExportModal(true)
+  }
   
-  const handleExport = async () => {
+  const handleExport = async (selectedFloorIdxs?: number[], selectedFixed?: Set<string>) => {
     if (!projectId) return
+    setShowExportModal(false)
     
+    const floorCols = selectedFloorIdxs
+      ? selectedFloorIdxs.map(i => allFloorColumns[i])
+      : allFloorColumns
+    const fixedCols = selectedFixed
+      ? FIXED_COLUMNS.filter(c => selectedFixed.has(c))
+      : [...FIXED_COLUMNS]
+
     try {
       const response = await api.post(`/export/excel/${projectId}`, 
-        { include_metadata: true },
+        { selected_columns: floorCols, selected_fixed_columns: fixedCols },
         { responseType: 'blob' }
       )
       
@@ -1216,7 +1239,7 @@ export default function ExportPage() {
             
             {/* Download Button */}
             <button
-              onClick={handleExport}
+              onClick={openExportModal}
               className="btn btn-primary flex items-center gap-2 px-4 py-1.5"
             >
               <FileSpreadsheet className="w-4 h-4" />
@@ -1264,9 +1287,118 @@ export default function ExportPage() {
             </div>
           </div>
           
-          {projectId && <SignTablePreview projectId={projectId} />}
+          {projectId && <SignTablePreview projectId={projectId} onColumnsReady={setAllFloorColumns} />}
         </motion.div>
       </div>
+
+      {/* Export Column Selection Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60" onClick={() => setShowExportModal(false)}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[80vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Select Columns to Export</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                {exportSelectedFixed.size + exportSelectedIdxs.size} / {FIXED_COLUMNS.length + allFloorColumns.length} selected
+              </p>
+            </div>
+
+            <div className="px-5 py-3 border-b border-slate-200/80 dark:border-slate-700/50">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={
+                    exportSelectedFixed.size === FIXED_COLUMNS.length &&
+                    allFloorColumns.length > 0 &&
+                    exportSelectedIdxs.size === allFloorColumns.length
+                  }
+                  onChange={() => {
+                    const allChecked = exportSelectedFixed.size === FIXED_COLUMNS.length && exportSelectedIdxs.size === allFloorColumns.length
+                    if (allChecked) {
+                      setExportSelectedFixed(new Set())
+                      setExportSelectedIdxs(new Set())
+                    } else {
+                      setExportSelectedFixed(new Set(FIXED_COLUMNS))
+                      setExportSelectedIdxs(new Set(allFloorColumns.map((_, i) => i)))
+                    }
+                  }}
+                  className="accent-emerald-500 w-4 h-4 cursor-pointer"
+                />
+                <span className="text-sm font-medium text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-300 transition-colors">
+                  Select All
+                </span>
+              </label>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-2">
+              <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 font-semibold mb-1 mt-1">Fixed Columns</div>
+              {FIXED_COLUMNS.map((col) => (
+                <label
+                  key={col}
+                  className="flex items-center gap-3 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/30 -mx-2 px-2 rounded transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportSelectedFixed.has(col)}
+                    onChange={() => {
+                      setExportSelectedFixed(prev => {
+                        const next = new Set(prev)
+                        if (next.has(col)) next.delete(col); else next.add(col)
+                        return next
+                      })
+                    }}
+                    className="accent-blue-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span className="text-sm text-slate-700 dark:text-slate-200">{col}</span>
+                </label>
+              ))}
+
+              <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 font-semibold mb-1 mt-3">Floor Columns</div>
+              {allFloorColumns.map((col, idx) => (
+                <label
+                  key={idx}
+                  className="flex items-center gap-3 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/30 -mx-2 px-2 rounded transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={exportSelectedIdxs.has(idx)}
+                    onChange={() => {
+                      setExportSelectedIdxs(prev => {
+                        const next = new Set(prev)
+                        if (next.has(idx)) next.delete(idx); else next.add(idx)
+                        return next
+                      })
+                    }}
+                    className="accent-emerald-500 w-4 h-4 cursor-pointer"
+                  />
+                  <span className="text-sm text-slate-700 dark:text-slate-200">{col}</span>
+                </label>
+              ))}
+            </div>
+
+            <div className="px-5 py-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="px-4 py-2 text-sm text-slate-500 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleExport(Array.from(exportSelectedIdxs), exportSelectedFixed)}
+                disabled={exportSelectedFixed.size + exportSelectedIdxs.size === 0}
+                className="btn btn-primary flex items-center gap-2 px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                Export ({exportSelectedFixed.size + exportSelectedIdxs.size})
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   )
 }

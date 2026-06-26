@@ -21,7 +21,7 @@ from app.models import (
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 from app.services.batch_processor import start_batch_processing
-from app.utils.permissions import require_project_access, require_project_modify
+from app.utils.permissions import require_project_access, require_project_modify, check_project_access
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,8 @@ def detect_shapes(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json() or {}
@@ -277,11 +274,8 @@ def extract_text(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
@@ -428,11 +422,8 @@ def ocr_manual_region(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json()
@@ -575,11 +566,8 @@ def update_extracted_data(data_id):
         return jsonify({'error': 'Data not found'}), 404
     
     floorplan = mongo.db.floorplans.find_one({'_id': extracted['floorplan_id']})
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json()
@@ -620,11 +608,8 @@ def delete_extracted_data(data_id):
         return jsonify({'error': 'Data not found'}), 404
     
     floorplan = mongo.db.floorplans.find_one({'_id': extracted['floorplan_id']})
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     mongo.db.extracted_data.delete_one({'_id': ObjectId(data_id)})
@@ -730,11 +715,8 @@ def get_floorplan_image(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, _ = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
@@ -757,11 +739,8 @@ def get_floorplan_preview(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
 
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, _ = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
 
     preview_path = floorplan.get('preview_filepath', '')
@@ -798,11 +777,8 @@ def split_floorplan(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json()
@@ -924,11 +900,8 @@ def get_image_dimensions(floorplan_id):
     if not floorplan:
         return jsonify({'error': 'Floorplan not found'}), 404
     
-    project = mongo.db.projects.find_one({
-        '_id': floorplan['project_id'],
-        'user_id': ObjectId(user_id)
-    })
-    if not project:
+    has_access, _, project = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
         return jsonify({'error': 'Access denied'}), 403
     
     if not os.path.exists(floorplan.get('image_filepath', '')):

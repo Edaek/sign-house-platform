@@ -144,6 +144,14 @@ def export_to_excel(project_id):
         rows = sign_table.get('rows', [])
         floorplan_columns = sign_table.get('floorplan_columns', [])
         
+        req_data = request.get_json() or {}
+        selected = req_data.get('selected_columns')
+        if selected is not None:
+            selected_set = set(selected)
+            floorplan_columns = [c for c in floorplan_columns if c in selected_set]
+        
+        selected_fixed = req_data.get('selected_fixed_columns')
+        
         if not rows:
             return jsonify({'error': 'No data to export. Process floor plans first.'}), 400
         
@@ -158,9 +166,23 @@ def export_to_excel(project_id):
         safe_name = re.sub(r'[^\w\s-]', '', project["name"]).strip().replace(' ', '_')
         output_path = os.path.join(output_dir, f'export_{project_id}_{safe_name}.xlsx')
         
-        # Build column headers: #, Sign No., Sign, English, Chinese, [floor columns...], Total
-        fixed_columns = ['#', 'Sign No.', 'Sign', 'English', 'Chinese']
-        all_columns = fixed_columns + floorplan_columns + ['Total']
+        ALL_FIXED = [
+            ('#', 'row_number'),
+            ('Sign No.', 'sign_no'),
+            ('Sign', 'sign'),
+            ('English', 'english'),
+            ('Chinese', 'chinese'),
+        ]
+        if selected_fixed is not None:
+            selected_fixed_set = set(selected_fixed)
+            # '#' (row number) is always included
+            fixed_entries = [e for e in ALL_FIXED if e[0] == '#' or e[0] in selected_fixed_set]
+        else:
+            fixed_entries = list(ALL_FIXED)
+        
+        fixed_col_names = [e[0] for e in fixed_entries]
+        all_columns = fixed_col_names + floorplan_columns + ['Total']
+        fixed_count = len(fixed_entries)
         
         # Create workbook
         from openpyxl import Workbook
@@ -187,12 +209,12 @@ def export_to_excel(project_id):
         
         # Write data rows (starting from row 3)
         for row_idx, row_data in enumerate(rows, start=3):
-            # Fixed columns
-            sheet.cell(row=row_idx, column=1, value=row_data.get('row_number', row_idx - 1))
-            sheet.cell(row=row_idx, column=2, value=row_data.get('sign_no', ''))
-            sheet.cell(row=row_idx, column=3, value=row_data.get('sign', ''))
-            sheet.cell(row=row_idx, column=4, value=row_data.get('english', ''))
-            sheet.cell(row=row_idx, column=5, value=row_data.get('chinese', ''))
+            # Dynamic fixed columns
+            for ci, (_, field_key) in enumerate(fixed_entries):
+                val = row_data.get(field_key, '')
+                if field_key == 'row_number':
+                    val = row_data.get('row_number', row_idx - 2)
+                sheet.cell(row=row_idx, column=ci + 1, value=val)
             
             # Floor count columns
             floor_counts = row_data.get('floor_counts', {})
@@ -200,11 +222,11 @@ def export_to_excel(project_id):
             for col_offset, floor_name in enumerate(floorplan_columns):
                 count = floor_counts.get(floor_name, 0)
                 if count > 0:
-                    sheet.cell(row=row_idx, column=6 + col_offset, value=count)
+                    sheet.cell(row=row_idx, column=fixed_count + 1 + col_offset, value=count)
                 row_total += count
             
             # Row total column (last column)
-            total_col_idx = 6 + len(floorplan_columns)
+            total_col_idx = fixed_count + 1 + len(floorplan_columns)
             if row_total > 0:
                 sheet.cell(row=row_idx, column=total_col_idx, value=row_total)
             
@@ -217,8 +239,9 @@ def export_to_excel(project_id):
         # Add total row at the bottom
         total_row_idx = 3 + len(rows)
         
-        # "Total" label in the Chinese column (column 5)
-        total_label_cell = sheet.cell(row=total_row_idx, column=5, value='Total')
+        # "Total" label in the last fixed column
+        total_label_col = fixed_count
+        total_label_cell = sheet.cell(row=total_row_idx, column=total_label_col, value='Total')
         total_label_cell.font = excel_service.header_style['font']
         total_label_cell.fill = excel_service.header_style['fill']
         total_label_cell.alignment = excel_service.header_style['alignment']
@@ -232,7 +255,7 @@ def export_to_excel(project_id):
                 floor_counts = row_data.get('floor_counts', {})
                 col_sum += floor_counts.get(floor_name, 0)
             
-            col_idx = 6 + col_offset
+            col_idx = fixed_count + 1 + col_offset
             cell = sheet.cell(row=total_row_idx, column=col_idx)
             if col_sum > 0:
                 cell.value = col_sum
@@ -243,7 +266,7 @@ def export_to_excel(project_id):
             grand_total += col_sum
         
         # Grand total in the Total column
-        total_col_idx = 6 + len(floorplan_columns)
+        total_col_idx = fixed_count + 1 + len(floorplan_columns)
         grand_total_cell = sheet.cell(row=total_row_idx, column=total_col_idx)
         if grand_total > 0:
             grand_total_cell.value = grand_total
@@ -252,8 +275,8 @@ def export_to_excel(project_id):
         grand_total_cell.alignment = excel_service.header_style['alignment']
         grand_total_cell.border = excel_service.header_style['border']
         
-        # Apply styling to empty cells in total row (columns 1-4)
-        for col_idx in range(1, 5):
+        # Apply styling to empty cells in total row (before Total label)
+        for col_idx in range(1, total_label_col):
             cell = sheet.cell(row=total_row_idx, column=col_idx)
             cell.fill = excel_service.header_style['fill']
             cell.border = excel_service.header_style['border']

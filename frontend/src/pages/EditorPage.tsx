@@ -82,6 +82,8 @@ export default function EditorPage() {
   const [isDrawing, setIsDrawing] = useState(false)
   const [drawingRect, setDrawingRect] = useState<DrawingRect | null>(null)
   const [selectedShape, setSelectedShape] = useState<string | null>(null)
+  const [flashingShapeId, setFlashingShapeId] = useState<string | null>(null)
+  const flashPhaseRef = useRef(0)
   const [editingText, setEditingText] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
   const [editingQuantity, setEditingQuantity] = useState<string | null>(null)
@@ -201,15 +203,28 @@ export default function EditorPage() {
     if (currentFloorplan?.extracted_data) {
       currentFloorplan.extracted_data.forEach((shape, index) => {
         const isSelected = selectedShape === shape.id
+        const isFlashing = flashingShapeId === shape.id
         const isLearned = shape.detection_method === 'learned'
         
         const defaultStroke = isLearned ? '#f59e0b' : '#3b9df6'
         const defaultFill = isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)'
-        ctx.strokeStyle = isSelected ? '#ed751d' : defaultStroke
-        ctx.lineWidth = isSelected ? 3 / scale : 2 / scale
-        ctx.fillStyle = isSelected ? 'rgba(237, 117, 29, 0.1)' : defaultFill
+
+        if (isFlashing) {
+          const pulse = Math.sin(flashPhaseRef.current * 0.014) * 0.5 + 0.5
+          const alpha = 0.3 + pulse * 0.7
+          ctx.strokeStyle = `rgba(255, 50, 50, ${alpha})`
+          ctx.lineWidth = (4 + pulse * 3) / scale
+          ctx.fillStyle = `rgba(255, 50, 50, ${pulse * 0.35})`
+          ctx.shadowColor = '#ff3232'
+          ctx.shadowBlur = (10 + pulse * 20) / scale
+        } else {
+          ctx.strokeStyle = isSelected ? '#ed751d' : defaultStroke
+          ctx.lineWidth = isSelected ? 3 / scale : 2 / scale
+          ctx.fillStyle = isSelected ? 'rgba(237, 117, 29, 0.1)' : defaultFill
+          ctx.shadowColor = 'transparent'
+          ctx.shadowBlur = 0
+        }
         
-        // If this shape has merged bounding boxes, draw all of them
         const boxesToDraw = shape.all_bounding_boxes || [{
           x: shape.x,
           y: shape.y,
@@ -235,9 +250,14 @@ export default function EditorPage() {
             ctx.stroke()
           }
         })
+
+        if (isFlashing) {
+          ctx.shadowColor = 'transparent'
+          ctx.shadowBlur = 0
+        }
         
         const firstBox = boxesToDraw[0]
-        ctx.fillStyle = isSelected ? '#ed751d' : defaultStroke
+        ctx.fillStyle = isSelected || isFlashing ? '#ed751d' : defaultStroke
         ctx.font = `bold ${14 / scale}px sans-serif`
         ctx.fillText(`${index + 1}`, firstBox.x + 4, firstBox.y + 16)
       })
@@ -299,12 +319,36 @@ export default function EditorPage() {
     })
     
     ctx.restore()
-  }, [scale, offset, currentFloorplan?.extracted_data, selectedShape, drawingRect, imageLoaded, tool, cropRegions, selectedCropRegion])
+  }, [scale, offset, currentFloorplan?.extracted_data, selectedShape, flashingShapeId, drawingRect, imageLoaded, tool, cropRegions, selectedCropRegion])
   
   // Redraw on changes
   useEffect(() => {
     drawCanvas()
   }, [drawCanvas])
+
+  // Flash animation loop
+  useEffect(() => {
+    if (!flashingShapeId) return
+    flashPhaseRef.current = 0
+    const startTime = performance.now()
+    const duration = 1500
+    let rafId: number
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime
+      if (elapsed > duration) {
+        setFlashingShapeId(null)
+        flashPhaseRef.current = 0
+        drawCanvas()
+        return
+      }
+      flashPhaseRef.current = elapsed
+      drawCanvas()
+      rafId = requestAnimationFrame(animate)
+    }
+    rafId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(rafId)
+  }, [flashingShapeId, drawCanvas])
   
   // Handle resize
   useEffect(() => {
@@ -1401,7 +1445,7 @@ export default function EditorPage() {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: index * 0.02 }}
-                      onClick={() => setSelectedShape(data.id)}
+                      onClick={() => { setSelectedShape(data.id); setFlashingShapeId(data.id) }}
                       className={clsx(
                         'p-3 rounded-lg cursor-pointer transition-colors',
                         selectedShape === data.id 
