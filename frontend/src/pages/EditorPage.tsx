@@ -217,9 +217,10 @@ export default function EditorPage() {
         const isSelected = selectedShape === shape.id
         const isFlashing = flashingShapeId === shape.id
         const isLearned = shape.detection_method === 'learned'
+        const isMultiple = (shape.quantity || 1) > 1
         
-        const defaultStroke = isLearned ? '#f59e0b' : '#3b9df6'
-        const defaultFill = isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)'
+        const defaultStroke = isMultiple ? '#10b981' : isLearned ? '#f59e0b' : '#3b9df6'
+        const defaultFill = isMultiple ? 'rgba(16, 185, 129, 0.1)' : isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)'
 
         if (isFlashing) {
           const pulse = Math.sin(flashPhaseRef.current * 0.014) * 0.5 + 0.5
@@ -271,7 +272,8 @@ export default function EditorPage() {
         const firstBox = boxesToDraw[0]
         ctx.fillStyle = isSelected || isFlashing ? '#ed751d' : defaultStroke
         ctx.font = `bold ${14 / scale}px sans-serif`
-        ctx.fillText(`${index + 1}`, firstBox.x + 4, firstBox.y + 16)
+        const label = isMultiple ? `${index + 1} ×${shape.quantity}` : `${index + 1}`
+        ctx.fillText(label, firstBox.x + 4, firstBox.y + 16)
       })
     }
     
