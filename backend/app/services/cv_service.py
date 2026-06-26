@@ -1079,12 +1079,101 @@ class CVService:
 
         return None
     
+    def _detect_right_strip(self, img):
+        """Detect a full-height title block strip on the right side of the image.
+
+        Architectural drawings typically have a vertical dividing line separating
+        the drawing area from the title block column on the right.  This method
+        finds that line using Hough line detection, with a column-projection
+        fallback.
+
+        Returns:
+            Tuple (x, 0, w-x, h) covering the right strip, or None.
+        """
+        h, w = img.shape[:2]
+
+        # Search within the right 30% of the image (title blocks are 15-25% width)
+        search_ratio = 0.30
+        search_x = int(w * (1 - search_ratio))
+        region = img[0:h, search_x:w]
+
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        # --- Strategy 1: HoughLinesP for near-vertical lines ---
+        min_line_len = int(h * 0.55)
+        lines = cv2.HoughLinesP(
+            edges, rho=1, theta=np.pi / 180, threshold=100,
+            minLineLength=min_line_len, maxLineGap=int(h * 0.05)
+        )
+
+        best_x = None
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                if dy == 0:
+                    continue
+                angle_deg = np.degrees(np.arctan(dx / dy))
+                if angle_deg > 5:
+                    continue
+                line_x = min(x1, x2)
+                # Must sit in the 10%-30% band from the right edge
+                abs_x = search_x + line_x
+                if abs_x < w * 0.70:
+                    continue
+                if best_x is None or line_x < best_x:
+                    best_x = line_x
+
+        if best_x is not None:
+            abs_x = max(0, search_x + best_x - 5)
+            logger.debug(f"Right strip detected via Hough at x={abs_x} (image {w}x{h})")
+            return (abs_x, 0, w - abs_x, h)
+
+        # --- Strategy 2: Column edge-density projection ---
+        col_sum = np.sum(edges > 0, axis=0).astype(float)
+        # Smooth to reduce noise
+        kernel_size = max(3, int(region.shape[1] * 0.02)) | 1
+        col_smooth = np.convolve(col_sum, np.ones(kernel_size) / kernel_size, mode='same')
+
+        if col_smooth.max() > 0:
+            threshold = col_smooth.mean() + col_smooth.std() * 1.5
+            # Walk from left to right in the search region, find first significant peak
+            for cx in range(len(col_smooth)):
+                if col_smooth[cx] >= threshold:
+                    abs_x = max(0, search_x + cx - 5)
+                    if abs_x >= w * 0.70:
+                        logger.debug(f"Right strip detected via projection at x={abs_x} (image {w}x{h})")
+                        return (abs_x, 0, w - abs_x, h)
+
+        return None
+
     def _detect_title_block(self, img):
-        """Detect the title block region in the bottom-right corner of the image.
-        
-        Searches for a bordered rectangle anchored to the bottom-right corner.
-        The title block must touch (or nearly touch) both the right and bottom edges.
-        
+        """Detect the title block region on the right side or bottom-right corner.
+
+        Tries full-height right strip detection first; falls back to the
+        original bottom-right corner rectangle search.
+
+        Returns:
+            Tuple (x, y, w, h) in full image coordinates, or None.
+        """
+        # Check cache
+        h, w = img.shape[:2]
+        cache_key = (w, h, id(img))
+        if hasattr(self, '_title_block_cache') and self._title_block_cache[0] == cache_key:
+            return self._title_block_cache[1]
+
+        result = self._detect_right_strip(img)
+        if result is None:
+            result = self._detect_title_block_corner(img)
+
+        self._title_block_cache = (cache_key, result)
+        return result
+
+    def _detect_title_block_corner(self, img):
+        """Original title block detection: bottom-right corner rectangle.
+
         Returns:
             Tuple (x, y, w, h) in full image coordinates, or None.
         """
@@ -1121,7 +1210,6 @@ class CVService:
                 x, y, bw, bh = cv2.boundingRect(contour)
                 aspect = bw / bh if bh > 0 else 0
                 if 0.5 < aspect < 5.0 and area > best_area:
-                    # Must be anchored to the bottom-right corner of the search region
                     right_edge = x + bw
                     bottom_edge = y + bh
                     margin = 30
@@ -1967,6 +2055,14 @@ class CVService:
         
         # Post-process: remove overlapping/close duplicates
         detected = self._remove_duplicate_boxes(detected)
+        
+        # Exclude rectangles inside the title block region
+        title_bbox = self._detect_title_block(img)
+        if title_bbox:
+            tx, ty, tw, th = title_bbox
+            detected = [d for d in detected
+                        if not (tx <= d['x'] + d['width'] // 2 <= tx + tw
+                                and ty <= d['y'] + d['height'] // 2 <= ty + th)]
         
         return detected
     

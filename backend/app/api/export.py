@@ -135,20 +135,23 @@ def export_to_excel(project_id):
         })
         
         if not sign_table:
-            # Generate it if it doesn't exist
-            generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+            generated_rows, floorplan_columns, floorplan_column_names = _generate_sign_table_from_ocr(project_id)
             sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
+            sign_table_doc['floorplan_column_names'] = floorplan_column_names
             result = mongo.db.project_sign_data.insert_one(sign_table_doc)
             sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
         
         rows = sign_table.get('rows', [])
         floorplan_columns = sign_table.get('floorplan_columns', [])
+        floorplan_column_names = sign_table.get('floorplan_column_names', floorplan_columns)
         
         req_data = request.get_json() or {}
         selected = req_data.get('selected_columns')
         if selected is not None:
             selected_set = set(selected)
-            floorplan_columns = [c for c in floorplan_columns if c in selected_set]
+            indices = [i for i, c in enumerate(floorplan_columns) if c in selected_set]
+            floorplan_columns = [floorplan_columns[i] for i in indices]
+            floorplan_column_names = [floorplan_column_names[i] for i in indices]
         
         selected_fixed = req_data.get('selected_fixed_columns')
         
@@ -181,7 +184,7 @@ def export_to_excel(project_id):
             fixed_entries = list(ALL_FIXED)
         
         fixed_col_names = [e[0] for e in fixed_entries]
-        all_columns = fixed_col_names + floorplan_columns + ['Total']
+        all_columns = fixed_col_names + floorplan_column_names + ['Total']
         fixed_count = len(fixed_entries)
         
         # Create workbook
@@ -588,23 +591,22 @@ def _generate_sign_table_from_ocr(project_id):
     """Generate sign table data from OCR extracted data.
     
     Returns:
-        Tuple of (rows, floorplan_columns) where:
-        - rows: List of sign row dicts
-        - floorplan_columns: List of floor names
+        Tuple of (rows, floorplan_columns, floorplan_column_names) where:
+        - rows: List of sign row dicts (floor_counts keyed by floorplan_id)
+        - floorplan_columns: List of floorplan ID strings
+        - floorplan_column_names: List of floor display names
     """
-    # Get all floorplans for the project
     floorplans = list(mongo.db.floorplans.find({
         'project_id': ObjectId(project_id)
     }).sort('floor_number', 1))
     
-    # Collect floor names for columns
-    floorplan_columns = [fp['floor_name'] for fp in floorplans]
+    floorplan_columns = [str(fp['_id']) for fp in floorplans]
+    floorplan_column_names = [fp['floor_name'] for fp in floorplans]
     
-    # Group OCR data by unique sign number (normalized text)
     sign_groups = {}
     
     for fp in floorplans:
-        floor_name = fp['floor_name']
+        fp_id = str(fp['_id'])
         
         extracted = list(mongo.db.extracted_data.find({
             'floorplan_id': fp['_id']
@@ -617,23 +619,20 @@ def _generate_sign_table_from_ocr(project_id):
             if not sign_no:
                 continue
             
-            # Use normalized text as key for grouping
             normalized_key = sign_no.lower()
             quantity = item.get('quantity', 1)
             
             if normalized_key not in sign_groups:
                 sign_groups[normalized_key] = {
-                    'sign_no': sign_no,  # Keep original case
+                    'sign_no': sign_no,
                     'floor_counts': {}
                 }
             
-            # Add count for this floor
-            if floor_name in sign_groups[normalized_key]['floor_counts']:
-                sign_groups[normalized_key]['floor_counts'][floor_name] += quantity
+            if fp_id in sign_groups[normalized_key]['floor_counts']:
+                sign_groups[normalized_key]['floor_counts'][fp_id] += quantity
             else:
-                sign_groups[normalized_key]['floor_counts'][floor_name] = quantity
+                sign_groups[normalized_key]['floor_counts'][fp_id] = quantity
     
-    # Sort by sign_no and create rows with auto-increment
     sorted_signs = sorted(sign_groups.values(), key=lambda x: x['sign_no'].lower())
     
     rows = []
@@ -647,7 +646,7 @@ def _generate_sign_table_from_ocr(project_id):
             chinese=''
         ))
     
-    return rows, floorplan_columns
+    return rows, floorplan_columns, floorplan_column_names
 
 
 @export_bp.route('/sign-table/<project_id>', methods=['GET'])
@@ -678,7 +677,7 @@ def get_sign_table(project_id):
     })
     
     # Generate fresh data from OCR
-    generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+    generated_rows, floorplan_columns, floorplan_column_names = _generate_sign_table_from_ocr(project_id)
     
     if existing_table:
         # Merge user-edited fields from existing table
@@ -688,19 +687,18 @@ def get_sign_table(project_id):
         for gen_row in generated_rows:
             key = gen_row['sign_no'].lower()
             if key in existing_rows_map:
-                # Preserve user-edited fields
                 existing = existing_rows_map[key]
                 gen_row['sign'] = existing.get('sign', '')
                 gen_row['english'] = existing.get('english', '')
                 gen_row['chinese'] = existing.get('chinese', '')
             merged_rows.append(gen_row)
         
-        # Update existing document
         mongo.db.project_sign_data.update_one(
             {'_id': existing_table['_id']},
             {'$set': {
                 'rows': merged_rows,
                 'floorplan_columns': floorplan_columns,
+                'floorplan_column_names': floorplan_column_names,
                 'updated_at': datetime.utcnow()
             }}
         )
@@ -709,6 +707,7 @@ def get_sign_table(project_id):
     else:
         # Create new sign table
         sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
+        sign_table_doc['floorplan_column_names'] = floorplan_column_names
         result = mongo.db.project_sign_data.insert_one(sign_table_doc)
         sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
     
@@ -754,7 +753,8 @@ def update_sign_table(project_id):
     row_number = data.get('row_number')
     field = data.get('field')
     value = data.get('value', '')
-    floor_name = data.get('floor_name')  # For floor_count updates
+    floor_name = data.get('floor_name')  # Legacy: floor_name for floor_count updates
+    floorplan_id = data.get('floorplan_id')  # New: floorplan_id for floor_count updates
     
     if row_number is None:
         return jsonify({'error': 'row_number is required'}), 400
@@ -763,9 +763,8 @@ def update_sign_table(project_id):
     if field not in valid_fields:
         return jsonify({'error': f'field must be one of: {", ".join(valid_fields)}'}), 400
     
-    # Floor count updates require floor_name
-    if field == 'floor_count' and not floor_name:
-        return jsonify({'error': 'floor_name is required for floor_count updates'}), 400
+    if field == 'floor_count' and not floorplan_id and not floor_name:
+        return jsonify({'error': 'floorplan_id is required for floor_count updates'}), 400
     
     # Get existing sign table
     sign_table = mongo.db.project_sign_data.find_one({
@@ -787,20 +786,19 @@ def update_sign_table(project_id):
         if row['row_number'] == row_number:
             current_english = row.get('english', '')
             
-            # Handle floor_count updates specially
             if field == 'floor_count':
                 if 'floor_counts' not in row:
                     row['floor_counts'] = {}
-                # Convert value to integer (0 or empty means remove)
+                fc_key = floorplan_id or floor_name
                 try:
                     count = int(value) if value else 0
                 except ValueError:
                     count = 0
                 
                 if count > 0:
-                    row['floor_counts'][floor_name] = count
-                elif floor_name in row['floor_counts']:
-                    del row['floor_counts'][floor_name]
+                    row['floor_counts'][fc_key] = count
+                elif fc_key in row['floor_counts']:
+                    del row['floor_counts'][fc_key]
             else:
                 row[field] = value
             
@@ -871,6 +869,9 @@ def update_sign_table(project_id):
     if field == 'floor_count' and floor_name:
         response['floor_name'] = floor_name
     
+    if floorplan_id:
+        response['floorplan_id'] = floorplan_id
+    
     if sign_auto_filled:
         response['sign_auto_filled'] = sign_auto_filled
     
@@ -881,3 +882,53 @@ def update_sign_table(project_id):
         response['dictionary_updated'] = True
     
     return jsonify(response), 200
+
+
+@export_bp.route('/sign-floors/<project_id>', methods=['GET'])
+@jwt_required()
+def get_sign_floors(project_id):
+    """Return the list of floorplan IDs where a given sign_no exists."""
+    import re as _re
+
+    user_id = get_jwt_identity()
+    sign_no = request.args.get('sign_no', '').strip()
+    if not sign_no:
+        return jsonify({'error': 'sign_no is required'}), 400
+
+    try:
+        project = mongo.db.projects.find_one({
+            '_id': ObjectId(project_id),
+            'user_id': ObjectId(user_id)
+        })
+    except Exception:
+        return jsonify({'error': 'Invalid project ID'}), 400
+
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    floorplan_ids = [
+        fp['_id']
+        for fp in mongo.db.floorplans.find(
+            {'project_id': ObjectId(project_id)}, {'_id': 1}
+        )
+    ]
+
+    if not floorplan_ids:
+        return jsonify({'floorplan_ids': []}), 200
+
+    escaped = _re.escape(sign_no)
+    sign_regex = f'^{escaped}$'
+
+    matches = mongo.db.extracted_data.find(
+        {
+            'floorplan_id': {'$in': floorplan_ids},
+            '$or': [
+                {'manual_text': {'$regex': sign_regex, '$options': 'i'}},
+                {'extracted_text': {'$regex': sign_regex, '$options': 'i'}}
+            ]
+        },
+        {'floorplan_id': 1}
+    )
+
+    matched_ids = list({str(m['floorplan_id']) for m in matches})
+    return jsonify({'floorplan_ids': matched_ids}), 200

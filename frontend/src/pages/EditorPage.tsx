@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { 
   ChevronLeft,
@@ -48,6 +48,7 @@ interface CropRegion {
 export default function EditorPage() {
   const { projectId, floorId } = useParams<{ projectId: string; floorId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { 
     currentProject, 
     currentFloorplan, 
@@ -123,6 +124,17 @@ export default function EditorPage() {
       fetchFloorplan(projectId, floorId)
     }
   }, [projectId, floorId, fetchProject, fetchFloorplan])
+
+  useEffect(() => {
+    const highlightId = searchParams.get('highlight')
+    if (!highlightId || !currentFloorplan?.extracted_data?.length) return
+    const exists = currentFloorplan.extracted_data.some(d => d.id === highlightId)
+    if (exists) {
+      setSelectedShape(highlightId)
+      setFlashingShapeId(highlightId)
+      setSearchParams({}, { replace: true })
+    }
+  }, [currentFloorplan?.extracted_data, searchParams])
   
   // Load floor plan image with authentication
   useEffect(() => {

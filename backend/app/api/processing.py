@@ -753,6 +753,145 @@ def get_floorplan_preview(floorplan_id):
     return send_file(floorplan['image_filepath'], mimetype='image/png')
 
 
+@processing_bp.route('/image/<floorplan_id>/shape-crop', methods=['GET'])
+@jwt_required()
+def get_shape_crop(floorplan_id):
+    """Return a cropped region of the floorplan image around a specific sign."""
+    import cv2
+    import numpy as np
+    from io import BytesIO
+
+    user_id = get_jwt_identity()
+    entry_id = request.args.get('entry_id', '').strip()
+    sign_no = request.args.get('sign_no', '').strip()
+
+    if not entry_id and not sign_no:
+        return jsonify({'error': 'entry_id or sign_no query parameter is required'}), 400
+
+    try:
+        floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+
+    has_access, _, _ = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
+        return jsonify({'error': 'Access denied'}), 403
+
+    image_path = floorplan.get('image_filepath', '')
+    if not image_path or not os.path.exists(image_path):
+        return jsonify({'error': 'Image not found'}), 404
+
+    shape = None
+    if entry_id:
+        try:
+            shape = mongo.db.extracted_data.find_one({'_id': ObjectId(entry_id)})
+        except Exception:
+            pass
+    else:
+        import re as _re
+        escaped = _re.escape(sign_no)
+        sign_regex = f'^{escaped}$'
+        shape = mongo.db.extracted_data.find_one({
+            'floorplan_id': ObjectId(floorplan_id),
+            '$or': [
+                {'manual_text': {'$regex': sign_regex, '$options': 'i'}},
+                {'extracted_text': {'$regex': sign_regex, '$options': 'i'}}
+            ]
+        })
+        if not shape:
+            shape = mongo.db.extracted_data.find_one({
+                'floorplan_id': ObjectId(floorplan_id),
+                '$or': [
+                    {'manual_text': {'$regex': escaped, '$options': 'i'}},
+                    {'extracted_text': {'$regex': escaped, '$options': 'i'}}
+                ]
+            })
+
+    if not shape:
+        preview = floorplan.get('preview_filepath', '')
+        fallback = preview if preview and os.path.exists(preview) else image_path
+        return send_file(fallback, mimetype='image/png')
+
+    img = cv2.imread(image_path)
+    if img is None:
+        return jsonify({'error': 'Failed to read image'}), 500
+
+    ih, iw = img.shape[:2]
+    sx, sy = int(shape.get('x', 0)), int(shape.get('y', 0))
+    sw, sh = int(shape.get('width', 0)), int(shape.get('height', 0))
+
+    pad = max(sw, sh, 20) // 2
+    x1 = max(0, sx - pad)
+    y1 = max(0, sy - pad)
+    x2 = min(iw, sx + sw + pad)
+    y2 = min(ih, sy + sh + pad)
+
+    cropped = img[y1:y2, x1:x2]
+    _, buf = cv2.imencode('.png', cropped)
+
+    bio = BytesIO(buf.tobytes())
+    bio.seek(0)
+    return send_file(bio, mimetype='image/png')
+
+
+@processing_bp.route('/image/<floorplan_id>/shape-entries', methods=['GET'])
+@jwt_required()
+def get_shape_entries(floorplan_id):
+    """Return all extracted_data entries matching a sign_no on a floorplan."""
+    import re as _re
+
+    user_id = get_jwt_identity()
+    sign_no = request.args.get('sign_no', '').strip()
+    if not sign_no:
+        return jsonify({'error': 'sign_no query parameter is required'}), 400
+
+    try:
+        floorplan = mongo.db.floorplans.find_one({'_id': ObjectId(floorplan_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid floorplan ID'}), 400
+
+    if not floorplan:
+        return jsonify({'error': 'Floorplan not found'}), 404
+
+    has_access, _, _ = check_project_access(user_id, str(floorplan['project_id']))
+    if not has_access:
+        return jsonify({'error': 'Access denied'}), 403
+
+    escaped = _re.escape(sign_no)
+    sign_regex = f'^{escaped}$'
+    query = {
+        'floorplan_id': ObjectId(floorplan_id),
+        '$or': [
+            {'manual_text': {'$regex': sign_regex, '$options': 'i'}},
+            {'extracted_text': {'$regex': sign_regex, '$options': 'i'}}
+        ]
+    }
+    results = list(mongo.db.extracted_data.find(query))
+
+    if not results:
+        query['$or'] = [
+            {'manual_text': {'$regex': escaped, '$options': 'i'}},
+            {'extracted_text': {'$regex': escaped, '$options': 'i'}}
+        ]
+        results = list(mongo.db.extracted_data.find(query))
+
+    entries = []
+    for item in results:
+        entries.append({
+            'id': str(item['_id']),
+            'x': item.get('x', 0),
+            'y': item.get('y', 0),
+            'width': item.get('width', 0),
+            'height': item.get('height', 0),
+            'quantity': item.get('quantity', 1),
+        })
+
+    return jsonify({'entries': entries}), 200
+
+
 @processing_bp.route('/split/<floorplan_id>', methods=['POST'])
 @jwt_required()
 def split_floorplan(floorplan_id):

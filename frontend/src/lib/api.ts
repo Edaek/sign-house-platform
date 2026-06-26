@@ -126,6 +126,7 @@ export interface SignTable {
   project_id: string
   rows: SignRow[]
   floorplan_columns: string[]
+  floorplan_column_names: string[]
   created_at: string
   updated_at: string
 }
@@ -146,6 +147,7 @@ export interface SignTableCellUpdateResponse {
   field: string
   value: string
   floor_name?: string
+  floorplan_id?: string
   sign_auto_filled?: string
   chinese_auto_filled?: string
   dictionary_updated?: boolean
@@ -173,13 +175,13 @@ export const updateSignTableCell = async (
 export const updateSignTableFloorCount = async (
   projectId: string,
   rowNumber: number,
-  floorName: string,
+  floorplanId: string,
   value: number | string
 ): Promise<SignTableCellUpdateResponse> => {
   const response = await api.put(`/export/sign-table/${projectId}`, {
     row_number: rowNumber,
     field: 'floor_count',
-    floor_name: floorName,
+    floorplan_id: floorplanId,
     value: String(value),
   })
   return response.data

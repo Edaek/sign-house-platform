@@ -271,11 +271,13 @@ def sign_table_to_dict(sign_table_doc):
     if not sign_table_doc:
         return None
     
+    columns = sign_table_doc.get('floorplan_columns', [])
     return {
         'id': str(sign_table_doc['_id']),
         'project_id': str(sign_table_doc['project_id']),
         'rows': sign_table_doc.get('rows', []),
-        'floorplan_columns': sign_table_doc.get('floorplan_columns', []),
+        'floorplan_columns': columns,
+        'floorplan_column_names': sign_table_doc.get('floorplan_column_names', columns),
         'created_at': sign_table_doc['created_at'].isoformat() if sign_table_doc.get('created_at') else None,
         'updated_at': sign_table_doc['updated_at'].isoformat() if sign_table_doc.get('updated_at') else None
     }

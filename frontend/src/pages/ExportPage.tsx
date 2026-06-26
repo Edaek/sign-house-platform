@@ -9,9 +9,11 @@ import {
   Loader2,
   RefreshCw,
   ChevronDown,
+  ChevronRight,
   Search,
   BookPlus,
-  Check
+  Check,
+  Image as ImageIcon,
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import { 
@@ -122,13 +124,13 @@ function EditableCell({
 function EditableFloorCountCell({ 
   value, 
   rowNumber, 
-  floorName,
+  floorplanId,
   onSave 
 }: { 
   value: number
   rowNumber: number
-  floorName: string
-  onSave: (rowNumber: number, floorName: string, value: number) => Promise<SignTableCellUpdateResponse>
+  floorplanId: string
+  onSave: (rowNumber: number, floorplanId: string, value: number) => Promise<SignTableCellUpdateResponse>
 }) {
   const [isEditing, setIsEditing] = useState(false)
   const [editValue, setEditValue] = useState(String(value || ''))
@@ -155,7 +157,7 @@ function EditableFloorCountCell({
 
     setIsSaving(true)
     try {
-      await onSave(rowNumber, floorName, numValue)
+      await onSave(rowNumber, floorplanId, numValue)
       setIsEditing(false)
     } catch {
       toast.error('Failed to save')
@@ -759,13 +761,142 @@ function ChineseSelectCell({
   )
 }
 
+function FloorThumbnail({ floorplanId, floorName, signNo, entryId, onClick }: {
+  floorplanId: string
+  floorName: string
+  signNo: string
+  entryId?: string
+  onClick: (entryId?: string) => void
+}) {
+  const [src, setSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    let revoked = false
+    const params = entryId
+      ? `entry_id=${encodeURIComponent(entryId)}`
+      : `sign_no=${encodeURIComponent(signNo)}`
+    const url = `/processing/image/${floorplanId}/shape-crop?${params}`
+    api.get(url, { responseType: 'blob' })
+      .then(res => {
+        if (revoked) return
+        setSrc(URL.createObjectURL(res.data))
+      })
+      .catch(() => {})
+    return () => { revoked = true; if (src) URL.revokeObjectURL(src) }
+  }, [floorplanId, signNo, entryId])
+
+  return (
+    <button
+      onClick={() => onClick(entryId)}
+      className="flex flex-col items-center w-full p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md transition-all group cursor-pointer"
+    >
+      <div className="w-full h-14 bg-slate-100 dark:bg-slate-700 rounded overflow-hidden">
+        {src ? (
+          <img src={src} alt={floorName} className="w-full h-full object-contain" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <ImageIcon className="w-4 h-4 text-slate-400" />
+          </div>
+        )}
+      </div>
+    </button>
+  )
+}
+
+interface ShapeEntry {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+  quantity: number
+}
+
+const THUMB_COLLAPSE_LIMIT = 3
+
+function FloorThumbnailCell({ floorplanId, floorName, signNo, count, projectId }: {
+  floorplanId: string
+  floorName: string
+  signNo: string
+  count: number
+  projectId: string
+}) {
+  const navigate = useNavigate()
+  const [entries, setEntries] = useState<ShapeEntry[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.get(`/processing/image/${floorplanId}/shape-entries?sign_no=${encodeURIComponent(signNo)}`)
+      .then(res => {
+        if (cancelled) return
+        setEntries(res.data.entries || [])
+        setLoaded(true)
+      })
+      .catch(() => setLoaded(true))
+    return () => { cancelled = true }
+  }, [floorplanId, signNo])
+
+  const handleClick = (entryId?: string) => {
+    const qs = entryId ? `?highlight=${entryId}` : ''
+    navigate(`/project/${projectId}/floor/${floorplanId}${qs}`)
+  }
+
+  if (!loaded) {
+    return (
+      <div className="flex items-center justify-center h-14">
+        <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+      </div>
+    )
+  }
+
+  if (entries.length === 0) {
+    return (
+      <FloorThumbnail
+        floorplanId={floorplanId}
+        floorName={floorName}
+        signNo={signNo}
+        onClick={handleClick}
+      />
+    )
+  }
+
+  const visible = expanded ? entries : entries.slice(0, THUMB_COLLAPSE_LIMIT)
+  const hiddenCount = entries.length - THUMB_COLLAPSE_LIMIT
+
+  return (
+    <div className="flex flex-col gap-1">
+      {visible.map(entry => (
+        <FloorThumbnail
+          key={entry.id}
+          floorplanId={floorplanId}
+          floorName={floorName}
+          signNo={signNo}
+          entryId={entry.id}
+          onClick={handleClick}
+        />
+      ))}
+      {entries.length > THUMB_COLLAPSE_LIMIT && (
+        <button
+          onClick={() => setExpanded(prev => !prev)}
+          className="text-[9px] text-blue-500 dark:text-blue-400 hover:underline cursor-pointer py-0.5"
+        >
+          {expanded ? 'Show less' : `+${hiddenCount} more`}
+        </button>
+      )}
+      <div className="text-[9px] text-center text-slate-500 dark:text-slate-400">Qty: {count}</div>
+    </div>
+  )
+}
+
 // Sign Table Preview Component
 function SignTablePreview({ 
   projectId,
-  onColumnsReady
+  onColumnsReady,
 }: { 
   projectId: string
-  onColumnsReady?: (columns: string[]) => void
+  onColumnsReady?: (columns: string[], names: string[]) => void
 }) {
   const [signTable, setSignTable] = useState<SignTable | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -774,6 +905,19 @@ function SignTablePreview({
   const [chineseOptions, setChineseOptions] = useState<Record<number, string[]>>({})
   // Track which rows we've already fetched options for
   const [fetchedRows, setFetchedRows] = useState<Set<number>>(new Set())
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set())
+
+  const toggleRowExpand = (rowNumber: number) => {
+    setExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(rowNumber)) {
+        next.delete(rowNumber)
+      } else {
+        next.add(rowNumber)
+      }
+      return next
+    })
+  }
 
   const fetchSignTableData = useCallback(async () => {
     setIsLoading(true)
@@ -782,7 +926,7 @@ function SignTablePreview({
     try {
       const response = await getSignTableData(projectId)
       setSignTable(response.sign_table)
-      onColumnsReady?.(response.sign_table.floorplan_columns)
+      onColumnsReady?.(response.sign_table.floorplan_columns, response.sign_table.floorplan_column_names ?? response.sign_table.floorplan_columns)
       // Reset fetched rows when table is reloaded
       setFetchedRows(new Set())
       setChineseOptions({})
@@ -869,19 +1013,18 @@ function SignTablePreview({
     return result
   }
 
-  const handleFloorCountSave = async (rowNumber: number, floorName: string, value: number) => {
-    const result = await updateSignTableFloorCount(projectId, rowNumber, floorName, value)
+  const handleFloorCountSave = async (rowNumber: number, floorplanId: string, value: number) => {
+    const result = await updateSignTableFloorCount(projectId, rowNumber, floorplanId, value)
     
-    // Update local state
     setSignTable(prev => {
       if (!prev) return prev
       const newRows = prev.rows.map(row => {
         if (row.row_number === rowNumber) {
           const updatedFloorCounts = { ...row.floor_counts }
           if (value > 0) {
-            updatedFloorCounts[floorName] = value
+            updatedFloorCounts[floorplanId] = value
           } else {
-            delete updatedFloorCounts[floorName]
+            delete updatedFloorCounts[floorplanId]
           }
           return { ...row, floor_counts: updatedFloorCounts }
         }
@@ -978,6 +1121,7 @@ function SignTablePreview({
     }
   }
 
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-32">
@@ -1013,15 +1157,14 @@ function SignTablePreview({
     )
   }
 
-  // Dynamic floorplan columns
   const floorColumns = signTable.floorplan_columns
+  const floorColumnNames = signTable.floorplan_column_names ?? floorColumns
 
   return (
     <div className="overflow-auto" style={{ height: 'calc(100vh - 280px)', minHeight: '400px' }}>
       <table className="w-full border-collapse text-sm">
         <thead className="bg-slate-800 sticky top-0 z-10">
           <tr>
-            {/* Fixed columns */}
             <th className="px-3 py-2 text-left text-xs font-medium text-slate-400 border-b border-slate-700 w-12">
               #
             </th>
@@ -1038,103 +1181,146 @@ function SignTablePreview({
               Chinese
             </th>
             
-            {/* Dynamic floorplan columns */}
-            {floorColumns.map((floorName) => (
+            {floorColumnNames.map((name, idx) => (
               <th 
-                key={floorName}
+                key={floorColumns[idx]}
                 className="px-3 py-2 text-center text-xs font-medium text-emerald-300 border-b border-slate-700 min-w-[80px] bg-emerald-900/10"
               >
-                {floorName}
+                {name}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {signTable.rows.map((row) => (
-            <tr key={row.row_number} className="border-b border-slate-800 hover:bg-slate-800/50">
-              {/* Row number */}
-              <td className="px-3 py-1 text-xs text-slate-500 font-mono">
-                {row.row_number}
-              </td>
-              
-              {/* Sign No. (editable) */}
-              <td className="px-1 py-0.5 bg-slate-800/30">
-                <EditableCell
-                  value={row.sign_no}
-                  rowNumber={row.row_number}
-                  field="sign_no"
-                  onSave={handleCellSave}
-                  className="font-mono text-white"
-                />
-              </td>
-              
-              {/* Sign (editable) */}
-              <td className="px-1 py-0.5">
-                <EditableCell
-                  value={row.sign}
-                  rowNumber={row.row_number}
-                  field="sign"
-                  onSave={handleCellSave}
-                />
-              </td>
-              
-              {/* English (editable with autocomplete) */}
-              <td className="px-1 py-0.5 bg-blue-900/5">
-                <EnglishAutocompleteCell
-                  value={row.english}
-                  rowNumber={row.row_number}
-                  onSave={handleCellSave}
-                  onSignUpdate={handleSignUpdate}
-                  onChineseUpdate={handleChineseUpdate}
-                  onChineseOptions={handleChineseOptions}
-                />
-              </td>
-              
-              {/* Chinese (editable, with dropdown for multiple options) */}
-              <td className="px-1 py-0.5 bg-purple-900/5">
-                {chineseOptions[row.row_number] && chineseOptions[row.row_number].length > 1 ? (
-                  // Show dropdown when multiple translations available
-                  <ChineseSelectCell
-                    value={row.chinese}
-                    options={chineseOptions[row.row_number]}
-                    rowNumber={row.row_number}
-                    englishValue={row.english}
-                    onSave={handleCellSave}
-                    onSaveToDictionary={handleSaveToDictionary}
-                  />
-                ) : (
-                  <ChineseEditableCell
-                    value={row.chinese}
-                    rowNumber={row.row_number}
-                    englishValue={row.english}
-                    knownTranslations={chineseOptions[row.row_number] || []}
-                    onSave={handleCellSave}
-                    onSaveToDictionary={handleSaveToDictionary}
-                  />
-                )}
-              </td>
-              
-              {/* Floor count columns (editable) */}
-              {floorColumns.map((floorName) => {
-                const count = row.floor_counts[floorName] || 0
-                return (
-                  <td 
-                    key={`${row.row_number}-${floorName}`}
-                    className="px-1 py-0.5 bg-emerald-900/5"
+          {signTable.rows.flatMap((row) => {
+            const isExpanded = expandedRows.has(row.row_number)
+            const hasFloors = floorColumns.some(id => (row.floor_counts[id] || 0) > 0)
+
+            return [
+              <tr key={row.row_number} className="border-b border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                {/* Row number — click to expand */}
+                <td className="px-0 py-0.5">
+                  <button
+                    onClick={() => hasFloors && toggleRowExpand(row.row_number)}
+                    className={clsx(
+                      'flex items-center gap-1 w-full px-2 py-1 text-xs font-mono rounded transition-colors',
+                      hasFloors
+                        ? 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer'
+                        : 'text-slate-400 dark:text-slate-500 cursor-default'
+                    )}
+                    disabled={!hasFloors}
                   >
-                    <EditableFloorCountCell
-                      value={count}
+                    {hasFloors && (
+                      isExpanded
+                        ? <ChevronDown className="w-3 h-3 flex-shrink-0" />
+                        : <ChevronRight className="w-3 h-3 flex-shrink-0" />
+                    )}
+                    {row.row_number}
+                  </button>
+                </td>
+                
+                {/* Sign No. (editable) */}
+                <td className="px-1 py-0.5 bg-white/50 dark:bg-slate-800/30">
+                  <EditableCell
+                    value={row.sign_no}
+                    rowNumber={row.row_number}
+                    field="sign_no"
+                    onSave={handleCellSave}
+                    className="font-mono text-slate-900 dark:text-white"
+                  />
+                </td>
+                
+                {/* Sign (editable) */}
+                <td className="px-1 py-0.5">
+                  <EditableCell
+                    value={row.sign}
+                    rowNumber={row.row_number}
+                    field="sign"
+                    onSave={handleCellSave}
+                  />
+                </td>
+                
+                {/* English (editable with autocomplete) */}
+                <td className="px-1 py-0.5 bg-blue-50/50 dark:bg-blue-900/5">
+                  <EnglishAutocompleteCell
+                    value={row.english}
+                    rowNumber={row.row_number}
+                    onSave={handleCellSave}
+                    onSignUpdate={handleSignUpdate}
+                    onChineseUpdate={handleChineseUpdate}
+                    onChineseOptions={handleChineseOptions}
+                  />
+                </td>
+                
+                {/* Chinese (editable, with dropdown for multiple options) */}
+                <td className="px-1 py-0.5 bg-purple-50/50 dark:bg-purple-900/5">
+                  {chineseOptions[row.row_number] && chineseOptions[row.row_number].length > 1 ? (
+                    <ChineseSelectCell
+                      value={row.chinese}
+                      options={chineseOptions[row.row_number]}
                       rowNumber={row.row_number}
-                      floorName={floorName}
-                      onSave={handleFloorCountSave}
+                      englishValue={row.english}
+                      onSave={handleCellSave}
+                      onSaveToDictionary={handleSaveToDictionary}
                     />
-                  </td>
-                )
-              })}
-            </tr>
-          ))}
+                  ) : (
+                    <ChineseEditableCell
+                      value={row.chinese}
+                      rowNumber={row.row_number}
+                      englishValue={row.english}
+                      knownTranslations={chineseOptions[row.row_number] || []}
+                      onSave={handleCellSave}
+                      onSaveToDictionary={handleSaveToDictionary}
+                    />
+                  )}
+                </td>
+                
+                {floorColumns.map((fpId) => {
+                  const count = row.floor_counts[fpId] || 0
+                  return (
+                    <td 
+                      key={`${row.row_number}-${fpId}`}
+                      className="px-1 py-0.5 bg-emerald-50/30 dark:bg-emerald-900/5"
+                    >
+                      <EditableFloorCountCell
+                        value={count}
+                        rowNumber={row.row_number}
+                        floorplanId={fpId}
+                        onSave={handleFloorCountSave}
+                      />
+                    </td>
+                  )
+                })}
+              </tr>,
+
+              ...(isExpanded ? [
+                <tr key={`${row.row_number}-expand`} className="border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
+                  <td /><td /><td /><td /><td />
+                  {floorColumns.map((fpId, idx) => {
+                    const count = row.floor_counts[fpId] || 0
+                    if (count > 0) {
+                      const displayName = floorColumnNames[idx] ?? fpId
+                      return (
+                        <td key={`${row.row_number}-thumb-${idx}`} className="px-1 py-1 align-top">
+                          <FloorThumbnailCell
+                            floorplanId={fpId}
+                            floorName={displayName}
+                            signNo={row.sign_no}
+                            count={count}
+                            projectId={projectId}
+                          />
+                        </td>
+                      )
+                    }
+                    return <td key={`${row.row_number}-thumb-${idx}`} />
+                  })}
+                </tr>
+              ] : [])
+            ]
+          })}
         </tbody>
       </table>
+
     </div>
   )
 }
@@ -1145,6 +1331,7 @@ export default function ExportPage() {
   const { currentProject, fetchProject } = useProjectStore()
   const [isLoading, setIsLoading] = useState(true)
   const [allFloorColumns, setAllFloorColumns] = useState<string[]>([])
+  const [allFloorColumnNames, setAllFloorColumnNames] = useState<string[]>([])
   const [showExportModal, setShowExportModal] = useState(false)
   const [exportSelectedIdxs, setExportSelectedIdxs] = useState<Set<number>>(new Set())
   const [exportSelectedFixed, setExportSelectedFixed] = useState<Set<string>>(new Set())
@@ -1287,7 +1474,12 @@ export default function ExportPage() {
             </div>
           </div>
           
-          {projectId && <SignTablePreview projectId={projectId} onColumnsReady={setAllFloorColumns} />}
+          {projectId && (
+            <SignTablePreview
+              projectId={projectId}
+              onColumnsReady={(cols, names) => { setAllFloorColumns(cols); setAllFloorColumnNames(names) }}
+            />
+          )}
         </motion.div>
       </div>
 
@@ -1358,7 +1550,7 @@ export default function ExportPage() {
               ))}
 
               <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 font-semibold mb-1 mt-3">Floor Columns</div>
-              {allFloorColumns.map((col, idx) => (
+              {allFloorColumns.map((_id, idx) => (
                 <label
                   key={idx}
                   className="flex items-center gap-3 py-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/30 -mx-2 px-2 rounded transition-colors"
@@ -1375,7 +1567,7 @@ export default function ExportPage() {
                     }}
                     className="accent-emerald-500 w-4 h-4 cursor-pointer"
                   />
-                  <span className="text-sm text-slate-700 dark:text-slate-200">{col}</span>
+                  <span className="text-sm text-slate-700 dark:text-slate-200">{allFloorColumnNames[idx] ?? _id}</span>
                 </label>
               ))}
             </div>
