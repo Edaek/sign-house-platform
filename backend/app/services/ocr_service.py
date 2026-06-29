@@ -23,10 +23,8 @@ _REJECT_WORDS = frozenset({
     'lift', 'block', 'floor', 'roof', 'balcony', 'store',
     'utility', 'master', 'common', 'typical', 'plan',
     'elevation', 'section', 'detail', 'note', 'ref',
-})
-
-_PURE_ALPHA_SIGN_CODES = frozenset({
-    'D', 'CS', 'EX', 'S', 'N', 'W', 'E',
+    'ac', 'db', 'dp', 'up', 'dn', 'fl', 'rm',
+    'no', 'nr', 'wc', 'tv', 'tel', 'rev',
 })
 
 
@@ -93,8 +91,10 @@ def is_valid_sign_code(text, strict=False):
     if not cleaned:
         return False
 
-    if cleaned in _PURE_ALPHA_SIGN_CODES:
-        return True
+    if re.match(r'^[A-Z]{1,4}$', cleaned):
+        if cleaned.lower() not in _REJECT_WORDS:
+            if strict or len(cleaned) >= 2:
+                return True
 
     if strict and len(cleaned) < 2:
         return False
