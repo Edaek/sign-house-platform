@@ -368,7 +368,7 @@ def export_to_csv(project_id):
         all_columns = fixed_columns + floorplan_columns
         
         # Write CSV
-        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        with open(output_path, 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
             writer.writerow(all_columns)
             
