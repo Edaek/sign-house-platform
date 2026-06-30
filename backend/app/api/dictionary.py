@@ -886,16 +886,17 @@ def export_dictionary():
             chinese_str = ';'.join(chinese)
             writer.writerow([english, sign, chinese_str])
         
-        # Create response with CSV content
         csv_content = output.getvalue()
         output.close()
         
+        csv_bytes = csv_content.encode('utf-8-sig')
+        
         return Response(
-            csv_content,
+            csv_bytes,
             mimetype='text/csv',
             headers={
                 'Content-Disposition': 'attachment; filename=dictionary-export.csv',
-                'Content-Type': 'text/csv; charset=utf-8'
+                'Content-Type': 'text/csv; charset=utf-8-sig'
             }
         )
         
