@@ -739,3 +739,51 @@ def remove_project_member(project_id, member_user_id, _user=None, _project=None)
     )
     
     return jsonify({'message': 'Member removed successfully'}), 200
+
+
+@projects_bp.route('/<project_id>/re-extract-titles', methods=['POST'])
+@jwt_required()
+@require_project_modify
+def re_extract_titles(project_id, _user=None, _project=None):
+    """Re-extract titles from OCR for all floorplans in a project."""
+    floorplans = list(mongo.db.floorplans.find({
+        'project_id': ObjectId(project_id)
+    }).sort('floor_number', 1))
+
+    if not floorplans:
+        return jsonify({'error': 'No floorplans found'}), 404
+
+    ocr_service = OCRService()
+    updated = []
+
+    for fp in floorplans:
+        image_path = fp.get('image_filepath')
+        if not image_path or not os.path.exists(image_path):
+            continue
+
+        try:
+            extracted_title = ocr_service.extract_title_from_floorplan(
+                image_path,
+                x_start_pct=current_app.config.get('TITLE_REGION_X_START', 60),
+                y_start_pct=current_app.config.get('TITLE_REGION_Y_START', 85),
+                width_pct=current_app.config.get('TITLE_REGION_WIDTH', 40),
+                height_pct=current_app.config.get('TITLE_REGION_HEIGHT', 15)
+            )
+
+            if extracted_title and extracted_title != fp.get('floor_name'):
+                mongo.db.floorplans.update_one(
+                    {'_id': fp['_id']},
+                    {'$set': {'floor_name': extracted_title, 'updated_at': datetime.utcnow()}}
+                )
+                updated.append({
+                    'id': str(fp['_id']),
+                    'old_name': fp.get('floor_name'),
+                    'new_name': extracted_title
+                })
+        except Exception as e:
+            current_app.logger.warning(f"Failed to re-extract title for floorplan {fp['_id']}: {e}")
+
+    return jsonify({
+        'message': f'Re-extracted titles: {len(updated)} updated out of {len(floorplans)}',
+        'updated': updated
+    }), 200

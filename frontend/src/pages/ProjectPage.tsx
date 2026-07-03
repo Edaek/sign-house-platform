@@ -20,6 +20,7 @@ import {
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
 import BatchUploadProgress from '../components/BatchUploadProgress'
+import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
@@ -44,6 +45,8 @@ export default function ProjectPage() {
   const [isEditingName, setIsEditingName] = useState(false)
   const [editedName, setEditedName] = useState('')
   
+  const [isReExtractingTitles, setIsReExtractingTitles] = useState(false)
+
   const floorplanInputRef = useRef<HTMLInputElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
@@ -468,9 +471,40 @@ export default function ProjectPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
         >
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-4">
-            Floor Plans ({currentProject.floorplans.length})
-          </h2>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
+              Floor Plans ({currentProject.floorplans.length})
+            </h2>
+            <button
+              onClick={async () => {
+                if (!projectId) return
+                setIsReExtractingTitles(true)
+                try {
+                  const res = await api.post(`/projects/${projectId}/re-extract-titles`)
+                  const { updated } = res.data
+                  if (updated.length > 0) {
+                    toast.success(`Updated ${updated.length} floor title(s)`)
+                    fetchProject(projectId)
+                  } else {
+                    toast('No title changes detected', { icon: 'ℹ️' })
+                  }
+                } catch {
+                  toast.error('Failed to re-extract titles')
+                } finally {
+                  setIsReExtractingTitles(false)
+                }
+              }}
+              disabled={isReExtractingTitles}
+              className="btn btn-secondary text-xs flex items-center gap-1.5"
+            >
+              {isReExtractingTitles ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FileText className="w-3.5 h-3.5" />
+              )}
+              Re-extract Titles
+            </button>
+          </div>
           
           <div className="space-y-3">
             {currentProject.floorplans.map((floorplan, index) => (

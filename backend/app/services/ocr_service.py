@@ -535,9 +535,9 @@ class OCRService:
         img_height, img_width = img.shape[:2]
 
         regions_to_try = [
-            {'x_pct': 84, 'y_pct': 78, 'w_pct': 15, 'h_pct': 6, 'name': 'sheet_title_primary'},
-            {'x_pct': 83, 'y_pct': 77, 'w_pct': 16, 'h_pct': 7, 'name': 'sheet_title_extended'},
-            {'x_pct': 84, 'y_pct': 76, 'w_pct': 15, 'h_pct': 8, 'name': 'sheet_title_with_label'},
+            {'x_pct': 84, 'y_pct': 76, 'w_pct': 15, 'h_pct': 12, 'name': 'sheet_title_primary'},
+            {'x_pct': 83, 'y_pct': 75, 'w_pct': 16, 'h_pct': 14, 'name': 'sheet_title_extended'},
+            {'x_pct': 84, 'y_pct': 74, 'w_pct': 15, 'h_pct': 15, 'name': 'sheet_title_with_label'},
             {'x_pct': x_start_pct, 'y_pct': y_start_pct, 'w_pct': width_pct, 'h_pct': height_pct, 'name': 'user_default'},
         ]
 
@@ -567,9 +567,9 @@ class OCRService:
                     continue
 
                 sheet_patterns = [
-                    r'Sheet\s+Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
-                    r'Sheet\s+Title\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
-                    r'Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?:\n|Dwg|T\s*-\s*Dwg|Checked|$)',
+                    r'Sheet\s+Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?=Dwg|T\s*-\s*Dwg|Checked|\Z)',
+                    r'Sheet\s+Title\s*[:=\-]?\s*(.+?)(?=Dwg|T\s*-\s*Dwg|Checked|\Z)',
+                    r'Title\s*[&\+]?\s*Sign\s*No\.?\s*[:=\-]?\s*(.+?)(?=Dwg|T\s*-\s*Dwg|Checked|\Z)',
                 ]
 
                 for pattern in sheet_patterns:
@@ -681,13 +681,13 @@ class OCRService:
             return ''
 
         text = ' '.join(text.split())
-        text = text.strip('|[](){}/_\\-=+*#')
+        text = text.strip('|[]{}/_\\=+*#')
 
         text = re.sub(r'[-_]{3,}', '', text)
         text = re.sub(r'[.]{3,}', '', text)
 
         unsafe_chars = {
-            '/': '-', '\\': '-', ':': '-', '*': '', '?': '',
+            '\\': '-', '*': '', '?': '',
             '"': '', '<': '', '>': '', '|': '-'
         }
         for unsafe, safe in unsafe_chars.items():
@@ -696,6 +696,8 @@ class OCRService:
         text = re.sub(r'\s+', ' ', text)
         text = re.sub(r'-+', '-', text)
         text = text.strip('- _')
+
+        text = re.sub(r'\)\s*\S{1,4}$', ')', text)
 
         return text
 

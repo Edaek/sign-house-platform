@@ -7,26 +7,17 @@ from app import mongo
 from app.models import serialize_doc, create_sign_table_doc, create_sign_row, sign_table_to_dict
 from app.services.excel_service import ExcelService
 from app.services.dictionary_service import lookup_chinese, lookup_entry
+from app.utils.permissions import require_project_access, require_project_modify
 
 export_bp = Blueprint('export', __name__)
 
 
 @export_bp.route('/preview/<project_id>', methods=['GET'])
 @jwt_required()
-def preview_export(project_id):
+@require_project_access
+def preview_export(project_id, _user=None, _project=None):
     """Preview all extracted data for a project."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
+    project = _project
     
     # Get all extracted data from all floorplans
     floorplans = list(mongo.db.floorplans.find({
@@ -113,20 +104,10 @@ def preview_export(project_id):
 
 @export_bp.route('/excel/<project_id>', methods=['POST'])
 @jwt_required()
-def export_to_excel(project_id):
+@require_project_access
+def export_to_excel(project_id, _user=None, _project=None):
     """Export project data to Excel using the sign table structure."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
+    project = _project
     
     try:
         # Get or generate sign table data
@@ -319,20 +300,10 @@ def export_to_excel(project_id):
 
 @export_bp.route('/csv/<project_id>', methods=['POST'])
 @jwt_required()
-def export_to_csv(project_id):
+@require_project_access
+def export_to_csv(project_id, _user=None, _project=None):
     """Export project data to CSV using the sign table structure."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
+    project = _project
     
     try:
         import csv
@@ -344,7 +315,7 @@ def export_to_csv(project_id):
         
         if not sign_table:
             # Generate it if it doesn't exist
-            generated_rows, floorplan_columns = _generate_sign_table_from_ocr(project_id)
+            generated_rows, floorplan_columns, floorplan_column_names = _generate_sign_table_from_ocr(project_id)
             sign_table_doc = create_sign_table_doc(project_id, generated_rows, floorplan_columns)
             result = mongo.db.project_sign_data.insert_one(sign_table_doc)
             sign_table = mongo.db.project_sign_data.find_one({'_id': result.inserted_id})
@@ -405,20 +376,10 @@ def export_to_csv(project_id):
 
 @export_bp.route('/complete/<project_id>', methods=['POST'])
 @jwt_required()
-def mark_complete(project_id):
+@require_project_modify
+def mark_complete(project_id, _user=None, _project=None):
     """Mark a project as completed."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
+    project = _project
     
     # Check if all floorplans are completed
     incomplete = mongo.db.floorplans.count_documents({
@@ -448,20 +409,9 @@ def mark_complete(project_id):
 
 @export_bp.route('/template-data/<project_id>', methods=['GET'])
 @jwt_required()
-def get_template_data(project_id):
+@require_project_access
+def get_template_data(project_id, _user=None, _project=None):
     """Get template data merged with OCR extracted data."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
     
     # Get template
     template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
@@ -522,20 +472,9 @@ def get_template_data(project_id):
 
 @export_bp.route('/template-data/<project_id>', methods=['PUT'])
 @jwt_required()
-def update_template_data(project_id):
+@require_project_modify
+def update_template_data(project_id, _user=None, _project=None):
     """Update cells in the template file."""
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
     
     # Get template
     template = mongo.db.templates.find_one({'project_id': ObjectId(project_id)})
@@ -651,25 +590,15 @@ def _generate_sign_table_from_ocr(project_id):
 
 @export_bp.route('/sign-table/<project_id>', methods=['GET'])
 @jwt_required()
-def get_sign_table(project_id):
+@require_project_access
+def get_sign_table(project_id, _user=None, _project=None):
     """Get or generate sign table data for a project.
     
     The sign table aggregates OCR data by unique sign number and shows
     counts per floorplan. User-editable fields (sign, english, chinese)
     are preserved across regenerations.
     """
-    user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
+    project = _project
     
     # Check if sign table already exists
     existing_table = mongo.db.project_sign_data.find_one({
@@ -719,7 +648,8 @@ def get_sign_table(project_id):
 
 @export_bp.route('/sign-table/<project_id>', methods=['PUT'])
 @jwt_required()
-def update_sign_table(project_id):
+@require_project_modify
+def update_sign_table(project_id, _user=None, _project=None):
     """Update a cell in the sign table.
     
     Request body:
@@ -733,17 +663,6 @@ def update_sign_table(project_id):
     When the sign field is updated and there's an English value, the dictionary entry is also updated.
     """
     user_id = get_jwt_identity()
-    
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except:
-        return jsonify({'error': 'Invalid project ID'}), 400
-    
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
     
     # Get request data
     data = request.get_json()
@@ -886,25 +805,14 @@ def update_sign_table(project_id):
 
 @export_bp.route('/sign-floors/<project_id>', methods=['GET'])
 @jwt_required()
-def get_sign_floors(project_id):
+@require_project_access
+def get_sign_floors(project_id, _user=None, _project=None):
     """Return the list of floorplan IDs where a given sign_no exists."""
     import re as _re
 
-    user_id = get_jwt_identity()
     sign_no = request.args.get('sign_no', '').strip()
     if not sign_no:
         return jsonify({'error': 'sign_no is required'}), 400
-
-    try:
-        project = mongo.db.projects.find_one({
-            '_id': ObjectId(project_id),
-            'user_id': ObjectId(user_id)
-        })
-    except Exception:
-        return jsonify({'error': 'Invalid project ID'}), 400
-
-    if not project:
-        return jsonify({'error': 'Project not found'}), 404
 
     floorplan_ids = [
         fp['_id']
