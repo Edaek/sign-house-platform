@@ -397,21 +397,8 @@ class CVService:
         # Detect legend box in upper-left corner to exclude from detection
         legend_bbox = self._detect_legend_region(img)
         
-        # Build color mask using detected color type
-        color_dominant = self._build_color_mask(img, color_type)
-        
-        # Also check color distance from sample BGR
-        b, g, r = cv2.split(img)
-        color_dist = np.sqrt(
-            (b.astype(float) - sample_bgr[0]) ** 2 +
-            (g.astype(float) - sample_bgr[1]) ** 2 +
-            (r.astype(float) - sample_bgr[2]) ** 2
-        )
-        color_tolerance = 80
-        color_similar = color_dist < color_tolerance
-        
-        # Combine: pixel must match color type AND be similar to sample color
-        color_mask = ((color_dominant > 0) & color_similar).astype(np.uint8) * 255
+        # Build color mask using detected color type (HSV-based)
+        color_mask = self._build_color_mask(img, color_type)
         
         raw_color_mask = color_mask.copy()
         
@@ -425,12 +412,11 @@ class CVService:
         
         # Dilate to connect outline pixels (symmetric kernel to avoid directional bias)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        color_mask = cv2.dilate(color_mask, kernel, iterations=1)
+        color_mask = cv2.dilate(color_mask, kernel, iterations=2)
         
         color_mask_blurred = cv2.GaussianBlur(color_mask, (5, 5), 1)
         
-        # Size tolerance: 35%
-        size_tolerance = 0.35
+        size_tolerance = 0.50
         min_radius = max(5, int(target_radius * (1 - size_tolerance)))
         max_radius = int(target_radius * (1 + size_tolerance))
         
@@ -440,7 +426,7 @@ class CVService:
             dp=1.0,
             minDist=int(target_radius * 0.8),
             param1=50,
-            param2=14,
+            param2=12,
             minRadius=min_radius,
             maxRadius=max_radius
         )
@@ -646,7 +632,14 @@ class CVService:
             tx, ty, tw, th = title_bbox
             detected = [d for d in detected
                         if not (tx <= d['center_x'] <= tx + tw and ty <= d['center_y'] <= ty + th)]
-        
+
+        # Exclude circles outside the drawing frame (top/bottom margins)
+        frame_top, frame_bottom = self._detect_drawing_frame(img)
+        if frame_top is not None or frame_bottom is not None:
+            detected = [d for d in detected
+                        if (frame_top is None or d['center_y'] > frame_top)
+                        and (frame_bottom is None or d['center_y'] < frame_bottom)]
+
         detected.sort(key=lambda c: (c['y'], c['x']))
         
         return detected
@@ -1092,8 +1085,7 @@ class CVService:
         """
         h, w = img.shape[:2]
 
-        # Search within the right 30% of the image (title blocks are 15-25% width)
-        search_ratio = 0.30
+        search_ratio = 0.25
         search_x = int(w * (1 - search_ratio))
         region = img[0:h, search_x:w]
 
@@ -1107,7 +1099,7 @@ class CVService:
             minLineLength=min_line_len, maxLineGap=int(h * 0.05)
         )
 
-        best_x = None
+        candidates = []
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
@@ -1119,35 +1111,98 @@ class CVService:
                 if angle_deg > 5:
                     continue
                 line_x = min(x1, x2)
-                # Must sit in the 10%-30% band from the right edge
                 abs_x = search_x + line_x
-                if abs_x < w * 0.70:
+                if abs_x < w * 0.75:
                     continue
-                if best_x is None or line_x < best_x:
-                    best_x = line_x
+                candidates.append(line_x)
 
-        if best_x is not None:
-            abs_x = max(0, search_x + best_x - 5)
-            logger.debug(f"Right strip detected via Hough at x={abs_x} (image {w}x{h})")
-            return (abs_x, 0, w - abs_x, h)
+        if candidates:
+            candidates.sort()
+            for cand_x in candidates:
+                abs_x = max(0, search_x + cand_x - 5)
+                strip_ratio = (w - abs_x) / w
+                if 0.08 <= strip_ratio <= 0.25:
+                    logger.debug(f"Right strip detected via Hough at x={abs_x} ({strip_ratio:.1%} width, image {w}x{h})")
+                    return (abs_x, 0, w - abs_x, h)
 
         # --- Strategy 2: Column edge-density projection ---
         col_sum = np.sum(edges > 0, axis=0).astype(float)
-        # Smooth to reduce noise
         kernel_size = max(3, int(region.shape[1] * 0.02)) | 1
         col_smooth = np.convolve(col_sum, np.ones(kernel_size) / kernel_size, mode='same')
 
         if col_smooth.max() > 0:
             threshold = col_smooth.mean() + col_smooth.std() * 1.5
-            # Walk from left to right in the search region, find first significant peak
             for cx in range(len(col_smooth)):
                 if col_smooth[cx] >= threshold:
                     abs_x = max(0, search_x + cx - 5)
-                    if abs_x >= w * 0.70:
-                        logger.debug(f"Right strip detected via projection at x={abs_x} (image {w}x{h})")
+                    strip_ratio = (w - abs_x) / w
+                    if abs_x >= w * 0.75 and 0.08 <= strip_ratio <= 0.25:
+                        logger.debug(f"Right strip detected via projection at x={abs_x} ({strip_ratio:.1%} width, image {w}x{h})")
                         return (abs_x, 0, w - abs_x, h)
 
         return None
+
+    def _detect_drawing_frame(self, img):
+        """Detect the drawing frame borders (top and bottom horizontal lines).
+
+        Architectural drawings have a rectangular frame around the content.
+        Shapes outside this frame (in margins/notes areas) should be excluded.
+
+        Returns:
+            Tuple (top_y, bottom_y) — the y coordinates of the top and bottom
+            frame borders.  Either may be None if not detected.
+        """
+        h, w = img.shape[:2]
+        cache_key = (w, h, id(img))
+        if hasattr(self, '_frame_cache') and self._frame_cache[0] == cache_key:
+            return self._frame_cache[1]
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        min_line_len = int(w * 0.7)
+        top_y = None
+        bottom_y = None
+
+        # Detect bottom frame border (search bottom 5% of image)
+        bottom_start = int(h * 0.95)
+        bottom_search = edges[bottom_start:h, :]
+        lines = cv2.HoughLinesP(bottom_search, 1, np.pi / 180, 100,
+                                minLineLength=min_line_len, maxLineGap=30)
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                dx, dy = abs(x2 - x1), abs(y2 - y1)
+                if dx == 0:
+                    continue
+                if np.degrees(np.arctan(dy / dx)) < 3:
+                    abs_y = bottom_start + min(y1, y2)
+                    if bottom_y is None or abs_y < bottom_y:
+                        bottom_y = abs_y
+
+        # Detect top frame border (search top 5% of image)
+        top_search = edges[0:int(h * 0.05), :]
+        lines = cv2.HoughLinesP(top_search, 1, np.pi / 180, 100,
+                                minLineLength=min_line_len, maxLineGap=30)
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                dx, dy = abs(x2 - x1), abs(y2 - y1)
+                if dx == 0:
+                    continue
+                if np.degrees(np.arctan(dy / dx)) < 3:
+                    abs_y = max(y1, y2)
+                    if top_y is None or abs_y > top_y:
+                        top_y = abs_y
+
+        if top_y is not None:
+            logger.debug(f"Drawing frame top border at y={top_y} ({top_y/h:.1%})")
+        if bottom_y is not None:
+            logger.debug(f"Drawing frame bottom border at y={bottom_y} ({bottom_y/h:.1%})")
+
+        result = (top_y, bottom_y)
+        self._frame_cache = (cache_key, result)
+        return result
 
     def _detect_title_block(self, img):
         """Detect the title block region on the right side or bottom-right corner.
@@ -1554,8 +1609,8 @@ class CVService:
         elif color_type == 'red':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
             h_ch, s_ch, v_ch = cv2.split(hsv)
-            mask_low = cv2.inRange(hsv, np.array([0, 60, 60]), np.array([10, 255, 255]))
-            mask_high = cv2.inRange(hsv, np.array([165, 60, 60]), np.array([180, 255, 255]))
+            mask_low = cv2.inRange(hsv, np.array([0, 35, 60]), np.array([10, 255, 255]))
+            mask_high = cv2.inRange(hsv, np.array([165, 35, 60]), np.array([180, 255, 255]))
             mask = cv2.bitwise_or(mask_low, mask_high)
         elif color_type == 'yellow':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
@@ -2063,7 +2118,14 @@ class CVService:
             detected = [d for d in detected
                         if not (tx <= d['x'] + d['width'] // 2 <= tx + tw
                                 and ty <= d['y'] + d['height'] // 2 <= ty + th)]
-        
+
+        # Exclude rectangles outside the drawing frame
+        frame_top, frame_bottom = self._detect_drawing_frame(img)
+        if frame_top is not None or frame_bottom is not None:
+            detected = [d for d in detected
+                        if (frame_top is None or d['y'] + d['height'] // 2 > frame_top)
+                        and (frame_bottom is None or d['y'] + d['height'] // 2 < frame_bottom)]
+
         return detected
     
     def _remove_duplicate_boxes(self, boxes, threshold=20):
@@ -2694,6 +2756,13 @@ class CVService:
             verified = [s for s in verified
                         if not (tx <= s.get('center_x', s['x'] + s['width'] // 2) <= tx + tw
                                 and ty <= s.get('center_y', s['y'] + s['height'] // 2) <= ty + th)]
+
+        # Exclude shapes outside drawing frame
+        frame_top, frame_bottom = self._detect_drawing_frame(img)
+        if frame_top is not None or frame_bottom is not None:
+            verified = [s for s in verified
+                        if (frame_top is None or s.get('center_y', s['y'] + s['height'] // 2) > frame_top)
+                        and (frame_bottom is None or s.get('center_y', s['y'] + s['height'] // 2) < frame_bottom)]
 
         logger.info(
             f"Learned template matching found {pre_filter} candidates from {len(templates)} templates, "

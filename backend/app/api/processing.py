@@ -173,35 +173,8 @@ def detect_shapes(floorplan_id):
             doc['display_text'] = text
             ocr_results.append(doc)
 
-        stage = 'grouping'
-        grouping_result = ocr_service.group_ocr_results(ocr_results)
-        grouped_results = grouping_result['grouped']
-        deleted_ids = grouping_result['deleted_ids']
-        merge_info = grouping_result['merge_info']
-
-        for res in grouped_results:
-            result_id = res['_id']
-            if str(result_id) in merge_info:
-                info = merge_info[str(result_id)]
-                mongo.db.extracted_data.update_one(
-                    {'_id': result_id},
-                    {'$set': {
-                        'quantity': info['total_quantity'],
-                        'merged_count': info['merged_count'],
-                        'original_shape_indices': info['original_indices'],
-                        'all_bounding_boxes': info['all_bounding_boxes'],
-                        'updated_at': datetime.utcnow()
-                    }}
-                )
-                res['merged_count'] = info['merged_count']
-                res['original_shape_indices'] = info['original_indices']
-                res['all_bounding_boxes'] = info['all_bounding_boxes']
-
-        if deleted_ids:
-            mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
-
         matched_template_ids = set()
-        for res in grouped_results:
+        for res in ocr_results:
             tid = res.get('template_id')
             if tid and res.get('detection_method') == 'learned':
                 matched_template_ids.add(tid)
@@ -219,16 +192,13 @@ def detect_shapes(floorplan_id):
             {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
         )
 
-        response_results = [serialize_doc(d) for d in grouped_results]
+        response_results = [serialize_doc(d) for d in ocr_results]
         for res in response_results:
             res['display_text'] = res.get('manual_text') or res.get('extracted_text')
 
-        total_merged = sum(info['merged_count'] for info in merge_info.values())
-        learned_count = sum(1 for r in grouped_results if r.get('detection_method') == 'learned')
+        learned_count = sum(1 for r in ocr_results if r.get('detection_method') == 'learned')
         elapsed = time.time() - t0
-        message = f'Detected and OCR\'d {len(response_results)} unique {detected_type}s'
-        if deleted_ids:
-            message += f' ({total_merged} original detections grouped)'
+        message = f'Detected and OCR\'d {len(response_results)} {detected_type}s'
         if learned_count:
             message += f' ({learned_count} from learned templates)'
 
@@ -239,10 +209,8 @@ def detect_shapes(floorplan_id):
             'message': message,
             'shape_type': detected_type,
             'shapes': response_results,
-            'grouping_info': {
-                'total_unique': len(response_results),
-                'total_detected': len(all_shapes),
-                'merged_count': len(deleted_ids),
+            'detection_info': {
+                'total_detected': len(response_results),
                 'learned_count': learned_count
             }
         }), 200
@@ -337,48 +305,7 @@ def extract_text(floorplan_id):
             data['display_text'] = data.get('manual_text') or text
             results.append(data)
         
-        # Group OCR results by identical text
-        grouping_result = ocr_service.group_ocr_results(results)
-        grouped_results = grouping_result['grouped']
-        deleted_ids = grouping_result['deleted_ids']
-        merge_info = grouping_result['merge_info']
-        
-        # Update grouped records in database with new quantities and add to in-memory objects
-        for result in grouped_results:
-            result_id = result['_id']
-            if str(result_id) in merge_info:
-                # This result was merged with others
-                info = merge_info[str(result_id)]
-                
-                # Update database
-                mongo.db.extracted_data.update_one(
-                    {'_id': result_id},
-                    {'$set': {
-                        'quantity': info['total_quantity'],
-                        'merged_count': info['merged_count'],
-                        'original_shape_indices': info['original_indices'],
-                        'all_bounding_boxes': info['all_bounding_boxes'],
-                        'updated_at': datetime.utcnow()
-                    }}
-                )
-                
-                # Also update the in-memory object so it's included in the response
-                result['merged_count'] = info['merged_count']
-                result['original_shape_indices'] = info['original_indices']
-                result['all_bounding_boxes'] = info['all_bounding_boxes']
-                
-                current_app.logger.info(
-                    f"Merged {info['merged_count']} items with text '{result.get('extracted_text')}' "
-                    f"into one with total quantity {info['total_quantity']}"
-                )
-        
-        # Delete duplicate records from database
-        if deleted_ids:
-            mongo.db.extracted_data.delete_many({'_id': {'$in': deleted_ids}})
-            current_app.logger.info(f"Deleted {len(deleted_ids)} duplicate OCR results")
-        
-        # Prepare response with serialized grouped results
-        response_results = [serialize_doc(data) for data in grouped_results]
+        response_results = [serialize_doc(data) for data in results]
         for result in response_results:
             result['display_text'] = result.get('manual_text') or result.get('extracted_text')
         
@@ -387,19 +314,13 @@ def extract_text(floorplan_id):
             {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
         )
         
-        # Include grouping info in response
-        total_merged = sum(info['merged_count'] for info in merge_info.values())
-        message = f'OCR completed for {len(response_results)} unique items'
-        if len(deleted_ids) > 0:
-            message += f' ({total_merged} original detections grouped)'
+        message = f'OCR completed for {len(response_results)} items'
         
         return jsonify({
             'message': message,
             'results': response_results,
-            'grouping_info': {
-                'total_unique': len(response_results),
-                'total_original': len(results),
-                'merged_count': len(deleted_ids)
+            'detection_info': {
+                'total_detected': len(response_results)
             }
         }), 200
         

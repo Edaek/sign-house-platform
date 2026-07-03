@@ -239,33 +239,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                         except Exception as e:
                             logger.warning(f"OCR failed for shape idx {idx}: {str(e)}")
                     
-                    # Group OCR results
-                    grouping_result = ocr_service.group_ocr_results(
-                        [serialize_doc(d) for d in ocr_results]
-                    )
-                    
-                    for result_item in grouping_result['grouped']:
-                        result_id = result_item['_id']
-                        if str(result_id) in grouping_result['merge_info']:
-                            info = grouping_result['merge_info'][str(result_id)]
-                            mongo.db.extracted_data.update_one(
-                                {'_id': ObjectId(result_id) if isinstance(result_id, str) else result_id},
-                                {'$set': {
-                                    'quantity': info['total_quantity'],
-                                    'merged_count': info['merged_count'],
-                                    'original_shape_indices': info['original_indices'],
-                                    'all_bounding_boxes': info['all_bounding_boxes'],
-                                    'updated_at': datetime.utcnow()
-                                }}
-                            )
-                    
-                    if grouping_result['deleted_ids']:
-                        mongo.db.extracted_data.delete_many({
-                            '_id': {'$in': [
-                                ObjectId(id) if isinstance(id, str) else id
-                                for id in grouping_result['deleted_ids']
-                            ]}
-                        })
+                    logger.info(f"Floorplan {floorplan_id}: {len(ocr_results)} shapes detected and OCR'd")
                 
                 # Mark floorplan as completed
                 mongo.db.floorplans.update_one(

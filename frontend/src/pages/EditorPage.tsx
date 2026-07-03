@@ -238,42 +238,30 @@ export default function EditorPage() {
           ctx.shadowBlur = 0
         }
         
-        const boxesToDraw = shape.all_bounding_boxes || [{
-          x: shape.x,
-          y: shape.y,
-          width: shape.width,
-          height: shape.height,
-          shape_type: shape.shape_type,
-          shape_data: shape.shape_data
-        }]
-        
-        boxesToDraw.forEach((box) => {
-          if (box.shape_type === 'circle' && box.shape_data?.radius) {
-            const { center_x, center_y, radius } = box.shape_data
-            if (center_x !== undefined && center_y !== undefined && radius !== undefined) {
-              ctx.beginPath()
-              ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
-              ctx.fill()
-              ctx.stroke()
-            }
-          } else {
+        if (shape.shape_type === 'circle' && shape.shape_data?.radius) {
+          const { center_x, center_y, radius } = shape.shape_data
+          if (center_x !== undefined && center_y !== undefined && radius !== undefined) {
             ctx.beginPath()
-            ctx.rect(box.x, box.y, box.width, box.height)
+            ctx.arc(center_x, center_y, radius, 0, Math.PI * 2)
             ctx.fill()
             ctx.stroke()
           }
-        })
+        } else {
+          ctx.beginPath()
+          ctx.rect(shape.x, shape.y, shape.width, shape.height)
+          ctx.fill()
+          ctx.stroke()
+        }
 
         if (isFlashing) {
           ctx.shadowColor = 'transparent'
           ctx.shadowBlur = 0
         }
         
-        const firstBox = boxesToDraw[0]
         ctx.fillStyle = isSelected || isFlashing ? '#ed751d' : defaultStroke
         ctx.font = `bold ${14 / scale}px sans-serif`
         const label = isMultiple ? `${index + 1} ×${shape.quantity}` : `${index + 1}`
-        ctx.fillText(label, firstBox.x + 4, firstBox.y + 16)
+        ctx.fillText(label, shape.x + 4, shape.y + 16)
       })
     }
     
@@ -438,22 +426,17 @@ export default function EditorPage() {
         return
       }
       
-      // Check if clicked on a shape (including all merged bounding boxes)
       const clickedShape = currentFloorplan?.extracted_data?.find(shape => {
-        // If shape has merged bounding boxes, check all of them
-        const boxesToCheck = shape.all_bounding_boxes || [{
-          x: shape.x,
-          y: shape.y,
-          width: shape.width,
-          height: shape.height
-        }]
-        
-        // Check if click is within any of the boxes
-        return boxesToCheck.some(box => 
-          coords.x >= box.x && 
-          coords.x <= box.x + box.width &&
-          coords.y >= box.y && 
-          coords.y <= box.y + box.height
+        if (shape.shape_type === 'circle' && shape.shape_data?.radius) {
+          const dx = coords.x - shape.shape_data.center_x
+          const dy = coords.y - shape.shape_data.center_y
+          return Math.sqrt(dx * dx + dy * dy) <= shape.shape_data.radius
+        }
+        return (
+          coords.x >= shape.x && 
+          coords.x <= shape.x + shape.width &&
+          coords.y >= shape.y && 
+          coords.y <= shape.y + shape.height
         )
       })
       
@@ -1480,14 +1463,6 @@ export default function EditorPage() {
                         {data.detection_method === 'learned' && (
                           <span className="text-xs px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded" title="Detected via learned template">
                             learned
-                          </span>
-                        )}
-                        {(data.merged_count && data.merged_count > 1) && (
-                          <span 
-                            className="text-xs px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-semibold"
-                            title={`${data.merged_count} detections merged`}
-                          >
-                            {data.merged_count} merged
                           </span>
                         )}
                         {(data.quantity || 1) > 1 && (
