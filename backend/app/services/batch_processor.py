@@ -2,9 +2,12 @@
 
 import os
 import logging
+import time as _time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from bson import ObjectId
+
+import cv2
 
 from app import mongo
 from app.models import create_floorplan_doc, create_extracted_data_doc, serialize_doc
@@ -83,9 +86,23 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         floorplan_ids = []
         total_shapes_detected = 0
         
+        # Query learned templates once for all pages (avoid N identical DB queries)
+        active_templates = []
+        try:
+            active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
+        except Exception as e:
+            logger.warning(f"Failed to load learned templates: {e}")
+        
         # Process each page
         for page_idx, page_info in enumerate(pages):
             page_progress = 20 + (page_idx / len(pages)) * 60  # Progress from 20% to 80%
+            page_t0 = _time.time()
+            
+            # Load image once for this page — shared across detection, OCR, etc.
+            page_img = cv2.imread(page_info['image_path'])
+            if page_img is None:
+                logger.error(f"Could not load page image: {page_info['image_path']}")
+                continue
             
             # Extract title from floorplan
             extracted_title = None
@@ -136,24 +153,33 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                         detection_method = 'rectangle'
                         logger.info(f"Auto-detected rectangle markers on page {page_info['page_number']}")
                 
+                detect_t0 = _time.time()
                 if detection_method == 'circle':
                     shapes = cv_service.detect_circles_by_template(page_info['image_path'])
                     shape_type = 'circle'
                 else:
                     shapes = cv_service.detect_red_rectangles(page_info['image_path'])
                     shape_type = 'rectangle'
+                logger.info(f"Page {page_info['page_number']}: primary detection ({shape_type}) "
+                            f"found {len(shapes)} shapes in {_time.time() - detect_t0:.2f}s")
                 
-                # Learned template matching pass
+                # Learned template matching pass (reuse pre-loaded image)
                 try:
-                    active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
                     if active_templates:
+                        learn_t0 = _time.time()
                         raw_learned = cv_service.detect_from_learned_templates(
-                            page_info['image_path'], active_templates, shape_type=shape_type
+                            page_info['image_path'], active_templates,
+                            shape_type=shape_type, img=page_img
                         )
                         learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                        learn_elapsed = _time.time() - learn_t0
                         if learned_unique:
-                            logger.info(f"Batch: learned templates added {len(learned_unique)} shapes on page {page_info['page_number']}")
+                            logger.info(f"Page {page_info['page_number']}: learned templates added "
+                                        f"{len(learned_unique)} shapes in {learn_elapsed:.2f}s")
                             shapes = shapes + learned_unique
+                        else:
+                            logger.info(f"Page {page_info['page_number']}: learned templates "
+                                        f"added 0 shapes in {learn_elapsed:.2f}s")
                 except Exception as tmpl_err:
                     logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
                 
@@ -174,25 +200,28 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     'shapes_detected': total_shapes_detected
                 })
                 
-                # Merged OCR + sign-code filter + save
+                # Merged OCR + sign-code filter + save (reuse pre-loaded image)
                 is_circle = shape_type == 'circle'
                 ocr_results = []
                 
                 if ocr_service:
+                    ocr_t0 = _time.time()
                     for idx, shape in enumerate(shapes):
                         try:
                             if is_circle and shape.get('center_x') is not None:
                                 text, confidence = ocr_service.extract_text_from_circle(
                                     page_info['image_path'],
                                     shape['center_x'], shape['center_y'],
-                                    shape['radius'], padding=10
+                                    shape['radius'], padding=10,
+                                    img=page_img
                                 )
                             else:
                                 text, confidence = ocr_service.extract_text_from_region(
                                     page_info['image_path'],
                                     shape['x'], shape['y'],
                                     shape['width'], shape['height'],
-                                    padding=0, label_mode=True, capture_adjacent=False
+                                    padding=0, label_mode=True, capture_adjacent=False,
+                                    img=page_img
                                 )
                             
                             cleaned = clean_ocr_text(text)
@@ -202,7 +231,8 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                             quantity = ocr_service.find_multiplier_near_region(
                                 page_info['image_path'],
                                 shape['x'], shape['y'],
-                                shape['width'], shape['height']
+                                shape['width'], shape['height'],
+                                img=page_img
                             )
                             
                             shape_data = None
@@ -239,6 +269,10 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                         except Exception as e:
                             logger.warning(f"OCR failed for shape idx {idx}: {str(e)}")
                     
+                    logger.info(f"Page {page_info['page_number']}: OCR processed "
+                                f"{len(shapes)} shapes → {len(ocr_results)} valid in "
+                                f"{_time.time() - ocr_t0:.2f}s")
+                    
                     # Group OCR results
                     grouping_result = ocr_service.group_ocr_results(
                         [serialize_doc(d) for d in ocr_results]
@@ -272,6 +306,8 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     {'_id': ObjectId(floorplan_id)},
                     {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
                 )
+                
+                logger.info(f"Page {page_info['page_number']}: total page time {_time.time() - page_t0:.2f}s")
                 
             except Exception as e:
                 logger.error(f"Shape detection/OCR failed for floorplan {floorplan_id}: {str(e)}")

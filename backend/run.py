@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Run the Flask application."""
 import os
+import logging
 from app import create_app
+
+logging.basicConfig(level=logging.INFO)
 
 app = create_app(os.environ.get('FLASK_CONFIG', 'development'))
 
