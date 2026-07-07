@@ -389,7 +389,7 @@ class OCRService:
 
         return extracted_text, avg_confidence
 
-    def extract_text_from_circle(self, image_path, center_x, center_y, radius, padding=5):
+    def extract_text_from_circle(self, image_path, center_x, center_y, radius, padding=5, img=None):
         """Extract text from a circular region with circle-aware preprocessing.
 
         Args:
@@ -397,13 +397,15 @@ class OCRService:
             center_x, center_y: Center coordinates
             radius: Circle radius
             padding: Extra padding
+            img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
             Tuple of (extracted text, confidence)
         """
-        img = cv2.imread(image_path)
         if img is None:
-            raise FileNotFoundError(f"Could not load image: {image_path}")
+            img = cv2.imread(image_path)
+            if img is None:
+                raise FileNotFoundError(f"Could not load image: {image_path}")
 
         x1 = max(0, center_x - radius - padding)
         y1 = max(0, center_y - radius - padding)
@@ -424,7 +426,7 @@ class OCRService:
         return extracted_text, avg_confidence
 
     def extract_text_from_region(self, image_path, x, y, width, height, padding=5,
-                                  label_mode=False, capture_adjacent=True):
+                                  label_mode=False, capture_adjacent=True, img=None):
         """Extract text from a specific region of an image.
 
         Args:
@@ -433,13 +435,15 @@ class OCRService:
             padding: Extra padding around the region
             label_mode: Use specialized preprocessing for label boxes
             capture_adjacent: (unused, kept for API compat)
+            img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
             Tuple of (extracted text, confidence)
         """
-        img = cv2.imread(image_path)
         if img is None:
-            raise FileNotFoundError(f"Could not load image: {image_path}")
+            img = cv2.imread(image_path)
+            if img is None:
+                raise FileNotFoundError(f"Could not load image: {image_path}")
 
         x1 = max(0, x - padding)
         y1 = max(0, y - padding)
@@ -453,22 +457,25 @@ class OCRService:
 
         return self.extract_text(region, label_mode=label_mode)
 
-    def find_multiplier_near_region(self, image_path, x, y, width, height, search_distance=None):
+    def find_multiplier_near_region(self, image_path, x, y, width, height,
+                                    search_distance=None, img=None):
         """Search for multiplier text (x2, x3, etc.) near a rectangular region.
 
         Args:
             image_path: Path to the image file
             x, y, width, height: Region coordinates of the main rectangle
             search_distance: How far to search (defaults to max(width, height))
+            img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
             Integer quantity (1 if no multiplier found)
         """
         import re
 
-        img = cv2.imread(image_path)
         if img is None:
-            return 1
+            img = cv2.imread(image_path)
+            if img is None:
+                return 1
 
         if search_distance is None:
             search_distance = max(width, height)

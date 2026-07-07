@@ -1093,7 +1093,7 @@ class CVService:
         edges = cv2.Canny(gray, 50, 150)
 
         # --- Strategy 1: HoughLinesP for near-vertical lines ---
-        min_line_len = int(h * 0.55)
+        min_line_len = int(h * 0.75)
         lines = cv2.HoughLinesP(
             edges, rho=1, theta=np.pi / 180, threshold=100,
             minLineLength=min_line_len, maxLineGap=int(h * 0.05)
@@ -1208,12 +1208,12 @@ class CVService:
         """Detect the title block region on the right side or bottom-right corner.
 
         Tries full-height right strip detection first; falls back to the
-        original bottom-right corner rectangle search.
+        original bottom-right corner rectangle search.  If both fail, uses
+        a conservative fixed 15% right-side strip as a safety net.
 
         Returns:
-            Tuple (x, y, w, h) in full image coordinates, or None.
+            Tuple (x, y, w, h) in full image coordinates.
         """
-        # Check cache
         h, w = img.shape[:2]
         cache_key = (w, h, id(img))
         if hasattr(self, '_title_block_cache') and self._title_block_cache[0] == cache_key:
@@ -1222,6 +1222,11 @@ class CVService:
         result = self._detect_right_strip(img)
         if result is None:
             result = self._detect_title_block_corner(img)
+
+        if result is None:
+            fallback_x = int(w * 0.85)
+            result = (fallback_x, 0, w - fallback_x, h)
+            logger.info(f"Title block fallback: fixed 20% strip at x={fallback_x} (image {w}x{h})")
 
         self._title_block_cache = (cache_key, result)
         return result
@@ -2510,9 +2515,14 @@ class CVService:
         }
 
     def _get_learned_scales(self):
-        """Build a scale set that always includes 1.0 and clusters steps nearby."""
+        """Build a scale set that always includes 1.0 and clusters steps nearby.
+
+        Covers 0.65x–2.0x which handles DPI ratios up to ~3:1.
+        Extreme scales (0.5, 2.5) removed as they almost never produce
+        useful matches; 2.0 kept for cross-DPI template reuse.
+        """
         near = [0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2]
-        wide = [0.5, 0.65, 0.8, 1.4, 1.7, 2.0, 2.5]
+        wide = [0.65, 0.8, 1.4, 1.7, 2.0]
         return sorted(set(near + wide))
 
     def _multi_scale_match_on_prepared(self, img_prepared, tmpl_prepared,
@@ -2573,7 +2583,7 @@ class CVService:
 
         return cv2.inRange(hsv, np.array([h_lo, s_lo, 50]), np.array([h_hi, s_hi, 255]))
 
-    def detect_from_learned_templates(self, image_path, templates, shape_type=None):
+    def detect_from_learned_templates(self, image_path, templates, shape_type=None, img=None):
         """Run learned templates against an image using multiple matching strategies.
 
         Strategies:
@@ -2588,6 +2598,7 @@ class CVService:
             image_path: Path to the floorplan image
             templates: List of dicts from shape_templates collection
             shape_type: Optional filter — only use templates of this type
+            img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
             List of shape dicts in the standard detection output format.
@@ -2595,10 +2606,11 @@ class CVService:
         if not templates:
             return []
 
-        img, gray = self.load_image(image_path)
         if img is None:
-            logger.error(f"Could not load image: {image_path}")
-            return []
+            img, gray = self.load_image(image_path)
+            if img is None:
+                logger.error(f"Could not load image: {image_path}")
+                return []
 
         img_h, img_w = img.shape[:2]
         scales = self._get_learned_scales()
@@ -2611,28 +2623,97 @@ class CVService:
 
         all_matches = []
 
+        import time as _time
+
+        # --- Template fingerprint deduplication ---
+        # Group templates that are visually similar AND have similar
+        # physical size AND similar color. This avoids running nearly
+        # identical templates while preserving templates that differ
+        # in size or color (which match different shapes).
+        THUMB_SIZE = 32
+        DEDUP_THRESHOLD = 0.92
+        SIZE_TOLERANCE = 0.30     # max 30% size difference
+        HUE_TOLERANCE = 25        # max hue difference (0-180 scale)
+
+        loadable = []
         for tmpl_info in templates:
             if shape_type and tmpl_info.get('shape_type') != shape_type:
                 continue
-
             tmpl_path = tmpl_info.get('image_path', '')
             if not os.path.exists(tmpl_path):
                 logger.warning(f"Template image not found: {tmpl_path}")
                 continue
-
-            template_img = cv2.imread(tmpl_path)
-            if template_img is None:
+            t_img = cv2.imread(tmpl_path)
+            if t_img is None:
+                continue
+            th, tw = t_img.shape[:2]
+            if th < 10 or tw < 10:
                 continue
 
-            tmpl_h, tmpl_w = template_img.shape[:2]
-            if tmpl_h < 10 or tmpl_w < 10:
+            thumb = cv2.resize(
+                cv2.cvtColor(t_img, cv2.COLOR_BGR2GRAY),
+                (THUMB_SIZE, THUMB_SIZE)
+            ).flatten().astype(np.float32)
+            norm = np.linalg.norm(thumb)
+            if norm > 0:
+                thumb /= norm
+
+            t_area = th * tw
+            cp = tmpl_info.get('color_profile')
+            t_hue = cp.get('dominant_hue', -1) if cp else -1
+            t_sat = cp.get('dominant_sat', 0) if cp else 0
+
+            loadable.append((tmpl_info, t_img, thumb, t_area, t_hue, t_sat))
+
+        used = [False] * len(loadable)
+        representative_indices = []
+        group_sizes = []
+
+        for i in range(len(loadable)):
+            if used[i]:
                 continue
+            used[i] = True
+            representative_indices.append(i)
+            group_count = 1
+            _, _, thumb_i, area_i, hue_i, sat_i = loadable[i]
+
+            for j in range(i + 1, len(loadable)):
+                if used[j]:
+                    continue
+                _, _, thumb_j, area_j, hue_j, sat_j = loadable[j]
+
+                size_ratio = min(area_i, area_j) / max(area_i, area_j) if max(area_i, area_j) > 0 else 0
+                if size_ratio < (1.0 - SIZE_TOLERANCE):
+                    continue
+
+                both_colored = sat_i >= 50 and sat_j >= 50
+                if both_colored:
+                    hue_diff = min(abs(hue_i - hue_j), 180 - abs(hue_i - hue_j))
+                    if hue_diff > HUE_TOLERANCE:
+                        continue
+
+                corr = float(np.dot(thumb_i, thumb_j))
+                if corr >= DEDUP_THRESHOLD:
+                    used[j] = True
+                    group_count += 1
+            group_sizes.append(group_count)
+
+        total_loadable = len(loadable)
+        total_reps = len(representative_indices)
+        logger.info(
+            f"Template dedup: {total_loadable} loadable → {total_reps} groups "
+            f"(skipping {total_loadable - total_reps} duplicates)"
+        )
+
+        for rep_idx, grp_size in zip(representative_indices, group_sizes):
+            tmpl_info, template_img, _, _, _, _ = loadable[rep_idx]
+
+            _t0 = _time.time()
 
             tmpl_id = str(tmpl_info.get('_id', ''))
             tmpl_shape_type = tmpl_info.get('shape_type', 'rectangle')
             color_profile = tmpl_info.get('color_profile')
 
-            # Prepare template variants
             tmpl_gray = cv2.cvtColor(template_img, cv2.COLOR_BGR2GRAY)
             tmpl_edges = cv2.Canny(tmpl_gray, 50, 150)
             tmpl_edges_dilated = cv2.dilate(tmpl_edges, kernel, iterations=1)
@@ -2647,10 +2728,15 @@ class CVService:
                 img_gray, tmpl_gray, scales, threshold=0.7
             )
 
+            raw_best = max((m[4] for m in raw_matches), default=0)
+
             # Strategy 2: Dilated + blurred edges
-            edge_matches = self._multi_scale_match_on_prepared(
-                img_edges_smooth, tmpl_edges_smooth, scales, threshold=0.55
-            )
+            # Skip if raw already found high-confidence matches — edge would
+            # find the same locations plus noise.
+            if raw_best < 0.85:
+                edge_matches = self._multi_scale_match_on_prepared(
+                    img_edges_smooth, tmpl_edges_smooth, scales, threshold=0.65
+                )
 
             # Strategy 3: Color mask (only if template has a colored border)
             if color_profile and color_profile.get('dominant_sat', 0) >= 50:
@@ -2661,14 +2747,18 @@ class CVService:
                         img_color_mask, tmpl_color_mask, scales, threshold=0.5
                     )
 
-            raw_best = max((m[4] for m in raw_matches), default=0)
+            _elapsed = _time.time() - _t0
             edge_best = max((m[4] for m in edge_matches), default=0)
             color_best = max((m[4] for m in color_matches), default=0)
+            hit_scales = set(m[5] for m in raw_matches + edge_matches + color_matches)
+            edge_skipped = " [edge skipped]" if raw_best >= 0.85 else ""
             logger.info(
-                f"Template {tmpl_id[:8]}: "
+                f"Template {tmpl_id[:8]} (grp={grp_size}): elapsed={_elapsed:.3f}s "
                 f"raw={len(raw_matches)}(best:{raw_best:.2f}) "
                 f"edge={len(edge_matches)}(best:{edge_best:.2f}) "
-                f"color={len(color_matches)}(best:{color_best:.2f})"
+                f"color={len(color_matches)}(best:{color_best:.2f}) "
+                f"scales_hit={sorted(hit_scales) if hit_scales else '[]'}"
+                f"{edge_skipped}"
             )
 
             combined = raw_matches + edge_matches + color_matches
