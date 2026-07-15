@@ -40,7 +40,7 @@ def update_file_status(job_id, file_index, updates):
     )
 
 
-def process_single_pdf(job_id, file_index, file_path, filename, project_id, upload_folder, config):
+def process_single_pdf(job_id, file_index, file_path, filename, project_id, upload_folder, config, detection_mode='accurate'):
     """Process a single PDF file: convert, detect shapes, run OCR.
     
     Args:
@@ -51,6 +51,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         project_id: Project ID to associate floorplans with
         upload_folder: Base upload folder path
         config: App config dict with title extraction settings
+        detection_mode: 'fast' or 'accurate'
     """
     try:
         # Update status to converting
@@ -76,7 +77,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         })
         
         # Initialize services
-        cv_service = CVService()
+        cv_service = CVService(mode=detection_mode)
         ocr_service = None
         try:
             ocr_service = OCRService()
@@ -163,25 +164,26 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 logger.info(f"Page {page_info['page_number']}: primary detection ({shape_type}) "
                             f"found {len(shapes)} shapes in {_time.time() - detect_t0:.2f}s")
                 
-                # Learned template matching pass (reuse pre-loaded image)
-                try:
-                    if active_templates:
-                        learn_t0 = _time.time()
-                        raw_learned = cv_service.detect_from_learned_templates(
-                            page_info['image_path'], active_templates,
-                            shape_type=shape_type, img=page_img
-                        )
-                        learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
-                        learn_elapsed = _time.time() - learn_t0
-                        if learned_unique:
-                            logger.info(f"Page {page_info['page_number']}: learned templates added "
-                                        f"{len(learned_unique)} shapes in {learn_elapsed:.2f}s")
-                            shapes = shapes + learned_unique
-                        else:
-                            logger.info(f"Page {page_info['page_number']}: learned templates "
-                                        f"added 0 shapes in {learn_elapsed:.2f}s")
-                except Exception as tmpl_err:
-                    logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
+                # Learned template matching pass (skipped in fast mode)
+                if detection_mode != 'fast':
+                    try:
+                        if active_templates:
+                            learn_t0 = _time.time()
+                            raw_learned = cv_service.detect_from_learned_templates(
+                                page_info['image_path'], active_templates,
+                                shape_type=shape_type, img=page_img
+                            )
+                            learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                            learn_elapsed = _time.time() - learn_t0
+                            if learned_unique:
+                                logger.info(f"Page {page_info['page_number']}: learned templates added "
+                                            f"{len(learned_unique)} shapes in {learn_elapsed:.2f}s")
+                                shapes = shapes + learned_unique
+                            else:
+                                logger.info(f"Page {page_info['page_number']}: learned templates "
+                                            f"added 0 shapes in {learn_elapsed:.2f}s")
+                    except Exception as tmpl_err:
+                        logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
                 
                 mongo.db.floorplans.update_one(
                     {'_id': ObjectId(floorplan_id)},
@@ -208,32 +210,41 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     ocr_t0 = _time.time()
                     for idx, shape in enumerate(shapes):
                         try:
-                            if is_circle and shape.get('center_x') is not None:
-                                text, confidence = ocr_service.extract_text_from_circle(
-                                    page_info['image_path'],
-                                    shape['center_x'], shape['center_y'],
-                                    shape['radius'], padding=10,
-                                    img=page_img
-                                )
+                            cv_text = shape.get('extracted_text', '')
+                            cv_conf = shape.get('ocr_confidence', 0.0)
+
+                            if cv_text and is_valid_sign_code(cv_text):
+                                cleaned = cv_text
+                                confidence = cv_conf
                             else:
-                                text, confidence = ocr_service.extract_text_from_region(
+                                if is_circle and shape.get('center_x') is not None:
+                                    text, confidence = ocr_service.extract_text_from_circle(
+                                        page_info['image_path'],
+                                        shape['center_x'], shape['center_y'],
+                                        shape['radius'], padding=10,
+                                        img=page_img
+                                    )
+                                else:
+                                    text, confidence = ocr_service.extract_text_from_region(
+                                        page_info['image_path'],
+                                        shape['x'], shape['y'],
+                                        shape['width'], shape['height'],
+                                        padding=0, label_mode=True, capture_adjacent=False,
+                                        img=page_img
+                                    )
+                                cleaned = clean_ocr_text(text)
+                                if not is_valid_sign_code(cleaned):
+                                    continue
+
+                            if detection_mode == 'fast':
+                                quantity = 1
+                            else:
+                                quantity = ocr_service.find_multiplier_near_region(
                                     page_info['image_path'],
                                     shape['x'], shape['y'],
                                     shape['width'], shape['height'],
-                                    padding=0, label_mode=True, capture_adjacent=False,
                                     img=page_img
                                 )
-                            
-                            cleaned = clean_ocr_text(text)
-                            if not is_valid_sign_code(cleaned):
-                                continue
-                            
-                            quantity = ocr_service.find_multiplier_near_region(
-                                page_info['image_path'],
-                                shape['x'], shape['y'],
-                                shape['width'], shape['height'],
-                                img=page_img
-                            )
                             
                             shape_data = None
                             if 'radius' in shape:
@@ -309,7 +320,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         return False
 
 
-def process_batch_job(job_id, files_info, project_id, upload_folder, config):
+def process_batch_job(job_id, files_info, project_id, upload_folder, config, detection_mode='accurate'):
     """Process all files in a batch job.
     
     Args:
@@ -318,6 +329,7 @@ def process_batch_job(job_id, files_info, project_id, upload_folder, config):
         project_id: Project ID
         upload_folder: Base upload folder path
         config: App config dict
+        detection_mode: 'fast' or 'accurate'
     """
     try:
         update_job_status(job_id, {'status': 'processing'})
@@ -333,7 +345,8 @@ def process_batch_job(job_id, files_info, project_id, upload_folder, config):
                 filename=file_info['filename'],
                 project_id=project_id,
                 upload_folder=upload_folder,
-                config=config
+                config=config,
+                detection_mode=detection_mode
             )
             
             if success:
@@ -370,7 +383,7 @@ def process_batch_job(job_id, files_info, project_id, upload_folder, config):
         })
 
 
-def start_batch_processing(job_id, files_info, project_id, upload_folder, config):
+def start_batch_processing(job_id, files_info, project_id, upload_folder, config, detection_mode='accurate'):
     """Start batch processing in a background thread.
     
     Args:
@@ -379,6 +392,7 @@ def start_batch_processing(job_id, files_info, project_id, upload_folder, config
         project_id: Project ID
         upload_folder: Base upload folder path
         config: App config dict (must be serializable - extract needed values)
+        detection_mode: 'fast' or 'accurate'
     """
     executor.submit(
         process_batch_job,
@@ -386,6 +400,7 @@ def start_batch_processing(job_id, files_info, project_id, upload_folder, config
         files_info,
         project_id,
         upload_folder,
-        config
+        config,
+        detection_mode
     )
 

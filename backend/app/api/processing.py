@@ -2,6 +2,7 @@ import os
 import time
 import traceback
 import logging
+import cv2
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -52,8 +53,8 @@ def detect_shapes(floorplan_id):
         return jsonify({'error': 'Access denied'}), 403
     
     data = request.get_json() or {}
-    # Default to auto detection - will check for sample circle in upper-right corner
     shape_type = data.get('shape_type', 'auto')
+    detection_mode = data.get('mode', 'accurate')  # 'fast' or 'accurate'
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
         return jsonify({'error': 'Floorplan image not found'}), 404
@@ -61,7 +62,7 @@ def detect_shapes(floorplan_id):
     t0 = time.time()
     stage = 'init'
     try:
-        cv_service = CVService()
+        cv_service = CVService(mode=detection_mode)
         ocr_service = OCRService()
         image_path = floorplan['image_filepath']
 
@@ -81,23 +82,26 @@ def detect_shapes(floorplan_id):
             detected_type = 'rectangle'
 
         logger.info(f"[detect] floorplan={floorplan_id} type={detected_type} "
-                     f"shapes={len(shapes)} elapsed={time.time()-t0:.1f}s")
+                     f"mode={detection_mode} shapes={len(shapes)} elapsed={time.time()-t0:.1f}s")
 
         stage = 'learned_templates'
         learned_shapes = []
-        try:
-            active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
-            if active_templates:
-                raw_learned = cv_service.detect_from_learned_templates(
-                    image_path, active_templates, shape_type=detected_type
-                )
-                learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
-                if learned_shapes:
-                    logger.info(
-                        f"Learned templates added {len(learned_shapes)} new detections"
+        if detection_mode != 'fast':
+            try:
+                active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
+                if active_templates:
+                    raw_learned = cv_service.detect_from_learned_templates(
+                        image_path, active_templates, shape_type=detected_type
                     )
-        except Exception as tmpl_err:
-            logger.warning(f"Learned template matching failed: {tmpl_err}")
+                    learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                    if learned_shapes:
+                        logger.info(
+                            f"Learned templates added {len(learned_shapes)} new detections"
+                        )
+            except Exception as tmpl_err:
+                logger.warning(f"Learned template matching failed: {tmpl_err}")
+        else:
+            logger.info(f"[detect] fast mode — skipping learned template matching")
 
         stage = 'db_update'
         mongo.db.floorplans.update_one(
@@ -116,29 +120,40 @@ def detect_shapes(floorplan_id):
         stage = 'ocr'
         is_circle = detected_type == 'circle'
         ocr_results = []
+        img_for_ocr = cv2.imread(image_path)
 
         for idx, shape in enumerate(all_shapes):
-            if is_circle and shape.get('center_x') is not None:
-                text, confidence = ocr_service.extract_text_from_circle(
-                    image_path,
-                    shape['center_x'], shape['center_y'], shape['radius'],
-                    padding=10
-                )
+            cv_text = shape.get('extracted_text', '')
+            cv_conf = shape.get('ocr_confidence', 0.0)
+
+            if cv_text and is_valid_sign_code(cv_text):
+                cleaned = cv_text
+                confidence = cv_conf
             else:
-                text, confidence = ocr_service.extract_text_from_region(
+                if is_circle and shape.get('center_x') is not None:
+                    text, confidence = ocr_service.extract_text_from_circle(
+                        image_path,
+                        shape['center_x'], shape['center_y'], shape['radius'],
+                        padding=10
+                    )
+                else:
+                    text, confidence = ocr_service.extract_text_from_region(
+                        image_path,
+                        shape['x'], shape['y'], shape['width'], shape['height'],
+                        padding=0, label_mode=True, capture_adjacent=False
+                    )
+                cleaned = clean_ocr_text(text)
+                if not is_valid_sign_code(cleaned):
+                    continue
+
+            if detection_mode == 'fast':
+                quantity = 1
+            else:
+                quantity = ocr_service.find_multiplier_near_region(
                     image_path,
                     shape['x'], shape['y'], shape['width'], shape['height'],
-                    padding=0, label_mode=True, capture_adjacent=False
+                    img=img_for_ocr
                 )
-
-            cleaned = clean_ocr_text(text)
-            if not is_valid_sign_code(cleaned):
-                continue
-
-            quantity = ocr_service.find_multiplier_near_region(
-                image_path,
-                shape['x'], shape['y'], shape['width'], shape['height']
-            )
 
             shape_data = None
             if 'radius' in shape:
@@ -202,12 +217,13 @@ def detect_shapes(floorplan_id):
         if learned_count:
             message += f' ({learned_count} from learned templates)'
 
-        logger.info(f"[detect] floorplan={floorplan_id} completed in {elapsed:.1f}s — "
+        logger.info(f"[detect] floorplan={floorplan_id} mode={detection_mode} completed in {elapsed:.1f}s — "
                      f"{len(response_results)} results from {len(all_shapes)} shapes")
 
         return jsonify({
             'message': message,
             'shape_type': detected_type,
+            'detection_mode': detection_mode,
             'shapes': response_results,
             'detection_info': {
                 'total_detected': len(response_results),
@@ -1043,8 +1059,8 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
     # Get detection method from form data (default: 'auto')
     # Options: 'auto' (auto-detect), 'rectangle' (red rectangles), or 'circle' (template-based circle detection)
     detection_method = request.form.get('detection_method', 'auto')
+    batch_mode = request.form.get('detection_mode', 'accurate')
     
-    # Extract config values needed for processing
     config = {
         'TITLE_REGION_X_START': current_app.config.get('TITLE_REGION_X_START', 60),
         'TITLE_REGION_Y_START': current_app.config.get('TITLE_REGION_Y_START', 85),
@@ -1053,13 +1069,13 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
         'detection_method': detection_method
     }
     
-    # Start background processing
     start_batch_processing(
         job_id=job_doc['job_id'],
         files_info=files_info,
         project_id=project_id,
         upload_folder=current_app.config['UPLOAD_FOLDER'],
-        config=config
+        config=config,
+        detection_mode=batch_mode
     )
     
     return jsonify({

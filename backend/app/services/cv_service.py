@@ -12,9 +12,18 @@ logger = logging.getLogger(__name__)
 class CVService:
     """Service for computer vision shape detection."""
     
-    def __init__(self):
-        """Initialize CV service with default parameters."""
+    FAST_MODE = 'fast'
+    ACCURATE_MODE = 'accurate'
+    
+    def __init__(self, mode='accurate'):
+        """Initialize CV service with default parameters.
+        
+        Args:
+            mode: 'fast' for speed-optimized detection (fewer passes, no OCR gating),
+                  'accurate' for full detection (all passes, OCR verification).
+        """
         self._ocr_engine = None
+        self.mode = mode
         # Circle detection parameters
         self.circle_params = {
             'dp': 1.2,
@@ -527,95 +536,95 @@ class CVService:
                 detected.append(candidate)
         
         # --- Contour-based detection pass (catches circles Hough misses) ---
-        kern_size = max(3, int(target_radius * 0.15))
-        open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kern_size, kern_size))
-        contour_mask = cv2.morphologyEx(raw_color_mask, cv2.MORPH_OPEN, open_kernel)
-        contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Skipped in fast mode — Hough-only is sufficient for speed
+        if self.mode != self.FAST_MODE:
+            kern_size = max(3, int(target_radius * 0.15))
+            open_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kern_size, kern_size))
+            contour_mask = cv2.morphologyEx(raw_color_mask, cv2.MORPH_OPEN, open_kernel)
+            contours, _ = cv2.findContours(contour_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        radius_lo = target_radius * 0.55
-        radius_hi = target_radius * 1.45
+            radius_lo = target_radius * 0.55
+            radius_hi = target_radius * 1.45
 
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < 200:
-                continue
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter == 0:
-                continue
-            circularity = 4 * np.pi * area / (perimeter * perimeter)
-            if circularity < 0.45:
-                continue
-            (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
-            if not (radius_lo <= cradius <= radius_hi):
-                continue
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < 200:
+                    continue
+                perimeter = cv2.arcLength(contour, True)
+                if perimeter == 0:
+                    continue
+                circularity = 4 * np.pi * area / (perimeter * perimeter)
+                if circularity < 0.45:
+                    continue
+                (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
+                if not (radius_lo <= cradius <= radius_hi):
+                    continue
 
-            # Use equivalent radius from area for more robust radius estimate
-            equiv_radius = np.sqrt(area / np.pi)
-            # Average with minEnclosingCircle radius (weighted toward equiv)
-            cradius = equiv_radius * 0.7 + cradius * 0.3
+                equiv_radius = np.sqrt(area / np.pi)
+                cradius = equiv_radius * 0.7 + cradius * 0.3
 
-            # Use fitEllipse for sub-pixel center when enough points available
-            if len(contour) >= 5:
-                try:
-                    ellipse = cv2.fitEllipse(contour)
-                    ccx, ccy = ellipse[0]
-                except cv2.error:
+                if len(contour) >= 5:
+                    try:
+                        ellipse = cv2.fitEllipse(contour)
+                        ccx, ccy = ellipse[0]
+                    except cv2.error:
+                        M = cv2.moments(contour)
+                        if M['m00'] > 0:
+                            ccx = M['m10'] / M['m00']
+                            ccy = M['m01'] / M['m00']
+                else:
                     M = cv2.moments(contour)
                     if M['m00'] > 0:
                         ccx = M['m10'] / M['m00']
                         ccy = M['m01'] / M['m00']
-            else:
-                M = cv2.moments(contour)
-                if M['m00'] > 0:
-                    ccx = M['m10'] / M['m00']
-                    ccy = M['m01'] / M['m00']
 
-            ccx, ccy = int(round(ccx)), int(round(ccy))
+                ccx, ccy = int(round(ccx)), int(round(ccy))
 
-            if sample_location:
-                dist_to_sample = np.sqrt(
-                    (ccx - sample_location[0]) ** 2 + (ccy - sample_location[1]) ** 2
+                if sample_location:
+                    dist_to_sample = np.sqrt(
+                        (ccx - sample_location[0]) ** 2 + (ccy - sample_location[1]) ** 2
+                    )
+                    if dist_to_sample < target_radius * 2:
+                        continue
+
+                already_found = any(
+                    np.sqrt((ccx - d['center_x']) ** 2 + (ccy - d['center_y']) ** 2) < target_radius
+                    for d in detected
                 )
-                if dist_to_sample < target_radius * 2:
+                if already_found:
                     continue
 
-            already_found = any(
-                np.sqrt((ccx - d['center_x']) ** 2 + (ccy - d['center_y']) ** 2) < target_radius
-                for d in detected
-            )
-            if already_found:
-                continue
+                adj_r = int(round(cradius)) - 1
+                candidate = {
+                    'type': 'circle',
+                    'center_x': ccx,
+                    'center_y': ccy,
+                    'radius': adj_r,
+                    'x': max(0, ccx - adj_r),
+                    'y': max(0, ccy - adj_r),
+                    'width': min(adj_r * 2, w - max(0, ccx - adj_r)),
+                    'height': min(adj_r * 2, h - max(0, ccy - adj_r)),
+                    'confidence': float(circularity),
+                }
 
-            adj_r = int(round(cradius)) - 1
-            candidate = {
-                'type': 'circle',
-                'center_x': ccx,
-                'center_y': ccy,
-                'radius': adj_r,
-                'x': max(0, ccx - adj_r),
-                'y': max(0, ccy - adj_r),
-                'width': min(adj_r * 2, w - max(0, ccx - adj_r)),
-                'height': min(adj_r * 2, h - max(0, ccy - adj_r)),
-                'confidence': float(circularity),
-            }
-
-            keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
-            if not keep:
-                continue
-            if text:
-                candidate['extracted_text'] = text
-                candidate['ocr_confidence'] = conf
-            detected.append(candidate)
+                keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
+                if not keep:
+                    continue
+                if text:
+                    candidate['extracted_text'] = text
+                    candidate['ocr_confidence'] = conf
+                detected.append(candidate)
 
         detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
         
-        # Secondary pass: detect circles of other colors
-        secondary_colors = [c for c in ('yellow', 'red') if c != color_type]
-        for sec_color_name in secondary_colors:
-            sec_detected = self._detect_secondary_color_circles(
-                img, gray, target_radius, sec_color_name, detected, sample_location)
-            detected.extend(sec_detected)
-            detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
+        # Secondary pass: detect circles of other colors (skipped in fast mode)
+        if self.mode != self.FAST_MODE:
+            secondary_colors = [c for c in ('yellow', 'red') if c != color_type]
+            for sec_color_name in secondary_colors:
+                sec_detected = self._detect_secondary_color_circles(
+                    img, gray, target_radius, sec_color_name, detected, sample_location)
+                detected.extend(sec_detected)
+                detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
         
         # Cross-color containment: remove small circles fully inside larger ones
         detected = self._remove_contained_circles(detected)
@@ -1464,6 +1473,8 @@ class CVService:
         """Validate a detected shape by running OCR and checking if the text
         matches a sign code pattern.
 
+        In fast mode, skip OCR entirely and keep all geometric candidates.
+
         Args:
             img: Full BGR image (numpy array)
             shape: Dict with at least 'type', 'x', 'y', 'width', 'height'.
@@ -1474,6 +1485,8 @@ class CVService:
         Returns:
             Tuple of (keep: bool, text: str, confidence: float)
         """
+        if self.mode == self.FAST_MODE:
+            return (True, '', 0.0)
         is_circle = shape.get('type') == 'circle'
 
         if is_circle:

@@ -142,7 +142,7 @@ interface ProjectState {
   
   uploadTemplate: (projectId: string, file: File) => Promise<void>
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
-  uploadFloorplans: (projectId: string, files: File[]) => Promise<BatchUploadJob>
+  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate') => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
   clearBatchJob: () => void
@@ -152,7 +152,7 @@ interface ProjectState {
   deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   splitFloorplan: (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal?: boolean) => Promise<FloorPlan[]>
   
-  detectShapes: (floorplanId: string, shapeType?: string) => Promise<ExtractedData[]>
+  detectShapes: (floorplanId: string, shapeType?: string, mode?: 'fast' | 'accurate') => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
@@ -268,13 +268,14 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  uploadFloorplans: async (projectId: string, files: File[]) => {
+  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate') => {
     set({ isBatchUploading: true, error: null })
-    
+
     const formData = new FormData()
     files.forEach(file => {
       formData.append('files', file)
     })
+    formData.append('detection_mode', detectionMode)
     
     try {
       const response = await api.post(`/processing/batch-upload/${projectId}`, formData, {
@@ -429,10 +430,10 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  detectShapes: async (floorplanId: string, shapeType: string = 'auto') => {
+  detectShapes: async (floorplanId: string, shapeType: string = 'auto', mode: 'fast' | 'accurate' = 'accurate') => {
     set({ isLoading: true, error: null })
     try {
-      const response = await api.post(`/processing/detect/${floorplanId}`, { shape_type: shapeType })
+      const response = await api.post(`/processing/detect/${floorplanId}`, { shape_type: shapeType, mode })
       const shapes = response.data.shapes
       
       // Update current floorplan with detected shapes

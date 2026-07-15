@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { 
   Upload, 
   Layers,
+  FolderOpen,
   ArrowRight,
   CheckCircle,
   Clock,
@@ -46,8 +47,10 @@ export default function ProjectPage() {
   const [editedName, setEditedName] = useState('')
   
   const [isReExtractingTitles, setIsReExtractingTitles] = useState(false)
+  const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
 
   const floorplanInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   
@@ -66,6 +69,46 @@ export default function ProjectPage() {
       setSelectedFiles(prev => [...prev, ...files])
     }
     e.target.value = ''
+  }
+
+  // Handle folder selection — auto-start processing immediately
+  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!projectId) return
+    const allFiles = Array.from(e.target.files || []).filter(f => f.size > 0)
+    e.target.value = ''
+
+    if (allFiles.length === 0) {
+      toast.error('The selected folder is empty')
+      return
+    }
+
+    const nonPdfFiles = allFiles.filter(f => !f.name.toLowerCase().endsWith('.pdf'))
+    if (nonPdfFiles.length > 0) {
+      const names = nonPdfFiles.slice(0, 5).map(f => f.name).join(', ')
+      const more = nonPdfFiles.length > 5 ? ` and ${nonPdfFiles.length - 5} more` : ''
+      toast.error(`Folder must contain only PDF files. Found non-PDF: ${names}${more}`)
+      return
+    }
+
+    allFiles.sort((a, b) =>
+      (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name)
+    )
+
+    const totalMB = allFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024
+    if (totalMB > 500) {
+      toast.error(`Total size ${totalMB.toFixed(0)}MB exceeds 500MB limit.`)
+      return
+    }
+
+    toast.success(`Found ${allFiles.length} PDF${allFiles.length > 1 ? 's' : ''} — uploading...`)
+
+    try {
+      const job = await uploadFloorplans(projectId, allFiles, detectionMode)
+      setShowBatchProgress(true)
+      toast.success(`Started processing ${job.total_files} files`)
+    } catch {
+      toast.error('Failed to start folder processing')
+    }
   }
   
   // Handle drag and drop
@@ -113,9 +156,16 @@ export default function ProjectPage() {
   // Start batch upload
   const handleBatchUpload = async () => {
     if (!projectId || selectedFiles.length === 0) return
+
+    const totalMB = selectedFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024
+    const limitMB = 500
+    if (totalMB > limitMB) {
+      toast.error(`Total size ${totalMB.toFixed(0)}MB exceeds ${limitMB}MB limit. Please select fewer files.`)
+      return
+    }
     
     try {
-      const job = await uploadFloorplans(projectId, selectedFiles)
+      const job = await uploadFloorplans(projectId, selectedFiles, detectionMode)
       setSelectedFiles([])
       setShowBatchProgress(true)
       toast.success(`Started processing ${job.total_files} PDF files`)
@@ -146,6 +196,24 @@ export default function ProjectPage() {
       return () => clearInterval(pollInterval)
     }
   }, [showBatchProgress, currentBatchJob?.status, handlePollStatus])
+
+  // Notify when batch job completes (regardless of whether progress modal is open)
+  const prevBatchStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    const prev = prevBatchStatusRef.current
+    const curr = currentBatchJob?.status
+    prevBatchStatusRef.current = curr ?? null
+
+    if (prev && prev !== curr) {
+      if (curr === 'completed') {
+        toast.success(`Batch processing completed — ${currentBatchJob?.total_files ?? ''} files processed`)
+        if (projectId) fetchProject(projectId)
+      } else if (curr === 'error') {
+        toast.error('Batch processing finished with errors')
+        if (projectId) fetchProject(projectId)
+      }
+    }
+  }, [currentBatchJob?.status, currentBatchJob?.total_files, projectId, fetchProject])
   
   // Close batch progress modal
   const handleCloseBatchProgress = () => {
@@ -323,54 +391,84 @@ export default function ProjectPage() {
           transition={{ delay: 0.1 }}
           className="card p-6"
         >
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-              <Layers className="w-5 h-5 text-blue-400" />
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                <Layers className="w-5 h-5 text-blue-400" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDFs</h3>
+                <p className="text-sm text-slate-600 dark:text-slate-400">
+                  Upload multiple PDFs - auto shape detection & OCR
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDFs</h3>
-              <p className="text-sm text-slate-600 dark:text-slate-400">
-                Upload multiple PDFs - auto shape detection & OCR
-              </p>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setDetectionMode('fast')}
+                className={clsx(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  detectionMode === 'fast'
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                )}
+              >
+                Fast
+              </button>
+              <button
+                onClick={() => setDetectionMode('accurate')}
+                className={clsx(
+                  'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  detectionMode === 'accurate'
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                )}
+              >
+                Accurate
+              </button>
             </div>
           </div>
           
-          {/* Drop Zone */}
+          {/* Upload Zone */}
           <div
             ref={dropZoneRef}
             onDragEnter={handleDragEnter}
             onDragLeave={handleDragLeave}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            onClick={() => floorplanInputRef.current?.click()}
             className={clsx(
-              'w-full p-8 border-2 border-dashed rounded-lg transition-all cursor-pointer',
+              'w-full border-2 border-dashed rounded-lg transition-all',
               isDragging
                 ? 'border-sign-500 bg-sign-500/10 scale-[1.02]'
-                : 'border-slate-300 dark:border-slate-600 hover:border-sign-500 hover:bg-sign-500/5',
+                : 'border-slate-300 dark:border-slate-600',
               isBatchUploading && 'pointer-events-none opacity-50'
             )}
           >
-            <div className="text-center">
-              <Upload className={clsx(
-                'w-10 h-10 mx-auto mb-3 transition-colors',
-                isDragging ? 'text-sign-500' : 'text-slate-400'
-              )} />
-              <p className={clsx(
-                'font-medium transition-colors',
-                isDragging 
-                  ? 'text-sign-500' 
-                  : 'text-slate-600 dark:text-slate-400'
-              )}>
-                {isDragging ? 'Drop files here' : 'Drag & drop PDF files here'}
-              </p>
-              <p className="text-sm text-slate-500 dark:text-slate-500 mt-1">
-                or click to browse
-              </p>
-              <p className="text-xs text-slate-400 dark:text-slate-600 mt-2">
-                Multiple files supported • Auto shape detection & OCR
-              </p>
-            </div>
+            {isDragging ? (
+              <div className="p-10 text-center">
+                <Upload className="w-10 h-10 mx-auto mb-3 text-sign-500" />
+                <p className="font-medium text-sign-500">Drop PDF files here</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 divide-x divide-slate-300 dark:divide-slate-600">
+                <button
+                  onClick={() => floorplanInputRef.current?.click()}
+                  className="flex flex-col items-center gap-2 p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-l-lg cursor-pointer"
+                >
+                  <Upload className="w-8 h-8 text-slate-400" />
+                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Select Files</span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">or drag & drop PDFs</span>
+                </button>
+                <button
+                  onClick={() => folderInputRef.current?.click()}
+                  className="flex flex-col items-center gap-2 p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-r-lg cursor-pointer"
+                >
+                  <FolderOpen className="w-8 h-8 text-slate-400" />
+                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Select Folder</span>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">auto-process all PDFs</span>
+                </button>
+              </div>
+            )}
           </div>
           
           <input
@@ -381,6 +479,14 @@ export default function ProjectPage() {
             onChange={handleFileSelect}
             className="hidden"
           />
+          <input
+            ref={folderInputRef}
+            type="file"
+            {...{ webkitdirectory: '', directory: '' } as any}
+            multiple
+            onChange={handleFolderSelect}
+            className="hidden"
+          />
           
           {/* Selected Files List */}
           {selectedFiles.length > 0 && (
@@ -388,6 +494,9 @@ export default function ProjectPage() {
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">
                   Selected Files ({selectedFiles.length})
+                  <span className="ml-2 text-xs font-normal text-slate-500">
+                    {(selectedFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024).toFixed(1)} MB
+                  </span>
                 </h4>
                 <button
                   onClick={(e) => {
@@ -410,8 +519,8 @@ export default function ProjectPage() {
                   >
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
-                      <span className="text-sm text-slate-700 dark:text-slate-300 truncate">
-                        {file.name}
+                      <span className="text-sm text-slate-700 dark:text-slate-300 truncate" title={file.webkitRelativePath || file.name}>
+                        {file.webkitRelativePath || file.name}
                       </span>
                       <span className="text-xs text-slate-500 dark:text-slate-500 flex-shrink-0">
                         {(file.size / 1024 / 1024).toFixed(1)} MB

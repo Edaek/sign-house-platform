@@ -23,7 +23,7 @@ class Config:
     # File Upload Configuration
     UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
     SHAPE_TEMPLATES_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'shape_templates')
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size
+    MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500MB max for batch folder uploads
     ALLOWED_EXTENSIONS = {'pdf', 'xlsx', 'xls'}
     
     # Tesseract Configuration

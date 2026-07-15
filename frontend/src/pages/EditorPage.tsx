@@ -75,6 +75,7 @@ export default function EditorPage() {
   
   const [tool, setTool] = useState<'select' | 'draw' | 'draw-circle' | 'crop'>('select')
   const [shapeType, setShapeType] = useState<'auto' | 'circle' | 'rectangle'>('auto')
+  const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
@@ -549,7 +550,7 @@ export default function EditorPage() {
     
     setIsDetectingShapes(true)
     try {
-      await detectShapes(floorId, shapeType)
+      await detectShapes(floorId, shapeType, detectionMode)
       toast.success('Shapes detected!')
     } catch (err: any) {
       const detail = err?.response?.data?.error || 'Shape detection failed'
@@ -1154,6 +1155,33 @@ export default function EditorPage() {
                 )}
               >
                 <Square className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setDetectionMode('fast')}
+                className={clsx(
+                  'flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  detectionMode === 'fast'
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                )}
+                title="Faster detection, may miss some shapes"
+              >
+                Fast
+              </button>
+              <button
+                onClick={() => setDetectionMode('accurate')}
+                className={clsx(
+                  'flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                  detectionMode === 'accurate'
+                    ? 'bg-emerald-500 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                )}
+                title="Full detection with all passes"
+              >
+                Accurate
               </button>
             </div>
             
