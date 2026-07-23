@@ -16,7 +16,9 @@ import {
   X,
   Pencil,
   Check,
-  Loader2
+  Loader2,
+  Eye,
+  EyeOff
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
@@ -37,7 +39,12 @@ export default function ProjectPage() {
     currentBatchJob,
     isBatchUploading,
     clearBatchJob,
-    isLoading 
+    isLoading,
+    watcherStatus,
+    startWatcher,
+    stopWatcher,
+    fetchWatcherStatus,
+    browseFolders,
   } = useProjectStore()
   const [showMembersModal, setShowMembersModal] = useState(false)
   const [showBatchProgress, setShowBatchProgress] = useState(false)
@@ -49,18 +56,53 @@ export default function ProjectPage() {
   const [isReExtractingTitles, setIsReExtractingTitles] = useState(false)
   const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
 
+  // Import tab & folder watcher state
+  const [importTab, setImportTab] = useState<'manual' | 'watcher'>('manual')
+  const [watcherFolder, setWatcherFolder] = useState('')
+  const [watcherMode, setWatcherMode] = useState<'fast' | 'accurate'>('accurate')
+  const [folderBrowser, setFolderBrowser] = useState<{ current_path: string; parent_path: string | null; folders: { name: string; path: string }[] } | null>(null)
+
   const floorplanInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const dropZoneRef = useRef<HTMLDivElement>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
   
   useEffect(() => {
     if (projectId) {
       fetchProject(projectId)
-      // Check for any active batch jobs when page loads
       fetchActiveBatchJob(projectId)
+      fetchWatcherStatus(projectId)
     }
-  }, [projectId, fetchProject, fetchActiveBatchJob])
+  }, [projectId, fetchProject, fetchActiveBatchJob, fetchWatcherStatus])
+
+  // Restore watcher folder from saved status
+  useEffect(() => {
+    if (watcherStatus?.watch_folder && !watcherFolder) {
+      setWatcherFolder(watcherStatus.watch_folder)
+    }
+    if (watcherStatus?.detection_mode) {
+      setWatcherMode(watcherStatus.detection_mode as 'fast' | 'accurate')
+    }
+  }, [watcherStatus])
+
+  // Poll watcher status while running
+  useEffect(() => {
+    if (!projectId || watcherStatus?.status !== 'running') return
+    const interval = setInterval(() => {
+      fetchWatcherStatus(projectId)
+      fetchProject(projectId)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [projectId, watcherStatus?.status, fetchWatcherStatus, fetchProject])
+
+  // Auto-load folder browser when switching to watcher tab
+  useEffect(() => {
+    if (importTab === 'watcher' && !folderBrowser && watcherStatus?.status !== 'running') {
+      const startPath = watcherFolder || '~'
+      browseFolders(startPath).then(data => setFolderBrowser(data)).catch(() => {
+        browseFolders('~').then(data => setFolderBrowser(data)).catch(() => {})
+      })
+    }
+  }, [importTab])
   
   // Handle file selection from input
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,45 +113,6 @@ export default function ProjectPage() {
     e.target.value = ''
   }
 
-  // Handle folder selection — auto-start processing immediately
-  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!projectId) return
-    const allFiles = Array.from(e.target.files || []).filter(f => f.size > 0)
-    e.target.value = ''
-
-    if (allFiles.length === 0) {
-      toast.error('The selected folder is empty')
-      return
-    }
-
-    const nonPdfFiles = allFiles.filter(f => !f.name.toLowerCase().endsWith('.pdf'))
-    if (nonPdfFiles.length > 0) {
-      const names = nonPdfFiles.slice(0, 5).map(f => f.name).join(', ')
-      const more = nonPdfFiles.length > 5 ? ` and ${nonPdfFiles.length - 5} more` : ''
-      toast.error(`Folder must contain only PDF files. Found non-PDF: ${names}${more}`)
-      return
-    }
-
-    allFiles.sort((a, b) =>
-      (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name)
-    )
-
-    const totalMB = allFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024
-    if (totalMB > 500) {
-      toast.error(`Total size ${totalMB.toFixed(0)}MB exceeds 500MB limit.`)
-      return
-    }
-
-    toast.success(`Found ${allFiles.length} PDF${allFiles.length > 1 ? 's' : ''} — uploading...`)
-
-    try {
-      const job = await uploadFloorplans(projectId, allFiles, detectionMode)
-      setShowBatchProgress(true)
-      toast.success(`Started processing ${job.total_files} files`)
-    } catch {
-      toast.error('Failed to start folder processing')
-    }
-  }
   
   // Handle drag and drop
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -405,10 +408,10 @@ export default function ProjectPage() {
             </div>
             <div className="flex gap-1">
               <button
-                onClick={() => setDetectionMode('fast')}
+                onClick={() => importTab === 'manual' ? setDetectionMode('fast') : setWatcherMode('fast')}
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-                  detectionMode === 'fast'
+                  (importTab === 'manual' ? detectionMode : watcherMode) === 'fast'
                     ? 'bg-amber-500 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
@@ -416,10 +419,10 @@ export default function ProjectPage() {
                 Fast
               </button>
               <button
-                onClick={() => setDetectionMode('accurate')}
+                onClick={() => importTab === 'manual' ? setDetectionMode('accurate') : setWatcherMode('accurate')}
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
-                  detectionMode === 'accurate'
+                  (importTab === 'manual' ? detectionMode : watcherMode) === 'accurate'
                     ? 'bg-emerald-500 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
@@ -429,141 +432,377 @@ export default function ProjectPage() {
             </div>
           </div>
           
-          {/* Upload Zone */}
-          <div
-            ref={dropZoneRef}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-            className={clsx(
-              'w-full border-2 border-dashed rounded-lg transition-all',
-              isDragging
-                ? 'border-sign-500 bg-sign-500/10 scale-[1.02]'
-                : 'border-slate-300 dark:border-slate-600',
-              isBatchUploading && 'pointer-events-none opacity-50'
-            )}
-          >
-            {isDragging ? (
-              <div className="p-10 text-center">
-                <Upload className="w-10 h-10 mx-auto mb-3 text-sign-500" />
-                <p className="font-medium text-sign-500">Drop PDF files here</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 divide-x divide-slate-300 dark:divide-slate-600">
-                <button
-                  onClick={() => floorplanInputRef.current?.click()}
-                  className="flex flex-col items-center gap-2 p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-l-lg cursor-pointer"
-                >
-                  <Upload className="w-8 h-8 text-slate-400" />
-                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Select Files</span>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">or drag & drop PDFs</span>
-                </button>
-                <button
-                  onClick={() => folderInputRef.current?.click()}
-                  className="flex flex-col items-center gap-2 p-6 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-r-lg cursor-pointer"
-                >
-                  <FolderOpen className="w-8 h-8 text-slate-400" />
-                  <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Select Folder</span>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">auto-process all PDFs</span>
-                </button>
-              </div>
-            )}
+          {/* Import Mode Tabs */}
+          <div className="flex border-b border-slate-200 dark:border-slate-700">
+            <button
+              onClick={() => setImportTab('manual')}
+              className={clsx(
+                'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
+                importTab === 'manual'
+                  ? 'border-sign-500 text-sign-600 dark:text-sign-400'
+                  : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              )}
+            >
+              <Upload className="w-4 h-4" />
+              Manual Upload
+            </button>
+            <button
+              onClick={() => setImportTab('watcher')}
+              className={clsx(
+                'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px',
+                importTab === 'watcher'
+                  ? 'border-sign-500 text-sign-600 dark:text-sign-400'
+                  : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300'
+              )}
+            >
+              <Eye className="w-4 h-4" />
+              Folder Watch
+              {watcherStatus?.status === 'running' && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                  Running
+                </span>
+              )}
+            </button>
           </div>
-          
-          <input
-            ref={floorplanInputRef}
-            type="file"
-            accept=".pdf"
-            multiple
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-          <input
-            ref={folderInputRef}
-            type="file"
-            {...{ webkitdirectory: '', directory: '' } as any}
-            multiple
-            onChange={handleFolderSelect}
-            className="hidden"
-          />
-          
-          {/* Selected Files List */}
-          {selectedFiles.length > 0 && (
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">
-                  Selected Files ({selectedFiles.length})
-                  <span className="ml-2 text-xs font-normal text-slate-500">
-                    {(selectedFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024).toFixed(1)} MB
-                  </span>
-                </h4>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelectedFiles([])
-                  }}
-                  className="text-xs text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors"
-                >
-                  Clear all
-                </button>
-              </div>
-              
-              <div className="space-y-2 max-h-40 overflow-y-auto">
-                {selectedFiles.map((file, index) => (
-                  <motion.div
-                    key={`${file.name}-${index}`}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"
+
+          {/* Tab Content */}
+          {importTab === 'manual' ? (
+            <>
+              {/* Manual Upload Zone */}
+              <div
+                ref={dropZoneRef}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                className={clsx(
+                  'w-full border-2 border-dashed rounded-lg transition-all',
+                  isDragging
+                    ? 'border-sign-500 bg-sign-500/10 scale-[1.02]'
+                    : 'border-slate-300 dark:border-slate-600',
+                  isBatchUploading && 'pointer-events-none opacity-50'
+                )}
+              >
+                {isDragging ? (
+                  <div className="p-10 text-center">
+                    <Upload className="w-10 h-10 mx-auto mb-3 text-sign-500" />
+                    <p className="font-medium text-sign-500">Drop PDF files here</p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => floorplanInputRef.current?.click()}
+                    className="flex flex-col items-center gap-2 p-8 w-full hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors rounded-lg cursor-pointer"
                   >
-                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                      <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
-                      <span className="text-sm text-slate-700 dark:text-slate-300 truncate" title={file.webkitRelativePath || file.name}>
-                        {file.webkitRelativePath || file.name}
+                    <Upload className="w-8 h-8 text-slate-400" />
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Select Files</span>
+                    <span className="text-xs text-slate-400 dark:text-slate-500">or drag & drop PDFs</span>
+                  </button>
+                )}
+              </div>
+
+              <input
+                ref={floorplanInputRef}
+                type="file"
+                accept=".pdf"
+                multiple
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+
+              {/* Selected Files List */}
+              {selectedFiles.length > 0 && (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                      Selected Files ({selectedFiles.length})
+                      <span className="ml-2 text-xs font-normal text-slate-500">
+                        {(selectedFiles.reduce((s, f) => s + f.size, 0) / 1024 / 1024).toFixed(1)} MB
                       </span>
-                      <span className="text-xs text-slate-500 dark:text-slate-500 flex-shrink-0">
-                        {(file.size / 1024 / 1024).toFixed(1)} MB
-                      </span>
-                    </div>
+                    </h4>
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        removeFile(index)
+                        setSelectedFiles([])
                       }}
-                      className="p-1 text-slate-400 hover:text-red-500 transition-colors flex-shrink-0"
+                      className="text-xs text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors"
                     >
-                      <X className="w-4 h-4" />
+                      Clear all
                     </button>
-                  </motion.div>
-                ))}
+                  </div>
+                  
+                  <div className="space-y-2 max-h-40 overflow-y-auto">
+                    {selectedFiles.map((file, index) => (
+                      <motion.div
+                        key={`${file.name}-${index}`}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex items-center justify-between p-2 bg-slate-50 dark:bg-slate-800 rounded-lg"
+                      >
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <FileText className="w-4 h-4 text-red-500 flex-shrink-0" />
+                          <span className="text-sm text-slate-700 dark:text-slate-300 truncate" title={file.webkitRelativePath || file.name}>
+                            {file.webkitRelativePath || file.name}
+                          </span>
+                          <span className="text-xs text-slate-500 dark:text-slate-500 flex-shrink-0">
+                            {(file.size / 1024 / 1024).toFixed(1)} MB
+                          </span>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeFile(index)
+                          }}
+                          className="p-1 text-slate-400 hover:text-red-500 transition-colors flex-shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </motion.div>
+                    ))}
+                  </div>
+                  
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleBatchUpload()
+                    }}
+                    disabled={isBatchUploading}
+                    className="mt-4 w-full btn btn-primary flex items-center justify-center gap-2"
+                  >
+                    {isBatchUploading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-4 h-4" />
+                        Upload & Process {selectedFiles.length} File{selectedFiles.length > 1 ? 's' : ''}
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            /* Folder Watcher Tab Content */
+            <div className="space-y-4 pt-1">
+              {watcherStatus?.status === 'running' ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Watching: <span className="font-mono text-xs">{watcherStatus.watch_folder}</span>
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Mode: {watcherStatus.detection_mode} · Files processed: {watcherStatus.files_processed}
+                        {watcherStatus.files_failed > 0 && <span className="text-red-500"> · Failed: {watcherStatus.files_failed}</span>}
+                      </p>
+                      {watcherStatus.last_error && (
+                        <p className="text-xs text-red-500 mt-1">{watcherStatus.last_error}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!projectId) return
+                        await stopWatcher(projectId)
+                        toast.success('Folder watcher stopped')
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                    >
+                      <EyeOff className="w-4 h-4" />
+                      Stop
+                    </button>
+                  </div>
+
+                  {watcherStatus.recent_files && watcherStatus.recent_files.length > 0 && (
+                    <div className="mt-3 space-y-1.5 max-h-48 overflow-y-auto">
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Recent Files</p>
+                      {watcherStatus.recent_files.map((f, i) => (
+                        <div key={`${f.filename}-${i}`} className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                          <FileText className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
+                          <span className="text-xs text-slate-700 dark:text-slate-300 truncate flex-1" title={f.filename}>{f.filename}</span>
+                          {f.status === 'completed' ? (
+                            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400 flex-shrink-0">
+                              <CheckCircle className="w-3 h-3" />
+                              {f.shapes_detected > 0 ? `${f.shapes_detected} signs` : 'Done'}
+                            </span>
+                          ) : f.status === 'error' ? (
+                            <span className="flex items-center gap-1 text-xs text-red-500 flex-shrink-0" title={f.error}>
+                              <AlertCircle className="w-3 h-3" />
+                              Failed
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 flex-shrink-0">
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                              {f.status === 'converting' ? 'Converting' :
+                               f.status === 'detecting' ? 'Detecting' :
+                               f.status === 'ocr' ? 'OCR' : 'Pending'}
+                              <span className="text-slate-400 ml-0.5">{f.progress}%</span>
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-3">
+                  {/* Selected folder display */}
+                  {watcherFolder ? (
+                    <div className="flex items-center gap-2 p-2.5 bg-sign-500/10 border border-sign-500/30 rounded-lg">
+                      <FolderOpen className="w-4 h-4 text-sign-500 flex-shrink-0" />
+                      <span className="text-sm text-slate-700 dark:text-slate-300 font-mono truncate flex-1" title={watcherFolder}>{watcherFolder}</span>
+                      <button
+                        onClick={() => setWatcherFolder('')}
+                        className="text-xs text-slate-400 hover:text-red-500 transition-colors flex-shrink-0"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Select a folder to watch for new PDF files:</p>
+                  )}
+
+                  {/* Quick access shortcuts */}
+                  <div className="flex gap-1.5">
+                    {[
+                      { label: 'Desktop', path: '~/Desktop' },
+                      { label: 'Downloads', path: '~/Downloads' },
+                      { label: 'Documents', path: '~/Documents' },
+                    ].map((shortcut) => (
+                      <button
+                        key={shortcut.path}
+                        onClick={async () => {
+                          try {
+                            const data = await browseFolders(shortcut.path)
+                            setFolderBrowser(data)
+                          } catch { toast.error('Cannot access folder') }
+                        }}
+                        className={clsx(
+                          'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
+                          folderBrowser?.current_path?.endsWith(shortcut.label)
+                            ? 'bg-sign-500/15 text-sign-600 dark:text-sign-400 border border-sign-500/30'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
+                        )}
+                      >
+                        {shortcut.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Folder browser — always visible */}
+                  {folderBrowser && (
+                    <div className="border border-slate-200 dark:border-slate-700 rounded-lg max-h-52 overflow-y-auto">
+                      <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0">
+                        {folderBrowser.parent_path && (
+                          <button
+                            onClick={async () => {
+                              const data = await browseFolders(folderBrowser.parent_path!)
+                              setFolderBrowser(data)
+                            }}
+                            className="text-xs text-sign-500 hover:underline flex-shrink-0"
+                          >← Up</button>
+                        )}
+                        <span className="text-xs text-slate-500 font-mono truncate">{folderBrowser.current_path}</span>
+                        <button
+                          onClick={() => setWatcherFolder(folderBrowser.current_path)}
+                          className={clsx(
+                            'ml-auto text-xs font-medium flex-shrink-0 transition-colors',
+                            watcherFolder === folderBrowser.current_path
+                              ? 'text-green-600 dark:text-green-400'
+                              : 'text-sign-600 hover:underline'
+                          )}
+                        >
+                          {watcherFolder === folderBrowser.current_path ? '✓ Selected' : 'Select This'}
+                        </button>
+                      </div>
+                      {folderBrowser.folders.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-slate-400">No subfolders</p>
+                      ) : (
+                        folderBrowser.folders.map((f) => (
+                          <button
+                            key={f.path}
+                            onClick={async () => {
+                              const data = await browseFolders(f.path)
+                              setFolderBrowser(data)
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left"
+                          >
+                            <FolderOpen className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                            {f.name}
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={async () => {
+                      if (!projectId || !watcherFolder.trim()) {
+                        toast.error('Please select a folder')
+                        return
+                      }
+                      try {
+                        await startWatcher(projectId, watcherFolder.trim(), watcherMode)
+                        toast.success('Folder watcher started')
+                      } catch {
+                        toast.error('Failed to start watcher')
+                      }
+                    }}
+                    disabled={!watcherFolder.trim()}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-sign-500 text-white rounded-lg hover:bg-sign-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                  >
+                    <Eye className="w-4 h-4" />
+                    Start Watching
+                  </button>
+                </div>
+              )}
+
+              <p className="text-xs text-slate-400 dark:text-slate-500">
+                Place PDF files into the watched folder and they will be automatically imported and processed. Processed files are moved to a "processed" subfolder.
+              </p>
+            </div>
+          )}
+
+          {/* Watcher status bar — visible on Manual Upload tab when watcher is running */}
+          {importTab === 'manual' && watcherStatus?.status === 'running' && (
+            <div className="mt-3 px-3 py-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/40 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+                  <span className="text-xs text-green-700 dark:text-green-400 truncate">
+                    Watching: <span className="font-mono">{watcherStatus.watch_folder}</span>
+                  </span>
+                  <span className="text-xs text-green-600/70 dark:text-green-500/70 flex-shrink-0">
+                    · {watcherStatus.files_processed} processed
+                    {watcherStatus.files_failed > 0 && <span className="text-red-500"> · {watcherStatus.files_failed} failed</span>}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setImportTab('watcher')}
+                  className="text-xs text-green-600 dark:text-green-400 hover:underline flex-shrink-0 ml-2"
+                >
+                  View details →
+                </button>
               </div>
-              
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleBatchUpload()
-                }}
-                disabled={isBatchUploading}
-                className="mt-4 w-full btn btn-primary flex items-center justify-center gap-2"
-              >
-                {isBatchUploading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-4 h-4" />
-                    Upload & Process {selectedFiles.length} File{selectedFiles.length > 1 ? 's' : ''}
-                  </>
-                )}
-              </button>
+              {watcherStatus.recent_files && watcherStatus.recent_files.some(f => f.status !== 'completed' && f.status !== 'error') && (
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                  <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+                  {watcherStatus.recent_files.find(f => f.status !== 'completed' && f.status !== 'error')?.filename}
+                  {' — '}
+                  {(() => {
+                    const f = watcherStatus.recent_files!.find(f => f.status !== 'completed' && f.status !== 'error')
+                    if (!f) return ''
+                    return f.status === 'converting' ? 'Converting' : f.status === 'detecting' ? 'Detecting' : f.status === 'ocr' ? 'OCR' : 'Pending'
+                  })()}
+                </div>
+              )}
             </div>
           )}
         </motion.div>
       </div>
-      
+
       {/* Info about sign table */}
       {currentProject.floorplans && currentProject.floorplans.length > 0 && (
         <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">

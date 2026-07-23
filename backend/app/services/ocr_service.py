@@ -39,6 +39,7 @@ def _normalize_unicode_punctuation(text):
         '\u201d': '"', '\uff02': '"', '\uff07': "'", '\uff5c': '|',
         '\uff0f': '/', '\uff3c': '\\', '\uff04': 'S', '\u00b7': '.',
         '\u2022': '.', '\u00a0': ' ',
+        '\u00d7': 'x',
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -55,7 +56,8 @@ def clean_ocr_text(text):
         return ''
     text = _normalize_unicode_punctuation(text)
     text = text.replace('$', 'S')
-    text = text.strip(' |])[}{(.!@#%^&*+=:;"\'<>,?/~`')
+    text = text.replace('*', 'x')
+    text = text.strip(' |])[}{(.!@#%^&+=:;"\'<>,?/~`')
     text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
     return text.strip()
 
@@ -487,7 +489,7 @@ class OCRService:
             {'x': x, 'y': y + height, 'width': width, 'height': search_distance, 'name': 'bottom'},
         ]
 
-        multiplier_pattern = re.compile(r'\b[xX](\d+)\b')
+        multiplier_pattern = re.compile(r'[xX\u00d7*]\s*(\d+)')
 
         for region_def in search_regions:
             rx, ry, rw, rh = region_def['x'], region_def['y'], region_def['width'], region_def['height']

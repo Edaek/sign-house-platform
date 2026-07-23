@@ -236,15 +236,12 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 if not is_valid_sign_code(cleaned):
                                     continue
 
-                            if detection_mode == 'fast':
-                                quantity = 1
-                            else:
-                                quantity = ocr_service.find_multiplier_near_region(
-                                    page_info['image_path'],
-                                    shape['x'], shape['y'],
-                                    shape['width'], shape['height'],
-                                    img=page_img
-                                )
+                            quantity = ocr_service.find_multiplier_near_region(
+                                page_info['image_path'],
+                                shape['x'], shape['y'],
+                                shape['width'], shape['height'],
+                                img=page_img
+                            )
                             
                             shape_data = None
                             if 'radius' in shape:

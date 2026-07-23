@@ -120,6 +120,25 @@ interface BatchUploadJob {
   completed_at: string | null
 }
 
+interface WatcherFileStatus {
+  filename: string
+  status: string
+  progress: number
+  error: string
+  shapes_detected: number
+}
+
+interface WatcherStatus {
+  status: 'running' | 'stopped' | 'error'
+  watch_folder: string
+  detection_mode: string
+  files_processed: number
+  files_failed: number
+  last_error: string
+  started_at: string | null
+  recent_files?: WatcherFileStatus[]
+}
+
 interface ProjectState {
   projects: Project[]
   currentProject: Project | null
@@ -133,6 +152,9 @@ interface ProjectState {
 
   // Shape templates (self-learning)
   shapeTemplates: ShapeTemplate[]
+
+  // Folder watcher state
+  watcherStatus: WatcherStatus | null
   
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
@@ -161,6 +183,11 @@ interface ProjectState {
   fetchShapeTemplates: () => Promise<void>
   deleteShapeTemplate: (templateId: string) => Promise<void>
   toggleShapeTemplate: (templateId: string, isActive: boolean) => Promise<void>
+
+  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string) => Promise<void>
+  stopWatcher: (projectId: string) => Promise<void>
+  fetchWatcherStatus: (projectId: string) => Promise<void>
+  browseFolders: (path?: string) => Promise<{ current_path: string; parent_path: string | null; folders: { name: string; path: string }[] }>
   
   clearError: () => void
 }
@@ -174,6 +201,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   currentBatchJob: null,
   isBatchUploading: false,
   shapeTemplates: [],
+  watcherStatus: null,
   
   fetchProjects: async () => {
     set({ isLoading: true, error: null })
@@ -565,6 +593,45 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to update template' })
     }
+  },
+
+  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate') => {
+    try {
+      await api.post('/watcher/start', {
+        project_id: projectId,
+        watch_folder: watchFolder,
+        detection_mode: detectionMode,
+      })
+      const response = await api.get(`/watcher/status/${projectId}`)
+      set({ watcherStatus: response.data })
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to start watcher' })
+      throw error
+    }
+  },
+
+  stopWatcher: async (projectId: string) => {
+    try {
+      await api.post('/watcher/stop', { project_id: projectId })
+      set({ watcherStatus: { status: 'stopped', watch_folder: '', detection_mode: '', files_processed: 0, files_failed: 0, last_error: '', started_at: null } })
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to stop watcher' })
+      throw error
+    }
+  },
+
+  fetchWatcherStatus: async (projectId: string) => {
+    try {
+      const response = await api.get(`/watcher/status/${projectId}`)
+      set({ watcherStatus: response.data })
+    } catch {
+      set({ watcherStatus: null })
+    }
+  },
+
+  browseFolders: async (path: string = '~') => {
+    const response = await api.get('/watcher/browse-folders', { params: { path } })
+    return response.data
   },
 
   clearError: () => set({ error: null })

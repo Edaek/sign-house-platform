@@ -968,21 +968,44 @@ class CVService:
         Three-layer fallback strategy:
         1. Border contour detection (fast, works when legend has a clear border)
         2. OCR keyword detection (searches for "scope", "legend", etc.)
-        3. Fixed fallback region (conservative upper-left 15% x 20%)
+        3. Edge-density evidence check (only excludes if the corner is
+           significantly denser than average, suggesting a bordered box)
 
         Returns:
-            Tuple (x, y, w, h) of the legend bounding box, or None if not found.
+            Tuple (x, y, w, h) of the legend bounding box, or None.
         """
         box = self._detect_legend_by_contour(img)
         if box:
+            logger.info(f"Legend detected via contour: x={box[0]} y={box[1]} w={box[2]} h={box[3]} "
+                        f"(image {img.shape[1]}x{img.shape[0]}, "
+                        f"covers {box[2]*100/img.shape[1]:.1f}%w x {box[3]*100/img.shape[0]:.1f}%h)")
             return box
 
         box = self._detect_legend_by_keywords(img)
         if box:
+            logger.info(f"Legend detected via keywords: x={box[0]} y={box[1]} w={box[2]} h={box[3]} "
+                        f"(image {img.shape[1]}x{img.shape[0]}, "
+                        f"covers {box[2]*100/img.shape[1]:.1f}%w x {box[3]*100/img.shape[0]:.1f}%h)")
             return box
 
         h, w = img.shape[:2]
-        return (0, 0, int(w * 0.20), int(h * 0.15))
+        corner_w, corner_h = int(w * 0.12), int(h * 0.10)
+        if corner_w < 10 or corner_h < 10:
+            return None
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        corner_edges = cv2.Canny(gray[0:corner_h, 0:corner_w], 50, 150)
+        corner_density = np.sum(corner_edges > 0) / max(corner_edges.size, 1)
+
+        full_edges = cv2.Canny(gray, 50, 150)
+        full_density = np.sum(full_edges > 0) / max(full_edges.size, 1)
+
+        if full_density > 0 and corner_density > full_density * 1.5:
+            logger.info(f"Legend fallback: edge density {corner_density:.3f} vs avg {full_density:.3f}, "
+                        f"excluding {corner_w}x{corner_h}")
+            return (0, 0, corner_w, corner_h)
+
+        return None
 
     def _detect_legend_by_contour(self, img):
         """Detect legend region by finding a bordered rectangle in the upper-left."""
@@ -1001,13 +1024,14 @@ class CVService:
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         min_legend_area = search_w * search_h * 0.05
+        max_legend_area = w * h * 0.05
 
         best_box = None
         best_area = 0
 
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area < min_legend_area:
+            if area < min_legend_area or area > max_legend_area:
                 continue
 
             peri = cv2.arcLength(contour, True)
@@ -1016,6 +1040,8 @@ class CVService:
             if len(approx) >= 4:
                 x, y, bw, bh = cv2.boundingRect(contour)
                 aspect = bw / bh if bh > 0 else 0
+                if bw > w * 0.20 or bh > h * 0.20:
+                    continue
                 if 0.3 < aspect < 4.0 and area > best_area:
                     best_area = area
                     best_box = (x, y, bw, bh)
