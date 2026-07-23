@@ -19,10 +19,6 @@ import {
   Loader2,
   Scissors,
   Layers,
-  Brain,
-  ChevronDown,
-  ToggleLeft,
-  ToggleRight
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import api from '../lib/api'
@@ -63,10 +59,7 @@ export default function EditorPage() {
     deleteFloorplan,
     splitFloorplan,
     isLoading,
-    shapeTemplates,
     fetchShapeTemplates,
-    deleteShapeTemplate,
-    toggleShapeTemplate
   } = useProjectStore()
   
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -108,8 +101,7 @@ export default function EditorPage() {
   const [editCropName, setEditCropName] = useState('')
   const [deleteOriginalAfterSplit, setDeleteOriginalAfterSplit] = useState(false)
   
-  // Learned templates panel
-  const [showTemplatesPanel, setShowTemplatesPanel] = useState(false)
+  // Learned templates panel (reserved for future use)
 
   // Fetch shape templates on mount
   useEffect(() => {
@@ -429,8 +421,8 @@ export default function EditorPage() {
       
       const clickedShape = currentFloorplan?.extracted_data?.find(shape => {
         if (shape.shape_type === 'circle' && shape.shape_data?.radius) {
-          const dx = coords.x - shape.shape_data.center_x
-          const dy = coords.y - shape.shape_data.center_y
+          const dx = coords.x - (shape.shape_data.center_x ?? 0)
+          const dy = coords.y - (shape.shape_data.center_y ?? 0)
           return Math.sqrt(dx * dx + dy * dy) <= shape.shape_data.radius
         }
         return (
