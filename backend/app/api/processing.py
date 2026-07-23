@@ -146,14 +146,11 @@ def detect_shapes(floorplan_id):
                 if not is_valid_sign_code(cleaned):
                     continue
 
-            if detection_mode == 'fast':
-                quantity = 1
-            else:
-                quantity = ocr_service.find_multiplier_near_region(
-                    image_path,
-                    shape['x'], shape['y'], shape['width'], shape['height'],
-                    img=img_for_ocr
-                )
+            quantity = ocr_service.find_multiplier_near_region(
+                image_path,
+                shape['x'], shape['y'], shape['width'], shape['height'],
+                img=img_for_ocr
+            )
 
             shape_data = None
             if 'radius' in shape:

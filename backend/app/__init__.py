@@ -117,6 +117,7 @@ def create_app(config_name=None):
     from app.api.export import export_bp
     from app.api.admin import admin_bp
     from app.api.dictionary import dictionary_bp
+    from app.api.watcher import watcher_bp
     
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(health_bp, url_prefix='/api', name='health_api')
@@ -126,5 +127,10 @@ def create_app(config_name=None):
     app.register_blueprint(export_bp, url_prefix='/api/export')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
     app.register_blueprint(dictionary_bp, url_prefix='/api/dictionary')
+    app.register_blueprint(watcher_bp, url_prefix='/api/watcher')
+    
+    # Initialize folder watcher manager with app context
+    from app.services.folder_watcher import watcher_manager
+    watcher_manager.init_app(app)
     
     return app
