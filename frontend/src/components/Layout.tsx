@@ -48,8 +48,13 @@ export default function Layout() {
       const sep = data.url.includes('?') ? '&' : '?'
       const url = `${data.url}${sep}theme=${resolvedTheme}`
       window.open(url, '_blank')
-    } catch {
-      toast.error('Failed to open WA Bot')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      if (msg?.includes('not configured')) {
+        toast.error('WA Bot not configured on this server')
+      } else {
+        toast.error('Failed to open WA Bot')
+      }
     } finally {
       setWaBotLoading(false)
     }
