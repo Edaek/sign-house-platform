@@ -41,6 +41,10 @@ class Config:
     
     # CORS Configuration
     ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+    
+    # WA Bot cross-login
+    AUTO_LOGIN_SECRET = os.environ.get('AUTO_LOGIN_SECRET', '')
+    WA_BOT_URL = os.environ.get('WA_BOT_URL', 'http://localhost:3001')
 
 
 class DevelopmentConfig(Config):

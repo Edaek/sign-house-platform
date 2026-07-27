@@ -1,4 +1,9 @@
-from flask import Blueprint, request, jsonify
+import hmac
+import hashlib
+import time
+from urllib.parse import urlencode
+
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import (
     create_access_token,
     jwt_required,
@@ -227,3 +232,36 @@ def update_current_user():
         'message': 'Profile updated successfully',
         'user': user_to_dict(user)
     }), 200
+
+
+@auth_bp.route('/wa-bot-token', methods=['GET'])
+@jwt_required()
+def get_wa_bot_token():
+    """Generate a signed auto-login URL for the wa-bot console."""
+    secret = current_app.config.get('AUTO_LOGIN_SECRET', '')
+    wa_bot_url = current_app.config.get('WA_BOT_URL', 'http://localhost:3001')
+
+    if not secret:
+        return jsonify({'error': 'AUTO_LOGIN_SECRET not configured'}), 500
+
+    user_id = get_jwt_identity()
+    user = mongo.db.users.find_one({'_id': ObjectId(user_id)})
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    email = user.get('email', '')
+    if not email:
+        return jsonify({'error': 'User has no email'}), 400
+
+    username = user.get('username', email.split('@')[0])
+    role = user.get('role', 'user')
+
+    ts = str(int(time.time()))
+    token = hmac.new(
+        secret.encode(), f'{email}:{ts}'.encode(), hashlib.sha256
+    ).hexdigest()
+
+    params = urlencode({'email': email, 'ts': ts, 'token': token, 'name': username, 'role': role})
+    url = f'{wa_bot_url}/api/auth/auto-login?{params}'
+
+    return jsonify({'url': url}), 200
