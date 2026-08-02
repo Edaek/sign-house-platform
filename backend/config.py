@@ -43,9 +43,42 @@ class Config:
     # CORS Configuration
     ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
     
-    # WA Bot cross-login
-    AUTO_LOGIN_SECRET = os.environ.get('AUTO_LOGIN_SECRET', '')
-    WA_BOT_URL = os.environ.get('WA_BOT_URL', 'http://localhost:3001')
+    # Wakka WhatsApp API
+    WAKKA_API_URL = os.environ.get('WAKKA_API_URL', '')
+    WAKKA_API_KEY = os.environ.get('WAKKA_API_KEY', '')
+
+    # Gateway
+    GATEWAY_INBOUND_SECRET = os.environ.get('GATEWAY_INBOUND_SECRET', '')
+
+    # Ollama AI
+    OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+    OLLAMA_TEXT_MODEL = os.environ.get('OLLAMA_TEXT_MODEL', 'gemma3:4b')
+    OLLAMA_VISION_MODEL = os.environ.get('OLLAMA_VISION_MODEL', 'llava:latest')
+
+    # NAS (SFTP)
+    NAS_HOST = os.environ.get('NAS_HOST', '')
+    NAS_PORT = int(os.environ.get('NAS_PORT', 22))
+    NAS_USER = os.environ.get('NAS_USER', '')
+    NAS_PASSWORD = os.environ.get('NAS_PASSWORD', '')
+    NAS_BASE_DIR = os.environ.get('NAS_BASE_DIR', '/Project Photo for Installation')
+    NAS_ENABLED = os.environ.get('NAS_ENABLED', 'false').lower() == 'true'
+
+    # Mac Mini (SSH/SCP)
+    MINI_HOST = os.environ.get('MINI_HOST', '')
+    MINI_USER = os.environ.get('MINI_USER', '')
+    MINI_SSH_KEY = os.environ.get('MINI_SSH_KEY', '')
+    MINI_DEST_DIR = os.environ.get('MINI_DEST_DIR', '~/Desktop/whats app')
+    MINI_ENABLED = os.environ.get('MINI_ENABLED', 'false').lower() == 'true'
+    MINI_TARGET_GROUP_ID = os.environ.get('MINI_TARGET_GROUP_ID', '')
+
+    # WA uploads folder (media from WhatsApp)
+    WA_UPLOADS_FOLDER = os.environ.get(
+        'WA_UPLOADS_FOLDER',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'wa-media'),
+    )
+
+    # Group reminder interval (ms) — how often to check for uncategorized group images
+    GROUP_REMINDER_INTERVAL_MS = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000))
 
 
 class DevelopmentConfig(Config):

@@ -17,6 +17,7 @@ def create_app(config_name=None):
         config_name = os.environ.get('FLASK_CONFIG', 'development')
     
     app = Flask(__name__)
+    app.url_map.strict_slashes = False
     app.config.from_object(config[config_name])
     
     # Ensure upload folder exists
@@ -108,6 +109,36 @@ def create_app(config_name=None):
         # Shape templates indexes (self-learning)
         mongo.db.shape_templates.create_index('shape_type')
         mongo.db.shape_templates.create_index('is_active')
+
+        # WA collections indexes
+        mongo.db.wa_records.create_index('referenceNumber', unique=True)
+        mongo.db.wa_records.create_index([('projectId', 1), ('status', 1)])
+        mongo.db.wa_records.create_index([('createdAt', -1)])
+        mongo.db.wa_records.create_index([('senderPhone', 1), ('status', 1), ('createdAt', -1)])
+        mongo.db.wa_projects.create_index('code', unique=True)
+        mongo.db.wa_projects.create_index('status')
+        mongo.db.pool_images.create_index([('phone', 1), ('projectId', 1)])
+        mongo.db.pool_images.create_index([('createdAt', -1)])
+        mongo.db.group_pending_images.create_index([('groupId', 1), ('categorized', 1)])
+        mongo.db.group_pending_images.create_index('batchId')
+        mongo.db.wa_keywords.create_index([('term', 1), ('projectId', 1)])
+        mongo.db.wa_keywords.create_index('type')
+        mongo.db.wa_templates.create_index([('projectId', 1), ('typeName', 1)])
+        mongo.db.wa_pending_photos.create_index('createdAt', expireAfterSeconds=3600)
+        mongo.db.pool_images.create_index(
+            'assignedAt', expireAfterSeconds=30 * 86400,
+            partialFilterExpression={'assignedAt': {'$exists': True}},
+        )
+        mongo.db.group_pending_images.create_index('botReminderMsgIds')
+        mongo.db.wa_records.create_index([
+            ('referenceNumber', 'text'),
+            ('rawMessage', 'text'),
+            ('senderName', 'text'),
+            ('senderPhone', 'text'),
+        ], name='wa_records_text')
+    
+    # Ensure WA uploads folder exists
+    os.makedirs(app.config.get('WA_UPLOADS_FOLDER', os.path.join(app.config['UPLOAD_FOLDER'], 'wa-media')), exist_ok=True)
     
     # Register blueprints
     from app.api.health import health_bp
@@ -118,6 +149,14 @@ def create_app(config_name=None):
     from app.api.admin import admin_bp
     from app.api.dictionary import dictionary_bp
     from app.api.watcher import watcher_bp
+    from app.api.wa_dashboard import wa_dashboard_bp
+    from app.api.wa_projects import wa_projects_bp
+    from app.api.wa_records import wa_records_bp
+    from app.api.wa_image_pool import wa_image_pool_bp
+    from app.api.wa_admin import wa_admin_bp
+    from app.api.wa_uploads import wa_uploads_bp
+    from app.api.wa_inbound import wa_inbound_bp
+    from app.api.wa_outbound import wa_outbound_bp
     
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(health_bp, url_prefix='/api', name='health_api')
@@ -128,6 +167,14 @@ def create_app(config_name=None):
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
     app.register_blueprint(dictionary_bp, url_prefix='/api/dictionary')
     app.register_blueprint(watcher_bp, url_prefix='/api/watcher')
+    app.register_blueprint(wa_dashboard_bp, url_prefix='/api/wa')
+    app.register_blueprint(wa_projects_bp, url_prefix='/api/wa/projects')
+    app.register_blueprint(wa_records_bp, url_prefix='/api/wa/records')
+    app.register_blueprint(wa_image_pool_bp, url_prefix='/api/wa/image-pool')
+    app.register_blueprint(wa_admin_bp, url_prefix='/api/wa/admin')
+    app.register_blueprint(wa_uploads_bp, url_prefix='/api/wa/uploads')
+    app.register_blueprint(wa_inbound_bp, url_prefix='/api/wa')
+    app.register_blueprint(wa_outbound_bp, url_prefix='/api/wa')
     
     # Initialize folder watcher manager with app context
     from app.services.folder_watcher import watcher_manager

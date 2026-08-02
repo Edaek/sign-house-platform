@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libgomp1 \
     poppler-utils \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -22,7 +23,7 @@ RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='en', use_doc_ori
 COPY . .
 
 # Create upload directories
-RUN mkdir -p uploads/pdfs uploads/templates uploads/images uploads/exports
+RUN mkdir -p uploads/pdfs uploads/templates uploads/images uploads/exports uploads/wa-media
 
 EXPOSE 8000
 

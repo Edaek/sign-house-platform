@@ -196,3 +196,4 @@ secrets/
 *.pem
 *.key
 
+backend/uploads/wa-media/

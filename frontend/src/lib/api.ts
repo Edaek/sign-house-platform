@@ -26,9 +26,12 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear auth state and redirect to login
-      localStorage.removeItem('auth-storage')
-      window.location.href = '/login'
+      const url = error.config?.url || ''
+      const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/register')
+      if (!isAuthRequest) {
+        localStorage.removeItem('auth-storage')
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }

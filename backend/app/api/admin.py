@@ -235,6 +235,44 @@ def change_user_status(user_id):
         return jsonify({'error': str(e)}), 500
 
 
+@admin_bp.route('/users', methods=['POST'])
+@jwt_required()
+@require_role('admin')
+def create_user():
+    """Admin-create a new user with a specified role."""
+    data = request.get_json() or {}
+    email = (data.get('email') or '').strip()
+    password = data.get('password', '')
+    role = data.get('role', 'user')
+    name = (data.get('name') or data.get('username') or email.split('@')[0]).strip()
+
+    if not email or not password:
+        return jsonify({'error': 'email and password are required'}), 400
+    if role not in ('admin', 'manager', 'user'):
+        return jsonify({'error': 'Invalid role'}), 400
+
+    if mongo.db.users.find_one({'email': email}):
+        return jsonify({'error': 'Email already exists'}), 409
+    if mongo.db.users.find_one({'username': name}):
+        return jsonify({'error': 'Username already exists'}), 409
+
+    from app.models import create_user_doc
+    user_doc = create_user_doc(name, email, password, role=role)
+    result = mongo.db.users.insert_one(user_doc)
+    user_doc['_id'] = result.inserted_id
+
+    admin_id = get_jwt_identity()
+    log_action(
+        user_id=admin_id,
+        action='user_created_by_admin',
+        resource_type='user',
+        resource_id=str(result.inserted_id),
+        details={'username': name, 'role': role, 'created_by': admin_id},
+    )
+
+    return jsonify({'message': 'User created', 'user': user_to_dict(user_doc)}), 201
+
+
 @admin_bp.route('/audit-logs', methods=['GET'])
 @jwt_required()
 @require_role('admin')

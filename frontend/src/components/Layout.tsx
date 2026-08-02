@@ -11,13 +11,9 @@ import {
   FileText,
   Book,
   MessageCircle,
-  ExternalLink,
-  Loader2
 } from 'lucide-react'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuthStore } from '../store/authStore'
-import api from '../lib/api'
-import toast from 'react-hot-toast'
 import { useThemeStore } from '../store/themeStore'
 import ThemeToggle from './ThemeToggle'
 import RoleBadge from './RoleBadge'
@@ -25,7 +21,7 @@ import clsx from 'clsx'
 
 export default function Layout() {
   const { user, logout, isAdmin, isManager } = useAuthStore()
-  const { initTheme, resolvedTheme } = useThemeStore()
+  const { initTheme } = useThemeStore()
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -33,39 +29,18 @@ export default function Layout() {
   useEffect(() => {
     initTheme()
   }, [initTheme])
-  
-  const [waBotLoading, setWaBotLoading] = useState(false)
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
-
-  const handleOpenWaBot = useCallback(async () => {
-    setWaBotLoading(true)
-    try {
-      const { data } = await api.get('/auth/wa-bot-token')
-      const sep = data.url.includes('?') ? '&' : '?'
-      const url = `${data.url}${sep}theme=${resolvedTheme}`
-      window.open(url, '_blank')
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
-      if (msg?.includes('not configured')) {
-        toast.error('WA Bot not configured on this server')
-      } else {
-        toast.error('Failed to open WA Bot')
-      }
-    } finally {
-      setWaBotLoading(false)
-    }
-  }, [resolvedTheme])
   
   const navItems = [
     { path: '/', icon: Home, label: isManager() ? 'All Projects' : 'Dashboard' },
     { path: '/dictionary', icon: Book, label: 'Dictionary' },
+    { path: '/wa', icon: MessageCircle, label: 'WA Bot' },
   ]
   
-  // Add admin-only navigation items
   if (isAdmin()) {
     navItems.push(
       { path: '/admin', icon: Users, label: 'User Management' },
@@ -91,7 +66,9 @@ export default function Layout() {
           {/* Desktop Nav */}
           <nav className="hidden md:flex items-center gap-1">
             {navItems.map((item) => {
-              const isActive = location.pathname === item.path
+              const isActive = item.path === '/'
+                ? location.pathname === '/'
+                : location.pathname.startsWith(item.path)
               return (
                 <Link
                   key={item.path}
@@ -108,15 +85,6 @@ export default function Layout() {
                 </Link>
               )
             })}
-            <button
-              onClick={handleOpenWaBot}
-              disabled={waBotLoading}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200 text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 disabled:opacity-50"
-            >
-              {waBotLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <MessageCircle className="w-4 h-4" />}
-              WA Bot
-              <ExternalLink className="w-3 h-3 opacity-50" />
-            </button>
           </nav>
           
           {/* User Menu */}
@@ -156,7 +124,9 @@ export default function Layout() {
           >
             <nav className="p-4 space-y-2">
               {navItems.map((item) => {
-                const isActive = location.pathname === item.path
+                const isActive = item.path === '/'
+                  ? location.pathname === '/'
+                  : location.pathname.startsWith(item.path)
                 return (
                   <Link
                     key={item.path}
@@ -174,15 +144,6 @@ export default function Layout() {
                   </Link>
                 )
               })}
-              <button
-                onClick={() => { setMobileMenuOpen(false); handleOpenWaBot() }}
-                disabled={waBotLoading}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg font-medium w-full text-left text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 disabled:opacity-50"
-              >
-                {waBotLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <MessageCircle className="w-5 h-5" />}
-                WA Bot
-                <ExternalLink className="w-3 h-3 opacity-50" />
-              </button>
             </nav>
           </motion.div>
         )}

@@ -26,7 +26,23 @@ __all__ = [
     'create_processing_file_doc',
     'processing_job_to_dict',
     'create_shape_template_doc',
-    'shape_template_to_dict'
+    'shape_template_to_dict',
+    'create_wa_record_doc',
+    'wa_record_to_dict',
+    'create_wa_project_doc',
+    'wa_project_to_dict',
+    'create_pool_image_doc',
+    'pool_image_to_dict',
+    'create_group_pending_image_doc',
+    'group_pending_image_to_dict',
+    'create_wa_keyword_doc',
+    'wa_keyword_to_dict',
+    'create_wa_template_doc',
+    'wa_template_to_dict',
+    'create_wa_organization_doc',
+    'wa_organization_to_dict',
+    'create_wa_pending_photo_doc',
+    'wa_pending_photo_to_dict',
 ]
 
 
@@ -395,4 +411,390 @@ def shape_template_to_dict(template_doc):
         'is_active': template_doc.get('is_active', True),
         'match_count': template_doc.get('match_count', 0),
         'created_at': template_doc['created_at'].isoformat() if template_doc.get('created_at') else None,
+    }
+
+
+# ============================================================
+# WA (WhatsApp) Models
+# ============================================================
+
+
+def create_wa_record_doc(project_id, reference_number, sender_phone, sender_name=None,
+                         status='incomplete', record_type='photo', tags=None,
+                         description='', raw_message='', photos=None, nas_photos=None,
+                         has_media=False, media_type=None, wakka_message_id=None,
+                         extracted_fields=None):
+    """Create a WA record document (wa_records collection)."""
+    return {
+        'project_id': ObjectId(project_id),
+        'reference_number': reference_number,
+        'status': status,
+        'type': record_type,
+        'tags': tags or [],
+        'description': description,
+        'raw_message': raw_message,
+        'sender_phone': sender_phone,
+        'sender_name': sender_name,
+        'photos': photos or [],
+        'nas_photos': nas_photos or [],
+        'has_media': has_media,
+        'media_type': media_type,
+        'wakka_message_id': wakka_message_id,
+        'extracted_fields': extracted_fields or [],
+        'follow_up_thread': [],
+        'follow_up_round': 0,
+        'last_follow_up_at': None,
+        'status_history': [],
+        'edit_history': [],
+        'merged_from': None,
+        'split_from': None,
+        'void_reason': None,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def wa_record_to_dict(doc):
+    """Convert WA record document to dict for JSON response."""
+    if not doc:
+        return None
+
+    def _serialize_extracted_field(f):
+        return {
+            'name': f.get('name', ''),
+            'value': f.get('value', ''),
+            'confidence': f.get('confidence', 'gray'),
+            'edited_by': str(f['edited_by']) if f.get('edited_by') else None,
+            'edited_at': f['edited_at'].isoformat() if f.get('edited_at') else None,
+        }
+
+    def _serialize_follow_up(fu):
+        return {
+            'question': fu.get('question', ''),
+            'answer': fu.get('answer'),
+            'timestamp': fu['timestamp'].isoformat() if fu.get('timestamp') else None,
+            'round': fu.get('round', 0),
+        }
+
+    def _serialize_status_history(sh):
+        return {
+            'from': sh.get('from', ''),
+            'to': sh.get('to', ''),
+            'changed_by': str(sh['changed_by']) if sh.get('changed_by') else None,
+            'reason': sh.get('reason', ''),
+            'timestamp': sh['timestamp'].isoformat() if sh.get('timestamp') else None,
+        }
+
+    def _serialize_edit_history(eh):
+        return {
+            'field': eh.get('field', ''),
+            'old_value': eh.get('old_value', ''),
+            'new_value': eh.get('new_value', ''),
+            'edited_by': str(eh['edited_by']) if eh.get('edited_by') else None,
+            'timestamp': eh['timestamp'].isoformat() if eh.get('timestamp') else None,
+        }
+
+    return {
+        'id': str(doc['_id']),
+        'project_id': str(doc['project_id']) if doc.get('project_id') else None,
+        'reference_number': doc.get('reference_number', ''),
+        'status': doc.get('status', 'incomplete'),
+        'type': doc.get('type', 'photo'),
+        'tags': doc.get('tags', []),
+        'description': doc.get('description', ''),
+        'raw_message': doc.get('raw_message', ''),
+        'sender_phone': doc.get('sender_phone', ''),
+        'sender_name': doc.get('sender_name'),
+        'photos': doc.get('photos', []),
+        'nas_photos': doc.get('nas_photos', []),
+        'has_media': doc.get('has_media', False),
+        'media_type': doc.get('media_type'),
+        'wakka_message_id': doc.get('wakka_message_id'),
+        'extracted_fields': [_serialize_extracted_field(f) for f in doc.get('extracted_fields', [])],
+        'follow_up_thread': [_serialize_follow_up(fu) for fu in doc.get('follow_up_thread', [])],
+        'follow_up_round': doc.get('follow_up_round', 0),
+        'last_follow_up_at': doc['last_follow_up_at'].isoformat() if doc.get('last_follow_up_at') else None,
+        'status_history': [_serialize_status_history(sh) for sh in doc.get('status_history', [])],
+        'edit_history': [_serialize_edit_history(eh) for eh in doc.get('edit_history', [])],
+        'merged_from': str(doc['merged_from']) if doc.get('merged_from') else None,
+        'split_from': str(doc['split_from']) if doc.get('split_from') else None,
+        'void_reason': doc.get('void_reason'),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_wa_project_doc(code, name, owner_id, description=None, location=None,
+                          stage='active', status='active', members=None, overrides=None):
+    """Create a WA project document (wa_projects collection)."""
+    return {
+        'code': code.upper(),
+        'name': name,
+        'description': description or '',
+        'location': location,
+        'owner': ObjectId(owner_id),
+        'stage': stage,
+        'status': status,
+        'members': [ObjectId(m) for m in (members or [])],
+        'overrides': overrides or {},
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def wa_project_to_dict(doc):
+    """Convert WA project document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'code': doc.get('code', ''),
+        'name': doc.get('name', ''),
+        'description': doc.get('description', ''),
+        'location': doc.get('location'),
+        'owner': str(doc['owner']) if doc.get('owner') else None,
+        'stage': doc.get('stage', 'active'),
+        'status': doc.get('status', 'active'),
+        'members': [str(m) for m in doc.get('members', [])],
+        'overrides': doc.get('overrides', {}),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_pool_image_doc(phone, message_id, sender_name=None, image_path=None,
+                          nas_path=None, download_failed=False, caption=None,
+                          batch_id=None, project_id=None, project_code=None,
+                          project_name=None, assigned_by=None, assigned_at=None,
+                          record_id=None):
+    """Create a pool image document (pool_images collection)."""
+    return {
+        'phone': phone,
+        'sender_name': sender_name,
+        'image_path': image_path,
+        'nas_path': nas_path,
+        'download_failed': download_failed,
+        'caption': caption,
+        'message_id': message_id,
+        'batch_id': batch_id,
+        'project_id': ObjectId(project_id) if project_id else None,
+        'project_code': project_code,
+        'project_name': project_name,
+        'assigned_by': assigned_by,
+        'assigned_at': assigned_at,
+        'record_id': ObjectId(record_id) if record_id else None,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def pool_image_to_dict(doc):
+    """Convert pool image document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'phone': doc.get('phone', ''),
+        'sender_name': doc.get('sender_name'),
+        'image_path': doc.get('image_path'),
+        'nas_path': doc.get('nas_path'),
+        'download_failed': doc.get('download_failed', False),
+        'caption': doc.get('caption'),
+        'message_id': doc.get('message_id', ''),
+        'batch_id': doc.get('batch_id'),
+        'project_id': str(doc['project_id']) if doc.get('project_id') else None,
+        'project_code': doc.get('project_code'),
+        'project_name': doc.get('project_name'),
+        'assigned_by': doc.get('assigned_by'),
+        'assigned_at': doc['assigned_at'].isoformat() if doc.get('assigned_at') else None,
+        'record_id': str(doc['record_id']) if doc.get('record_id') else None,
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_group_pending_image_doc(group_id, sender_phone, message_id, batch_id,
+                                   sender_name=None, image_path=None, caption=None,
+                                   categorized=False, project_id=None, project_code=None,
+                                   reminder_count=0):
+    """Create a group pending image document (group_pending_images collection)."""
+    return {
+        'group_id': group_id,
+        'sender_phone': sender_phone,
+        'sender_name': sender_name,
+        'message_id': message_id,
+        'image_path': image_path,
+        'caption': caption,
+        'batch_id': batch_id,
+        'categorized': categorized,
+        'project_id': ObjectId(project_id) if project_id else None,
+        'project_code': project_code,
+        'reminder_count': reminder_count,
+        'last_reminded_at': None,
+        'bot_reminder_msg_id': None,
+        'bot_reminder_msg_ids': [],
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def group_pending_image_to_dict(doc):
+    """Convert group pending image document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'group_id': doc.get('group_id', ''),
+        'sender_phone': doc.get('sender_phone', ''),
+        'sender_name': doc.get('sender_name'),
+        'message_id': doc.get('message_id', ''),
+        'image_path': doc.get('image_path'),
+        'caption': doc.get('caption'),
+        'batch_id': doc.get('batch_id', ''),
+        'categorized': doc.get('categorized', False),
+        'project_id': str(doc['project_id']) if doc.get('project_id') else None,
+        'project_code': doc.get('project_code'),
+        'reminder_count': doc.get('reminder_count', 0),
+        'last_reminded_at': doc['last_reminded_at'].isoformat() if doc.get('last_reminded_at') else None,
+        'bot_reminder_msg_id': doc.get('bot_reminder_msg_id'),
+        'bot_reminder_msg_ids': doc.get('bot_reminder_msg_ids', []),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_wa_keyword_doc(term, keyword_type, synonyms=None, project_id=None, is_active=True):
+    """Create a WA keyword document (wa_keywords collection)."""
+    return {
+        'term': term.lower(),
+        'type': keyword_type,
+        'synonyms': [s.lower() for s in (synonyms or [])],
+        'project_id': ObjectId(project_id) if project_id else None,
+        'is_active': is_active,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def wa_keyword_to_dict(doc):
+    """Convert WA keyword document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'term': doc.get('term', ''),
+        'type': doc.get('type', ''),
+        'synonyms': doc.get('synonyms', []),
+        'project_id': str(doc['project_id']) if doc.get('project_id') else None,
+        'is_active': doc.get('is_active', True),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_wa_template_doc(type_name, fields=None, project_id=None, is_active=True):
+    """Create a WA record template document (wa_templates collection)."""
+    return {
+        'project_id': ObjectId(project_id) if project_id else None,
+        'type_name': type_name,
+        'fields': fields or [],
+        'is_active': is_active,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def wa_template_to_dict(doc):
+    """Convert WA record template document to dict for JSON response."""
+    if not doc:
+        return None
+
+    def _serialize_field(f):
+        return {
+            'name': f.get('name', ''),
+            'type': f.get('type', 'text'),
+            'required': f.get('required', False),
+            'conditional_required': f.get('conditional_required'),
+            'options': f.get('options', []),
+            'ai_aliases': f.get('ai_aliases', []),
+        }
+
+    return {
+        'id': str(doc['_id']),
+        'project_id': str(doc['project_id']) if doc.get('project_id') else None,
+        'type_name': doc.get('type_name', ''),
+        'fields': [_serialize_field(f) for f in doc.get('fields', [])],
+        'is_active': doc.get('is_active', True),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_wa_organization_doc(name, logo=None, contact_email=None, defaults=None):
+    """Create a WA organization document (wa_organizations collection)."""
+    default_settings = {
+        'quiet_hours_start': 22,
+        'quiet_hours_end': 7,
+        'max_follow_up_rounds': 3,
+        'follow_up_cooldown_minutes': 30,
+        'data_retention_days': 365,
+        'merge_consecutive_messages': False,
+    }
+    if defaults:
+        default_settings.update(defaults)
+
+    return {
+        'name': name,
+        'logo': logo,
+        'contact_email': contact_email,
+        'defaults': default_settings,
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+
+
+def wa_organization_to_dict(doc):
+    """Convert WA organization document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'name': doc.get('name', ''),
+        'logo': doc.get('logo'),
+        'contact_email': doc.get('contact_email'),
+        'defaults': doc.get('defaults', {}),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+    }
+
+
+def create_wa_pending_photo_doc(sender_phone, photo_path, message_id=None):
+    """Create a WA pending photo document (wa_pending_photos collection).
+    
+    These documents should have a TTL index on created_at for 1-hour expiry.
+    """
+    return {
+        'sender_phone': sender_phone,
+        'photo_path': photo_path,
+        'message_id': message_id,
+        'created_at': datetime.utcnow(),
+    }
+
+
+def wa_pending_photo_to_dict(doc):
+    """Convert WA pending photo document to dict for JSON response."""
+    if not doc:
+        return None
+
+    return {
+        'id': str(doc['_id']),
+        'sender_phone': doc.get('sender_phone', ''),
+        'photo_path': doc.get('photo_path', ''),
+        'message_id': doc.get('message_id'),
+        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
     }

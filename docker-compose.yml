@@ -24,15 +24,56 @@ services:
       - MONGO_URI=mongodb://mongodb:27017/signhouse_dev
       - SECRET_KEY=dev-secret-key-change-in-production
       - JWT_SECRET_KEY=jwt-secret-key-change-in-production
+      - WAKKA_API_URL=${WAKKA_API_URL:-}
+      - WAKKA_API_KEY=${WAKKA_API_KEY:-}
+      - GATEWAY_INBOUND_SECRET=${GATEWAY_INBOUND_SECRET:-gateway-shared-secret}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
+      - OLLAMA_TEXT_MODEL=${OLLAMA_TEXT_MODEL:-gemma3:4b}
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-llava:latest}
+      - NAS_HOST=${NAS_HOST:-}
+      - NAS_PORT=${NAS_PORT:-22}
+      - NAS_USER=${NAS_USER:-}
+      - NAS_PASSWORD=${NAS_PASSWORD:-}
+      - NAS_BASE_DIR=${NAS_BASE_DIR:-/Project Photo for Installation}
+      - NAS_ENABLED=${NAS_ENABLED:-false}
+      - MINI_HOST=${MINI_HOST:-}
+      - MINI_USER=${MINI_USER:-}
+      - MINI_SSH_KEY=${MINI_SSH_KEY:-}
+      - MINI_DEST_DIR=${MINI_DEST_DIR:-~/Desktop/whats app}
+      - MINI_ENABLED=${MINI_ENABLED:-false}
+      - MINI_TARGET_GROUP_ID=${MINI_TARGET_GROUP_ID:-}
+      - WA_UPLOADS_FOLDER=/app/uploads/wa-media
+      - GROUP_REMINDER_INTERVAL_MS=${GROUP_REMINDER_INTERVAL_MS:-40000}
     volumes:
       - ./backend:/app
       - uploads_data:/app/uploads
+      - ${MINI_SSH_KEY:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
     ports:
       - "5000:5000"
     depends_on:
       mongodb:
         condition: service_healthy
     command: python run.py
+
+  gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - WAKKA_API_URL=${WAKKA_API_URL:-}
+      - WAKKA_API_KEY=${WAKKA_API_KEY:-}
+      - GATEWAY_INBOUND_SECRET=${GATEWAY_INBOUND_SECRET:-gateway-shared-secret}
+      - APP_URL=http://backend:5000
+      - MONGO_URI=mongodb://mongodb:27017/signhouse_dev
+      - WA_UPLOADS_FOLDER=/app/uploads/wa-media
+      - GROUP_REMINDER_INTERVAL_MS=${GROUP_REMINDER_INTERVAL_MS:-40000}
+    volumes:
+      - uploads_data:/app/uploads
+      - ${MINI_SSH_KEY:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
+    depends_on:
+      - backend
+    command: python -m gateway.main
+    restart: unless-stopped
 
   frontend:
     build:

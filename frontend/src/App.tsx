@@ -10,6 +10,17 @@ import ExportPage from './pages/ExportPage'
 import AdminPage from './pages/AdminPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import DictionaryPage from './pages/DictionaryPage'
+import WaLayout from './pages/wa/WaLayout'
+import WaDashboardPage from './pages/wa/WaDashboardPage'
+import WaProjectsPage from './pages/wa/WaProjectsPage'
+import WaProjectDetailPage from './pages/wa/WaProjectDetailPage'
+import WaImagePoolPage from './pages/wa/WaImagePoolPage'
+import WaSearchPage from './pages/wa/WaSearchPage'
+import WaKeywordsPage from './pages/wa/WaKeywordsPage'
+import WaTemplatesPage from './pages/wa/WaTemplatesPage'
+import WaManageProjectsPage from './pages/wa/WaManageProjectsPage'
+import WaSystemPage from './pages/wa/WaSystemPage'
+import WaUsersPage from './pages/wa/WaUsersPage'
 
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -40,6 +51,19 @@ function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
+
+        <Route path="wa" element={<WaLayout />}>
+          <Route index element={<WaDashboardPage />} />
+          <Route path="projects" element={<WaProjectsPage />} />
+          <Route path="projects/:id" element={<WaProjectDetailPage />} />
+          <Route path="image-pool" element={<WaImagePoolPage />} />
+          <Route path="search" element={<WaSearchPage />} />
+          <Route path="admin/keywords" element={<WaKeywordsPage />} />
+          <Route path="admin/templates" element={<WaTemplatesPage />} />
+          <Route path="admin/projects" element={<WaManageProjectsPage />} />
+          <Route path="admin/system" element={<WaSystemPage />} />
+          <Route path="admin/users" element={<WaUsersPage />} />
+        </Route>
       </Route>
       
       <Route path="*" element={<Navigate to="/" replace />} />
