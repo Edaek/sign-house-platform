@@ -69,6 +69,7 @@ class Config:
     MINI_SSH_KEY = os.environ.get('MINI_SSH_KEY', '')
     MINI_DEST_DIR = os.environ.get('MINI_DEST_DIR', '~/Desktop/whats app')
     MINI_ENABLED = os.environ.get('MINI_ENABLED', 'false').lower() == 'true'
+    MINI_LOCAL = os.environ.get('MINI_LOCAL', 'false').lower() == 'true'
     MINI_TARGET_GROUP_ID = os.environ.get('MINI_TARGET_GROUP_ID', '')
 
     # WA uploads folder (media from WhatsApp)
