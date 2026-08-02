@@ -28,8 +28,8 @@ class GroupReminderScheduler:
         self.media_dir = media_dir
         self._timer: Optional[threading.Timer] = None
         self._running = False
-        self._failed_cooldowns: dict[str, float] = {}
-        self._trigger_timers: dict[str, threading.Timer] = {}
+        self._failed_cooldowns = {}   # type: dict
+        self._trigger_timers = {}    # type: dict
         self._client: Optional[MongoClient] = None
 
     @property
@@ -87,7 +87,7 @@ class GroupReminderScheduler:
 
             logger.info('[GroupReminder] Found %d uncategorized image(s)', len(pending))
 
-            by_sender: dict[str, list] = {}
+            by_sender = {}  # type: dict
             for img in pending:
                 key = f"{img['groupId']}::{img['senderPhone']}"
                 by_sender.setdefault(key, []).append(img)

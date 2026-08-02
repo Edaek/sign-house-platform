@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 wa_inbound_bp = Blueprint('wa_inbound', __name__)
 
-_processed: dict[str, float] = {}
+_processed = {}  # type: dict
 DEDUP_TTL = 300
 
 

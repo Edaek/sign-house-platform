@@ -11,6 +11,7 @@ import logging
 import time
 from collections import OrderedDict
 from pathlib import Path
+from typing import Optional, List
 
 import requests
 from dotenv import load_dotenv
@@ -61,10 +62,10 @@ class LRUSet:
 
 recent_ids = LRUSet(MSG_DEDUP_MAX)
 
-reminder: GroupReminderScheduler | None = None
+reminder: Optional[GroupReminderScheduler] = None
 
 
-def forward_to_app(msg: WAMessage, photos: list[str], has_media: bool):
+def forward_to_app(msg: WAMessage, photos: List[str], has_media: bool):
     is_group = msg.from_jid.endswith('@g.us')
     actual_sender = (msg.author if is_group and msg.author else msg.from_jid)
 
@@ -108,7 +109,7 @@ def on_message(msg: WAMessage):
     recent_ids.add(msg.id)
     logger.info('[Gateway] %s from %s: %s', msg.type, msg.from_jid, (msg.text or '(media)')[:80])
 
-    photos: list[str] = []
+    photos: List[str] = []
     media_failed = False
 
     if msg.has_media:

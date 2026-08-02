@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 REMIND_AFTER_S = 30
 
-_pending_reminders: dict[str, threading.Timer] = {}
+_pending_reminders = {}  # type: dict
 _reminder_lock = threading.Lock()
 
 
