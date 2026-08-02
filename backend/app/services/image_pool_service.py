@@ -180,28 +180,34 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
 
     if is_nas_enabled():
         import threading
+        from flask import current_app
+        _app = current_app._get_current_object()
+        _record_id = record_id
+        _images = list(images)
+        _project_code = project['code']
 
         def _bg_nas():
-            try:
-                nas_photos = []
-                for img in images:
-                    if not img.get('imagePath'):
-                        continue
-                    r = upload_to_nas(img['imagePath'], project['code'])
-                    if r['success']:
-                        nas_photos.append(r['nas_path'])
-                        mongo.db.pool_images.update_one(
-                            {'_id': img['_id']},
-                            {'$set': {'nasPath': r['nas_path']}},
+            with _app.app_context():
+                try:
+                    nas_photos = []
+                    for img in _images:
+                        if not img.get('imagePath'):
+                            continue
+                        r = upload_to_nas(img['imagePath'], _project_code)
+                        if r['success']:
+                            nas_photos.append(r['nas_path'])
+                            mongo.db.pool_images.update_one(
+                                {'_id': img['_id']},
+                                {'$set': {'nasPath': r['nas_path']}},
+                            )
+                    if nas_photos:
+                        mongo.db.wa_records.update_one(
+                            {'_id': _record_id},
+                            {'$set': {'nasPhotos': nas_photos}},
                         )
-                if nas_photos:
-                    mongo.db.wa_records.update_one(
-                        {'_id': record_id},
-                        {'$set': {'nasPhotos': nas_photos}},
-                    )
-                    logger.info('[ImagePool] NAS upload done: %d files', len(nas_photos))
-            except Exception:
-                logger.exception('[ImagePool] NAS background upload error')
+                        logger.info('[ImagePool] NAS upload done: %d files', len(nas_photos))
+                except Exception:
+                    logger.exception('[ImagePool] NAS background upload error')
 
         threading.Thread(target=_bg_nas, daemon=True).start()
 

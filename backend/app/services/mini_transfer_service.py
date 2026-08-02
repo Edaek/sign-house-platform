@@ -83,7 +83,12 @@ def is_target_group(group_id):
 
 
 def _get_local_path(web_path, media_dir):
-    relative = web_path.lstrip('/').replace('uploads/', '', 1)
+    """Resolve a web path like /uploads/wa-media/xxx.jpg to a local file path."""
+    relative = web_path.lstrip('/')
+    if relative.startswith('uploads/'):
+        relative = relative[len('uploads/'):]
+    if relative.startswith('wa-media/'):
+        relative = relative[len('wa-media/'):]
     return os.path.join(media_dir, relative)
 
 
