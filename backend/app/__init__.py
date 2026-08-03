@@ -157,6 +157,7 @@ def create_app(config_name=None):
     from app.api.wa_uploads import wa_uploads_bp
     from app.api.wa_inbound import wa_inbound_bp
     from app.api.wa_outbound import wa_outbound_bp
+    from app.api.wa_nas import wa_nas_bp
     
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(health_bp, url_prefix='/api', name='health_api')
@@ -175,9 +176,14 @@ def create_app(config_name=None):
     app.register_blueprint(wa_uploads_bp, url_prefix='/api/wa/uploads')
     app.register_blueprint(wa_inbound_bp, url_prefix='/api/wa')
     app.register_blueprint(wa_outbound_bp, url_prefix='/api/wa')
+    app.register_blueprint(wa_nas_bp, url_prefix='/api/wa/nas')
     
     # Initialize folder watcher manager with app context
     from app.services.folder_watcher import watcher_manager
     watcher_manager.init_app(app)
+
+    # Initialize NAS local-mount service
+    from app.services.nas_watcher_service import nas_mount
+    nas_mount.init_app(app)
     
     return app

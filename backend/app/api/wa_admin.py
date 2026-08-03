@@ -98,6 +98,13 @@ def create_project():
         'updatedAt': now,
     }
     mongo.db.wa_projects.insert_one(doc)
+
+    from app.services.nas_watcher_service import nas_mount
+    if nas_mount.is_available():
+        nas_result = nas_mount.create_folder(code)
+        if nas_result.get('ok'):
+            doc['nasFolder'] = nas_result['path']
+
     return jsonify(serialize_doc(doc)), 201
 
 # System status

@@ -2,14 +2,16 @@ import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
-import { FolderOpen, ArrowRight, Calendar, Inbox } from 'lucide-react'
+import clsx from 'clsx'
+import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive } from 'lucide-react'
 
 export default function WaProjectsPage() {
-  const { projects, fetchProjects, loading } = useWaStore()
+  const { projects, fetchProjects, loading, nasStatus, fetchNasStatus } = useWaStore()
 
   useEffect(() => {
     fetchProjects()
-  }, [fetchProjects])
+    fetchNasStatus()
+  }, [fetchProjects, fetchNasStatus])
 
   return (
     <div className="space-y-6">
@@ -22,6 +24,49 @@ export default function WaProjectsPage() {
         </div>
         <Link to="/wa/admin/projects" className="btn btn-primary text-sm px-4 py-2">+ New Project</Link>
       </div>
+
+      {/* NAS Connection Status */}
+      {nasStatus?.enabled && (
+        <div className="card p-4">
+          <div className="flex items-center gap-3">
+            <div className={clsx(
+              'p-2 rounded-lg',
+              nasStatus.connected ? 'bg-sign-100 dark:bg-sign-900/30' : 'bg-slate-100 dark:bg-slate-800'
+            )}>
+              <HardDrive className={clsx(
+                'h-5 w-5',
+                nasStatus.connected ? 'text-sign-600 dark:text-sign-400' : 'text-slate-400'
+              )} />
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <h2 className="font-semibold text-slate-900 dark:text-white text-sm">NAS 共享盘</h2>
+                <span className={clsx(
+                  'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full',
+                  nasStatus.connected
+                    ? 'bg-sign-100 text-sign-700 dark:bg-sign-900/30 dark:text-sign-400'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                )}>
+                  <span className={clsx(
+                    'inline-block h-1.5 w-1.5 rounded-full',
+                    nasStatus.connected ? 'bg-sign-500' : 'bg-slate-400'
+                  )} />
+                  {nasStatus.connected ? '已连接' : '未连接'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                {nasStatus.watchDir}
+                {nasStatus.connected && nasStatus.foldersFound > 0 && (
+                  <span className="ml-2">· {nasStatus.foldersFound} 个文件夹 · {nasStatus.filesFound} 张图片</span>
+                )}
+              </p>
+            </div>
+            {nasStatus.connected && (
+              <p className="text-xs text-slate-500 dark:text-slate-400">创建项目时自动在共享盘创建文件夹</p>
+            )}
+          </div>
+        </div>
+      )}
 
       {loading && projects.length === 0 ? (
         <div className="flex items-center justify-center py-16">
@@ -53,6 +98,11 @@ export default function WaProjectsPage() {
                 {(project.todayRecords ?? 0) > 0 && (
                   <span className="flex items-center gap-1 text-sign-600 dark:text-sign-400 font-medium">
                     <Calendar className="h-3 w-3" />+{project.todayRecords} today
+                  </span>
+                )}
+                {(project.nasFileCount ?? 0) > 0 && (
+                  <span className="flex items-center gap-1">
+                    <HardDrive className="h-3 w-3" />{project.nasFileCount} NAS
                   </span>
                 )}
               </div>

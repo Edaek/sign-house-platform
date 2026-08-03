@@ -178,13 +178,21 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
         }},
     )
 
-    if is_nas_enabled():
+    # Copy to NAS — prefer local mount, fall back to SFTP
+    from app.services.nas_watcher_service import nas_mount
+    use_local = nas_mount.is_available()
+    use_sftp = not use_local and is_nas_enabled()
+
+    if use_local or use_sftp:
         import threading
+        import os
         from flask import current_app
         _app = current_app._get_current_object()
         _record_id = record_id
         _images = list(images)
         _project_code = project['code']
+        _media_dir = current_app.config.get('WA_UPLOADS_FOLDER', 'uploads/wa-media')
+        _use_local = use_local
 
         def _bg_nas():
             with _app.app_context():
@@ -193,21 +201,41 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
                     for img in _images:
                         if not img.get('imagePath'):
                             continue
-                        r = upload_to_nas(img['imagePath'], _project_code)
-                        if r['success']:
-                            nas_photos.append(r['nas_path'])
-                            mongo.db.pool_images.update_one(
-                                {'_id': img['_id']},
-                                {'$set': {'nasPath': r['nas_path']}},
-                            )
+
+                        if _use_local:
+                            web_path = img['imagePath']
+                            relative = web_path.lstrip('/').replace('uploads/', '', 1)
+                            if relative.startswith('wa-media/'):
+                                relative = relative[len('wa-media/'):]
+                            local_file = os.path.join(_media_dir, relative)
+                            if not os.path.isfile(local_file):
+                                logger.warning('[ImagePool] File not found for NAS copy: %s', local_file)
+                                continue
+                            r = nas_mount.copy_file_to_project(local_file, _project_code)
+                            if r.get('ok'):
+                                nas_photos.append(r['path'])
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {'nasPath': r['path']}},
+                                )
+                        else:
+                            r = upload_to_nas(img['imagePath'], _project_code)
+                            if r['success']:
+                                nas_photos.append(r['nas_path'])
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {'nasPath': r['nas_path']}},
+                                )
+
                     if nas_photos:
                         mongo.db.wa_records.update_one(
                             {'_id': _record_id},
                             {'$set': {'nasPhotos': nas_photos}},
                         )
-                        logger.info('[ImagePool] NAS upload done: %d files', len(nas_photos))
+                        logger.info('[ImagePool] NAS %s done: %d files',
+                                    'copy' if _use_local else 'upload', len(nas_photos))
                 except Exception:
-                    logger.exception('[ImagePool] NAS background upload error')
+                    logger.exception('[ImagePool] NAS background error')
 
         threading.Thread(target=_bg_nas, daemon=True).start()
 

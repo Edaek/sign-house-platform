@@ -55,13 +55,16 @@ class Config:
     OLLAMA_TEXT_MODEL = os.environ.get('OLLAMA_TEXT_MODEL', 'gemma3:4b')
     OLLAMA_VISION_MODEL = os.environ.get('OLLAMA_VISION_MODEL', 'llava:latest')
 
-    # NAS (SFTP)
+    # NAS (SFTP upload)
     NAS_HOST = os.environ.get('NAS_HOST', '')
     NAS_PORT = int(os.environ.get('NAS_PORT', 22))
     NAS_USER = os.environ.get('NAS_USER', '')
     NAS_PASSWORD = os.environ.get('NAS_PASSWORD', '')
     NAS_BASE_DIR = os.environ.get('NAS_BASE_DIR', '/Project Photo for Installation')
     NAS_ENABLED = os.environ.get('NAS_ENABLED', 'false').lower() == 'true'
+
+    # NAS local mount (Mac Mini where NAS is mounted via SMB)
+    NAS_WATCH_DIR = os.environ.get('NAS_WATCH_DIR', '/Volumes/Project Photo for Installation/Project Photo for Installation')
 
     # Mac Mini (SSH/SCP)
     MINI_HOST = os.environ.get('MINI_HOST', '')

@@ -51,6 +51,17 @@ export interface WaProject {
   owner?: { name: string }
   totalRecords?: number
   todayRecords?: number
+  nasFileCount?: number
+  nasLastModified?: string
+  nasSyncedAt?: string
+}
+
+export interface NasStatus {
+  enabled: boolean
+  connected: boolean
+  watchDir: string
+  foldersFound: number
+  filesFound: number
 }
 
 export interface PoolImage {
@@ -128,6 +139,7 @@ interface WaStore {
   templates: TemplateData[]
   systemStatus: SystemStatus | null
   infraStatus: InfraStatus
+  nasStatus: NasStatus | null
   loading: boolean
 
   fetchDashboard: () => Promise<void>
@@ -146,6 +158,7 @@ interface WaStore {
   createTemplate: (data: { typeName: string; fields: Array<{ name: string; type: string; required: boolean }> }) => Promise<void>
   fetchSystemStatus: () => Promise<void>
   fetchInfraStatus: () => Promise<void>
+  fetchNasStatus: () => Promise<void>
   createProject: (data: { code: string; name: string; location?: string; stage: string }) => Promise<void>
   confirmRecord: (id: string) => Promise<void>
   voidRecord: (id: string, reason: string) => Promise<void>
@@ -164,6 +177,7 @@ export const useWaStore = create<WaStore>((set) => ({
   templates: [],
   systemStatus: null,
   infraStatus: { mongo: 'checking', ollama: 'checking' },
+  nasStatus: null,
   loading: false,
 
   fetchDashboard: async () => {
@@ -271,6 +285,15 @@ export const useWaStore = create<WaStore>((set) => ({
       set({ infraStatus: data })
     } catch {
       set({ infraStatus: { mongo: 'error', ollama: 'error' } })
+    }
+  },
+
+  fetchNasStatus: async () => {
+    try {
+      const { data } = await api.get('/wa/nas/status')
+      set({ nasStatus: data })
+    } catch {
+      set({ nasStatus: null })
     }
   },
 
