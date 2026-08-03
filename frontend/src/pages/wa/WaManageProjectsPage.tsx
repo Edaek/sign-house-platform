@@ -65,7 +65,7 @@ export default function WaManageProjectsPage() {
 
       {/* Create dialog */}
       {dialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="card p-6 w-full max-w-md mx-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Create Project</h2>
             <form onSubmit={handleCreate} className="space-y-4">
@@ -101,7 +101,7 @@ export default function WaManageProjectsPage() {
 
       {/* Delete confirmation dialog */}
       {deleteTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="card p-6 w-full max-w-md mx-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Delete Project</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
