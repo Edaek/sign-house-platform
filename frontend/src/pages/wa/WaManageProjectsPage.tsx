@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import toast from 'react-hot-toast'
@@ -64,8 +65,8 @@ export default function WaManageProjectsPage() {
       </div>
 
       {/* Create dialog */}
-      {dialogOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      {dialogOpen && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="card p-6 w-full max-w-md mx-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Create Project</h2>
             <form onSubmit={handleCreate} className="space-y-4">
@@ -96,12 +97,13 @@ export default function WaManageProjectsPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Delete confirmation dialog */}
-      {deleteTarget && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      {deleteTarget && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="card p-6 w-full max-w-md mx-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Delete Project</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
@@ -147,7 +149,8 @@ export default function WaManageProjectsPage() {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {loading ? (
