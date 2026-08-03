@@ -77,7 +77,7 @@ export default function WaUsersPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">User Management</h1>
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">User Management</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{users.length} users</p>
         </div>
         <button onClick={() => setDialogOpen(true)} className="btn btn-primary text-sm px-3 py-1.5 flex items-center gap-1.5">
@@ -157,8 +157,8 @@ export default function WaUsersPage() {
                     <td className="px-4 py-2.5">
                       <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
                         user.is_active
-                          ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300'
-                          : 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                          ? 'bg-sign-500/15 text-sign-700 dark:bg-sign-500/20 dark:text-sign-400'
+                          : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-500'
                       }`}>
                         {user.is_active ? 'Active' : 'Inactive'}
                       </span>

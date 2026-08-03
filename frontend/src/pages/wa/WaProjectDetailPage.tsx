@@ -43,7 +43,7 @@ export default function WaProjectDetailPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">
+            <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">
               <span className="font-mono text-sign-600 dark:text-sign-400">{project.code}</span>
               <span className="mx-2 text-slate-400">—</span>
               {project.name}

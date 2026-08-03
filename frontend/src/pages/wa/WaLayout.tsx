@@ -57,10 +57,10 @@ export default function WaLayout() {
               key={item.path}
               to={item.path}
               className={clsx(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-colors',
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200',
                 active
-                  ? 'bg-sign-500 text-white'
-                  : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                  ? 'bg-sign-500/20 text-sign-600 dark:text-sign-400'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800'
               )}
             >
               <item.icon className="h-3.5 w-3.5 shrink-0" />

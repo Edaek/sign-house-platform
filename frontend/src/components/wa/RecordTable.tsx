@@ -42,7 +42,7 @@ function MediaCell({ record }: { record: WaRecord }) {
       )
     }
     return (
-      <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+      <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-400">
         <Image className="h-3.5 w-3.5" />
         <span>{record.photos.length}</span>
       </span>
@@ -50,7 +50,7 @@ function MediaCell({ record }: { record: WaRecord }) {
   }
   if (record.hasMedia) {
     return (
-      <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+      <span className="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400">
         <Paperclip className="h-3.5 w-3.5" />
         <span className="text-xs">pending</span>
       </span>
@@ -115,9 +115,7 @@ export default function WaRecordTable({ records }: RecordTableProps) {
                         <div className="flex items-center justify-center gap-1.5">
                           <div className="h-1.5 w-12 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
                             <div
-                              className={`h-full rounded-full transition-all ${
-                                pct === 100 ? 'bg-emerald-500' : pct > 50 ? 'bg-blue-500' : 'bg-amber-500'
-                              }`}
+                              className="h-full rounded-full bg-sign-500 transition-all"
                               style={{ width: `${pct}%` }}
                             />
                           </div>

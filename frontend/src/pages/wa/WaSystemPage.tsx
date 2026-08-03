@@ -19,9 +19,9 @@ function StatusDot({ status }: { status: 'ok' | 'error' | 'checking' | boolean }
   return (
     <span className={clsx(
       'inline-block h-2 w-2 rounded-full',
-      isOk && 'bg-emerald-500',
-      (status === 'error' || status === false) && 'bg-red-500',
-      isChecking && 'bg-amber-400 animate-pulse'
+      isOk && 'bg-sign-500',
+      (status === 'error' || status === false) && 'bg-slate-400 dark:bg-slate-500',
+      isChecking && 'bg-slate-300 dark:bg-slate-600 animate-pulse'
     )} />
   )
 }
@@ -52,7 +52,7 @@ export default function WaSystemPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">WhatsApp & System</h1>
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">WhatsApp & System</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">Live status of services and connections</p>
         </div>
         <button onClick={handleRefresh} disabled={refreshing} className="btn btn-secondary text-sm px-3 py-1.5 flex items-center gap-1.5">
@@ -77,8 +77,11 @@ export default function WaSystemPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-slate-500 dark:text-slate-400">Session</span>
                   <div className="flex items-center gap-2">
-                    {systemStatus?.connected ? <Wifi className="h-4 w-4 text-emerald-500" /> : <WifiOff className="h-4 w-4 text-red-500" />}
-                    <span className={clsx('text-sm font-medium', systemStatus?.connected ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400')}>
+                    {systemStatus?.connected ? <Wifi className="h-4 w-4 text-sign-500" /> : <WifiOff className="h-4 w-4 text-slate-400" />}
+                    <span className={clsx(
+                      'text-sm font-medium',
+                      systemStatus?.connected ? 'text-sign-600 dark:text-sign-400' : 'text-slate-500 dark:text-slate-400'
+                    )}>
                       {systemStatus?.connected ? 'Connected' : systemStatus?.status || 'Disconnected'}
                     </span>
                   </div>
@@ -103,7 +106,7 @@ export default function WaSystemPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-slate-500 dark:text-slate-400">Tokens</span>
                     <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-800 dark:text-slate-200">
-                      <Coins className="h-3.5 w-3.5 text-amber-500" />{systemStatus.tokenBalance.toLocaleString()}
+                      <Coins className="h-3.5 w-3.5 text-slate-400" />{systemStatus.tokenBalance.toLocaleString()}
                     </span>
                   </div>
                 )}
@@ -153,7 +156,7 @@ export default function WaSystemPage() {
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Media Message</p>
           </div>
           <div className="p-4">
-            <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">Free</p>
+            <p className="text-lg font-bold text-sign-600 dark:text-sign-400">Free</p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">Read Operations</p>
           </div>
         </div>

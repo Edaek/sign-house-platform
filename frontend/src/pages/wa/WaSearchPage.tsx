@@ -29,7 +29,7 @@ export default function WaSearchPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">Search</h1>
+        <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Search</h1>
         <p className="text-sm text-slate-500 dark:text-slate-400">Search across all WA records</p>
       </div>
 

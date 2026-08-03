@@ -15,8 +15,8 @@ export default function WaProjectsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">WA Projects</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">WA Projects</h1>
+          <p className="text-slate-600 dark:text-slate-400 mt-1">
             {projects.length} active project{projects.length !== 1 ? 's' : ''}
           </p>
         </div>

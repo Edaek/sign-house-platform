@@ -158,26 +158,26 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                     <button onClick={() => setShowRequestInfo(true)} className="btn btn-secondary text-sm px-3 py-1.5 flex items-center gap-1.5">
                       <MessageSquare className="h-3.5 w-3.5" />Request Info
                     </button>
-                    <button onClick={() => setShowVoidDialog(true)} className="text-sm px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white flex items-center gap-1.5">
+                    <button onClick={() => setShowVoidDialog(true)} className="btn btn-secondary text-sm px-3 py-1.5 flex items-center gap-1.5">
                       <XCircle className="h-3.5 w-3.5" />Void
                     </button>
                   </div>
                 )}
 
                 {showVoidDialog && (
-                  <div className="rounded-lg border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-4 space-y-3">
-                    <p className="text-sm font-medium text-red-800 dark:text-red-300">Reason for voiding:</p>
+                  <div className="card p-4 space-y-3">
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200">Reason for voiding:</p>
                     <textarea value={voidReason} onChange={(e) => setVoidReason(e.target.value)} placeholder="Min 5 characters..." className="input w-full min-h-[60px]" />
                     <div className="flex gap-2">
-                      <button onClick={handleVoid} disabled={loading} className="text-sm px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white">Confirm Void</button>
+                      <button onClick={handleVoid} disabled={loading} className="btn btn-primary text-sm px-3 py-1.5">Confirm Void</button>
                       <button onClick={() => setShowVoidDialog(false)} className="btn btn-secondary text-sm px-3 py-1.5">Cancel</button>
                     </div>
                   </div>
                 )}
 
                 {showRequestInfo && (
-                  <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 p-4 space-y-3">
-                    <p className="text-sm font-medium text-blue-800 dark:text-blue-300">What info do you need?</p>
+                  <div className="card p-4 space-y-3">
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200">What info do you need?</p>
                     <textarea value={requestInfoText} onChange={(e) => setRequestInfoText(e.target.value)} placeholder="Describe what information is needed..." className="input w-full min-h-[60px]" />
                     <div className="flex gap-2">
                       <button onClick={handleRequestInfo} disabled={loading} className="btn btn-primary text-sm px-3 py-1.5">Send via WhatsApp</button>
@@ -229,9 +229,9 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                         })}
                       </div>
                     ) : (
-                      <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 px-3 py-2.5">
-                        <Paperclip className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                        <span className="text-sm text-amber-800 dark:text-amber-300">{record.mediaType || 'Media'} attached — download pending</span>
+                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30 px-3 py-2.5">
+                        <Paperclip className="h-4 w-4 text-slate-400" />
+                        <span className="text-sm text-slate-600 dark:text-slate-400">{record.mediaType || 'Media'} attached — download pending</span>
                       </div>
                     )}
                   </section>
@@ -284,8 +284,8 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Round {entry.round}</span>
                             <span className="text-[10px] text-slate-500 dark:text-slate-400">{new Date(entry.timestamp).toLocaleString()}</span>
                           </div>
-                          <p className="text-sm"><span className="font-medium text-blue-600 dark:text-blue-400">Q:</span> {entry.question}</p>
-                          {entry.answer && <p className="text-sm"><span className="font-medium text-emerald-600 dark:text-emerald-400">A:</span> {entry.answer}</p>}
+                          <p className="text-sm"><span className="font-medium text-sign-600 dark:text-sign-400">Q:</span> {entry.question}</p>
+                          {entry.answer && <p className="text-sm"><span className="font-medium text-slate-600 dark:text-slate-400">A:</span> {entry.answer}</p>}
                         </div>
                       ))}
                     </div>

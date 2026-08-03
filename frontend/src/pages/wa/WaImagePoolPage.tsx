@@ -132,7 +132,7 @@ export default function WaImagePoolPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white flex items-center gap-2.5">
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white flex items-center gap-2.5">
             Image Pool
             {poolStats && poolStats.totalUnassigned > 0 && (
               <span className="inline-flex items-center justify-center rounded-full bg-sign-500 px-2.5 py-0.5 text-xs font-semibold text-white">
@@ -152,15 +152,15 @@ export default function WaImagePoolPage() {
       {/* Stats bar */}
       {poolStats && (
         <div className="flex gap-4">
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 px-4 py-3 flex-1">
+          <div className="card px-4 py-3 flex-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Unassigned</p>
-            <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{poolStats.totalUnassigned}</p>
+            <p className="text-2xl font-bold text-sign-600 dark:text-sign-400 mt-1">{poolStats.totalUnassigned}</p>
           </div>
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 px-4 py-3 flex-1">
+          <div className="card px-4 py-3 flex-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Assigned</p>
             <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{poolStats.totalAssigned}</p>
           </div>
-          <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/50 px-4 py-3 flex-1">
+          <div className="card px-4 py-3 flex-1">
             <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Senders</p>
             <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{poolStats.bySender.length}</p>
           </div>
@@ -249,10 +249,10 @@ export default function WaImagePoolPage() {
                         ) : (
                           <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 gap-1.5">
                             <Image className="h-7 w-7 opacity-40" />
-                            <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">Download failed</span>
+                            <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Download failed</span>
                             <div className="flex gap-1.5">
                               <button
-                                className="inline-flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                                className="btn btn-primary text-[10px] px-2 py-1 disabled:opacity-50"
                                 disabled={retrying.has(img.id)}
                                 onClick={(e) => { e.stopPropagation(); handleRetryDownload(img.id) }}
                               >
@@ -260,7 +260,7 @@ export default function WaImagePoolPage() {
                                 {retrying.has(img.id) ? '...' : 'Retry'}
                               </button>
                               <button
-                                className="inline-flex items-center gap-1 rounded bg-red-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-red-700"
+                                className="btn btn-secondary text-[10px] px-2 py-1"
                                 onClick={(e) => { e.stopPropagation(); handleDeleteFailed(img.id) }}
                               >
                                 <Trash2 className="h-3 w-3" />
@@ -276,7 +276,7 @@ export default function WaImagePoolPage() {
                           </div>
                         )}
                         {img.projectCode && (
-                          <div className="absolute top-2 right-2 inline-flex items-center rounded bg-green-600/90 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                          <div className="absolute top-2 right-2 inline-flex items-center rounded bg-sign-500/90 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                             {img.projectCode}
                           </div>
                         )}
@@ -287,7 +287,7 @@ export default function WaImagePoolPage() {
                         </div>
                         {img.caption && <p className="text-xs text-slate-800 dark:text-slate-200 truncate">{img.caption}</p>}
                         {img.projectName && (
-                          <p className="text-[11px] text-green-600 dark:text-green-400 font-medium truncate">
+                          <p className="text-[11px] text-sign-600 dark:text-sign-400 font-medium truncate">
                             {img.projectCode} - {img.projectName}
                           </p>
                         )}

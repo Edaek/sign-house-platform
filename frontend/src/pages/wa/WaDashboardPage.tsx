@@ -26,8 +26,8 @@ export default function WaDashboardPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">WA Dashboard</h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">Overview of today's field data collection</p>
+        <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">WA Dashboard</h1>
+        <p className="text-slate-600 dark:text-slate-400 mt-1">Overview of today's field data collection</p>
       </div>
 
       {loading && !dashboardStats ? (
@@ -36,16 +36,16 @@ export default function WaDashboardPage() {
         </div>
       ) : dashboardStats && (
         <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
-          <WaMetricCard title="Today's Intake" value={dashboardStats.todayIntake} href="/wa/projects" icon={<Inbox className="h-4 w-4" />} color="blue" />
-          <WaMetricCard title="Pending" value={dashboardStats.pendingCompletion} href="/wa/projects" icon={<Clock className="h-4 w-4" />} color="amber" />
-          <WaMetricCard title="Awaiting Review" value={dashboardStats.awaitingReview} href="/wa/projects" icon={<Eye className="h-4 w-4" />} color="purple" />
-          <WaMetricCard title="Completed" value={dashboardStats.completedToday} href="/wa/projects" icon={<CheckCircle2 className="h-4 w-4" />} color="emerald" />
-          <WaMetricCard title="Overdue" value={dashboardStats.followUpOverdue} href="/wa/projects" icon={<AlertTriangle className="h-4 w-4" />} color="red" />
+          <WaMetricCard title="Today's Intake" value={dashboardStats.todayIntake} href="/wa/projects" icon={<Inbox className="h-4 w-4" />} />
+          <WaMetricCard title="Pending" value={dashboardStats.pendingCompletion} href="/wa/projects" icon={<Clock className="h-4 w-4" />} />
+          <WaMetricCard title="Awaiting Review" value={dashboardStats.awaitingReview} href="/wa/projects" icon={<Eye className="h-4 w-4" />} />
+          <WaMetricCard title="Completed" value={dashboardStats.completedToday} href="/wa/projects" icon={<CheckCircle2 className="h-4 w-4" />} />
+          <WaMetricCard title="Overdue" value={dashboardStats.followUpOverdue} href="/wa/projects" icon={<AlertTriangle className="h-4 w-4" />} />
         </div>
       )}
 
-      <div className="rounded-lg border border-slate-200 dark:border-slate-700">
-        <div className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-4 py-2.5">
+      <div className="card overflow-hidden">
+        <div className="border-b border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-800/50 px-4 py-2.5">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Recent Activity</h2>
         </div>
         <div className="divide-y divide-slate-200 dark:divide-slate-700">

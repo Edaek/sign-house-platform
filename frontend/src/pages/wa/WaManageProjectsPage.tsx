@@ -35,7 +35,7 @@ export default function WaManageProjectsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-display font-bold text-slate-900 dark:text-white">Manage Projects</h1>
+          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Manage Projects</h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">{projects.length} projects</p>
         </div>
         <button onClick={() => setDialogOpen(true)} className="btn btn-primary text-sm px-3 py-1.5 flex items-center gap-1.5">
