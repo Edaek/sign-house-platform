@@ -160,6 +160,7 @@ interface WaStore {
   fetchInfraStatus: () => Promise<void>
   fetchNasStatus: () => Promise<void>
   createProject: (data: { code: string; name: string; location?: string; stage: string }) => Promise<void>
+  deleteProject: (id: string, deleteNasFolder?: boolean) => Promise<void>
   confirmRecord: (id: string) => Promise<void>
   voidRecord: (id: string, reason: string) => Promise<void>
   requestInfo: (id: string, question: string) => Promise<void>
@@ -299,6 +300,10 @@ export const useWaStore = create<WaStore>((set) => ({
 
   createProject: async (projData) => {
     await api.post('/wa/admin/projects', projData)
+  },
+
+  deleteProject: async (id, deleteNasFolder = false) => {
+    await api.delete(`/wa/admin/projects/${id}`, { data: { deleteNasFolder } })
   },
 
   confirmRecord: async (id) => {

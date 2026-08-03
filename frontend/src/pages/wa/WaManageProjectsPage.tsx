@@ -2,16 +2,20 @@ import { useEffect, useState } from 'react'
 import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import toast from 'react-hot-toast'
-import { Plus, FolderOpen } from 'lucide-react'
+import { Plus, FolderOpen, Trash2 } from 'lucide-react'
 
 export default function WaManageProjectsPage() {
-  const { projects, fetchProjects, createProject } = useWaStore()
+  const { projects, fetchProjects, createProject, deleteProject, nasStatus, fetchNasStatus } = useWaStore()
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; code: string } | null>(null)
+  const [deleteNasFolder, setDeleteNasFolder] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     fetchProjects().then(() => setLoading(false))
-  }, [fetchProjects])
+    fetchNasStatus()
+  }, [fetchProjects, fetchNasStatus])
 
   async function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -28,6 +32,22 @@ export default function WaManageProjectsPage() {
       fetchProjects()
     } catch {
       toast.error('Failed to create project')
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await deleteProject(deleteTarget.id, deleteNasFolder)
+      toast.success(`Project ${deleteTarget.code} deleted`)
+      setDeleteTarget(null)
+      setDeleteNasFolder(false)
+      fetchProjects()
+    } catch {
+      toast.error('Failed to delete project')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -79,6 +99,57 @@ export default function WaManageProjectsPage() {
         </div>
       )}
 
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="card p-6 w-full max-w-md mx-4">
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">Delete Project</h2>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
+              Are you sure you want to delete project <span className="font-mono font-semibold">{deleteTarget.code}</span>?
+              This will also delete all associated records.
+            </p>
+
+            {nasStatus?.connected && (
+              <label className="flex items-center gap-2 p-3 rounded-lg border border-slate-200 dark:border-slate-700 mb-4 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <input
+                  type="checkbox"
+                  checked={deleteNasFolder}
+                  onChange={(e) => setDeleteNasFolder(e.target.checked)}
+                  className="rounded border-slate-300 text-sign-600 focus:ring-sign-500"
+                />
+                <div>
+                  <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                    Also delete NAS folder
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Remove the folder and all files from the shared drive
+                  </p>
+                </div>
+              </label>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setDeleteTarget(null); setDeleteNasFolder(false) }}
+                className="btn btn-secondary flex-1"
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-16">
           <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
@@ -98,6 +169,7 @@ export default function WaManageProjectsPage() {
                 <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Location</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Stage</th>
                 <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                <th className="px-4 py-2.5 w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -112,6 +184,15 @@ export default function WaManageProjectsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5"><WaStatusBadge status={project.status} size="sm" /></td>
+                  <td className="px-4 py-2.5">
+                    <button
+                      onClick={() => setDeleteTarget({ id: project.id, code: project.code })}
+                      className="p-1 text-slate-400 hover:text-red-500 dark:hover:text-red-400 transition-colors"
+                      title="Delete project"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

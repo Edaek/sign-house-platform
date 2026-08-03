@@ -16,7 +16,6 @@ from app.services.image_pool_service import (
 )
 from app.services.extraction_runner_service import run_extraction
 from app.services.followup_service import handle_follow_up_reply, send_follow_up
-from app.services.mini_transfer_service import is_target_group, transfer_batch_to_mini
 
 logger = logging.getLogger(__name__)
 
@@ -348,20 +347,6 @@ def _categorize_group_image(pending, code, group_id, data):
 
     if pool_ids:
         assign_images_to_project(pool_ids, project, 'user')
-
-    if is_target_group(group_id):
-        paths = [img['imagePath'] for img in claimed if img.get('imagePath')]
-        if paths:
-            import threading
-            from flask import current_app
-            app = current_app._get_current_object()
-            p_code = project['code']
-
-            def _do_transfer():
-                with app.app_context():
-                    transfer_batch_to_mini(paths, p_code)
-
-            threading.Thread(target=_do_transfer, daemon=True).start()
 
     count = len(claimed)
     msg = f'✅ {count} 张图片已归类到项目 *{project["code"]}* ({project.get("name", "")})。' if count > 1 else f'✅ 图片已归类到项目 *{project["code"]}* ({project.get("name", "")})。'

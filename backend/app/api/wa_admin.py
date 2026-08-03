@@ -107,6 +107,42 @@ def create_project():
 
     return jsonify(serialize_doc(doc)), 201
 
+
+@wa_admin_bp.route('/projects/<project_id>', methods=['DELETE'])
+@jwt_required()
+@require_role('admin')
+def delete_project(project_id):
+    import shutil
+    project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    delete_nas_folder = data.get('deleteNasFolder', False)
+
+    if delete_nas_folder:
+        from app.services.nas_watcher_service import nas_mount
+        if nas_mount.is_available():
+            watch_dir = nas_mount._watch_dir()
+            import os
+            folder = os.path.join(watch_dir, project['code'])
+            if os.path.isdir(folder):
+                try:
+                    shutil.rmtree(folder)
+                except OSError:
+                    pass
+
+    mongo.db.wa_records.delete_many({'projectId': project['_id']})
+    mongo.db.pool_images.update_many(
+        {'projectId': project['_id']},
+        {'$unset': {'projectId': '', 'projectCode': '', 'projectName': '',
+                    'assignedBy': '', 'assignedAt': '', 'recordId': ''}},
+    )
+    mongo.db.wa_projects.delete_one({'_id': project['_id']})
+
+    return jsonify({'message': 'Project deleted', 'code': project['code']})
+
+
 # System status
 @wa_admin_bp.route('/system/status', methods=['GET'])
 @jwt_required()
