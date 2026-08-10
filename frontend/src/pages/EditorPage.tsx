@@ -772,7 +772,7 @@ export default function EditorPage() {
               />
               <button
                 onClick={handleSaveFloorName}
-                className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-400 transition-colors"
+                className="p-2 bg-sign-500 text-white rounded-lg hover:bg-sign-400 transition-colors"
                 title="Save (Enter)"
               >
                 <Check className="w-4 h-4" />
@@ -898,7 +898,7 @@ export default function EditorPage() {
             onClick={() => setTool('crop')}
             className={clsx(
               'p-3 rounded-lg transition-colors',
-              tool === 'crop' ? 'bg-emerald-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
+              tool === 'crop' ? 'bg-sign-500 text-white' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white'
             )}
             title="Crop Tool - Split into multiple floors (C)"
           >
@@ -961,7 +961,7 @@ export default function EditorPage() {
               <div className="bg-slate-800 rounded-lg shadow-xl p-6 flex flex-col items-center gap-4 border border-slate-700">
                 <Loader2 className={clsx(
                   "w-10 h-10 animate-spin",
-                  isSplitting ? "text-emerald-500" : "text-sign-500"
+                  isSplitting ? "text-sign-500" : "text-sign-500"
                 )} />
                 <div className="text-center">
                   <p className="text-white font-medium mb-1">
@@ -984,11 +984,11 @@ export default function EditorPage() {
         <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col">
           {/* Crop Mode Panel */}
           {(tool === 'crop' || cropRegions.length > 0) && (
-            <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-emerald-50 dark:bg-emerald-950/30">
+            <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-sign-50 dark:bg-sign-950/30">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <h3 className="font-medium text-emerald-800 dark:text-emerald-300">Split Floor</h3>
+                  <Layers className="w-4 h-4 text-sign-600 dark:text-sign-400" />
+                  <h3 className="font-medium text-sign-800 dark:text-sign-300">Split Floor</h3>
                 </div>
                 {cropRegions.length > 0 && (
                   <button
@@ -1001,7 +1001,7 @@ export default function EditorPage() {
               </div>
               
               {cropRegions.length === 0 ? (
-                <p className="text-sm text-emerald-700 dark:text-emerald-400/80">
+                <p className="text-sm text-sign-700 dark:text-sign-400/80">
                   Draw rectangles on the image to define crop regions for each floor.
                 </p>
               ) : (
@@ -1014,12 +1014,12 @@ export default function EditorPage() {
                         className={clsx(
                           'p-2 rounded-lg cursor-pointer transition-colors flex items-center justify-between',
                           selectedCropRegion === region.id
-                            ? 'bg-emerald-200 dark:bg-emerald-900/50 border border-emerald-400 dark:border-emerald-600'
-                            : 'bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 hover:border-emerald-300 dark:hover:border-emerald-700'
+                            ? 'bg-sign-200 dark:bg-sign-900/50 border border-sign-400 dark:border-sign-600'
+                            : 'bg-white dark:bg-slate-800 border border-sign-200 dark:border-sign-800 hover:border-sign-300 dark:hover:border-sign-700'
                         )}
                       >
                         <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <span className="w-5 h-5 bg-emerald-100 dark:bg-emerald-900 rounded text-emerald-700 dark:text-emerald-400 text-xs font-bold flex items-center justify-center flex-shrink-0">
+                          <span className="w-5 h-5 bg-sign-100 dark:bg-sign-900 rounded text-sign-700 dark:text-sign-400 text-xs font-bold flex items-center justify-center flex-shrink-0">
                             {index + 1}
                           </span>
                           {editingCropName === region.id ? (
@@ -1044,7 +1044,7 @@ export default function EditorPage() {
                                   e.stopPropagation()
                                   handleSaveCropName(region.id)
                                 }}
-                                className="p-1 bg-emerald-500 text-white rounded hover:bg-emerald-400"
+                                className="p-1 bg-sign-500 text-white rounded hover:bg-sign-400"
                               >
                                 <Check className="w-3 h-3" />
                               </button>
@@ -1088,7 +1088,7 @@ export default function EditorPage() {
                         type="checkbox"
                         checked={deleteOriginalAfterSplit}
                         onChange={(e) => setDeleteOriginalAfterSplit(e.target.checked)}
-                        className="rounded border-slate-300 dark:border-slate-600 text-emerald-500 focus:ring-emerald-500"
+                        className="rounded border-slate-300 dark:border-slate-600 text-sign-500 focus:ring-sign-500"
                       />
                       Delete original floor after split
                     </label>
@@ -1096,7 +1096,7 @@ export default function EditorPage() {
                     <button
                       onClick={handleSplitFloor}
                       disabled={isSplitting || cropRegions.length === 0}
-                      className="w-full btn bg-emerald-500 hover:bg-emerald-400 text-white flex items-center justify-center gap-2"
+                      className="w-full btn bg-sign-500 hover:bg-sign-400 text-white flex items-center justify-center gap-2"
                     >
                       {isSplitting ? (
                         <>
@@ -1156,7 +1156,7 @@ export default function EditorPage() {
                 className={clsx(
                   'flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
                   detectionMode === 'fast'
-                    ? 'bg-amber-500 text-white'
+                    ? 'bg-sign-400 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
                 title="Faster detection, may miss some shapes"
@@ -1168,7 +1168,7 @@ export default function EditorPage() {
                 className={clsx(
                   'flex-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
                   detectionMode === 'accurate'
-                    ? 'bg-emerald-500 text-white'
+                    ? 'bg-sign-500 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
                 title="Full detection with all passes"
@@ -1277,7 +1277,7 @@ export default function EditorPage() {
                       />
                       <button
                         onClick={handleSaveText}
-                        className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-400"
+                        className="p-2 bg-sign-500 text-white rounded-lg hover:bg-sign-400"
                       >
                         <Check className="w-4 h-4" />
                       </button>
@@ -1330,7 +1330,7 @@ export default function EditorPage() {
                       />
                       <button
                         onClick={handleSaveQuantity}
-                        className="p-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-400"
+                        className="p-2 bg-sign-500 text-white rounded-lg hover:bg-sign-400"
                       >
                         <Check className="w-4 h-4" />
                       </button>
@@ -1396,12 +1396,12 @@ export default function EditorPage() {
                           </span>
                         )}
                         {data.detection_method === 'learned' && (
-                          <span className="text-xs px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded" title="Detected via learned template">
+                          <span className="text-xs px-1.5 py-0.5 bg-sign-400/20 text-sign-400 rounded" title="Detected via learned template">
                             learned
                           </span>
                         )}
                         {(data.quantity || 1) > 1 && (
-                          <span className="text-xs px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded font-semibold">
+                          <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded font-semibold">
                             ×{data.quantity}
                           </span>
                         )}

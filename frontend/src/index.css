@@ -3,27 +3,32 @@
 @tailwind utilities;
 
 :root {
-  /* Light mode colors (blueprint-inspired) */
-  --color-bg: #f0f4f8;
+  /* Brand — sign (orange) primary, blueprint (blue) decorative only */
+  --color-sign-500: #ed751d;
+  --color-sign-400: #f19342;
+  --color-sign-600: #de5a13;
+  --color-blueprint-500: #3b9df6;
+
+  /* Semantic surfaces */
+  --color-bg: #f8fafc;
   --color-surface: #ffffff;
-  --color-surface-hover: #f8fafc;
-  --color-border: #cbd5e1;
+  --color-surface-hover: #f1f5f9;
+  --color-border: #e2e8f0;
   --color-text: #0f172a;
-  --color-text-muted: #475569;
-  --color-accent: #ed751d;
-  --color-accent-hover: #f19342;
+  --color-text-muted: #64748b;
+  --color-accent: var(--color-sign-500);
+  --color-accent-hover: var(--color-sign-400);
 }
 
 .dark {
-  /* Dark mode colors */
   --color-bg: #0f172a;
   --color-surface: #1e293b;
   --color-surface-hover: #334155;
   --color-border: #475569;
   --color-text: #f1f5f9;
   --color-text-muted: #94a3b8;
-  --color-accent: #ed751d;
-  --color-accent-hover: #f19342;
+  --color-accent: var(--color-sign-500);
+  --color-accent-hover: var(--color-sign-400);
 }
 
 * {
@@ -44,20 +49,20 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Blueprint grid background */
+/* Blueprint grid — decorative background only */
 .blueprint-bg {
-  background-color: #f8fafc;
-  background-image: 
-    linear-gradient(rgba(59, 157, 246, 0.15) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(59, 157, 246, 0.15) 1px, transparent 1px);
+  background-color: var(--color-bg);
+  background-image:
+    linear-gradient(rgba(237, 117, 29, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(237, 117, 29, 0.06) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
 .dark .blueprint-bg {
-  background-color: #172d54;
-  background-image: 
-    linear-gradient(rgba(59, 157, 246, 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(59, 157, 246, 0.1) 1px, transparent 1px);
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(rgba(237, 117, 29, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(237, 117, 29, 0.08) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
@@ -81,18 +86,6 @@ body {
   background: var(--color-text-muted);
 }
 
-.dark ::-webkit-scrollbar-track {
-  background: var(--color-surface);
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
-}
-
 /* Selection */
 ::selection {
   background: rgba(237, 117, 29, 0.3);
@@ -104,31 +97,66 @@ body {
   outline-offset: 2px;
 }
 
-/* Input reset */
 input, textarea, select, button {
   font-family: inherit;
 }
 
 @layer components {
+  /* Layout */
+  .page-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8;
+  }
+
+  .page-header {
+    @apply mb-8;
+  }
+
+  .page-title {
+    @apply text-3xl font-display font-bold text-slate-900 dark:text-white;
+  }
+
+  .page-subtitle {
+    @apply text-slate-600 dark:text-slate-400 mt-1;
+  }
+
+  /* Navigation */
+  .nav-link {
+    @apply flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200;
+  }
+
+  .nav-link-active {
+    @apply bg-sign-500/20 text-sign-600 dark:text-sign-400;
+  }
+
+  .nav-link-inactive {
+    @apply text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800;
+  }
+
+  /* Buttons */
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200;
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
     @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-white dark:focus:ring-offset-slate-900;
   }
-  
+
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+
   .btn-primary {
     @apply bg-sign-500 text-white hover:bg-sign-400 focus:ring-sign-500;
   }
-  
+
   .btn-secondary {
     @apply bg-slate-200 text-slate-700 hover:bg-slate-300 focus:ring-slate-500;
     @apply dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600;
   }
-  
+
   .btn-ghost {
     @apply bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500;
     @apply dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white;
   }
-  
+
+  /* Forms */
   .input {
     @apply w-full px-4 py-3 bg-white border border-slate-300 rounded-lg;
     @apply text-slate-900 placeholder:text-slate-400;
@@ -136,15 +164,32 @@ input, textarea, select, button {
     @apply focus:border-sign-500 focus:ring-1 focus:ring-sign-500;
     @apply transition-colors duration-200;
   }
-  
+
+  /* Cards */
   .card {
     @apply bg-white/80 backdrop-blur-sm border border-slate-200 rounded-xl;
     @apply dark:bg-slate-800/50 dark:border-slate-700;
   }
-  
+
   .glass {
     @apply bg-white/50 backdrop-blur-md border border-slate-200/50;
     @apply dark:bg-slate-800/30 dark:border-slate-700/50;
   }
-}
 
+  /* Empty state */
+  .empty-state {
+    @apply flex flex-col items-center text-center py-16;
+  }
+
+  .empty-state-icon {
+    @apply w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-2xl flex items-center justify-center mb-4;
+  }
+
+  .empty-state-title {
+    @apply text-lg font-semibold text-slate-900 dark:text-white mb-2;
+  }
+
+  .empty-state-desc {
+    @apply text-slate-600 dark:text-slate-400 mb-6 max-w-sm;
+  }
+}

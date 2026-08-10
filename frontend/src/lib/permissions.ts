@@ -125,9 +125,9 @@ export function getRoleDisplayName(role: UserRole): string {
  */
 export function getRoleColorClass(role: UserRole): string {
   const roleColors: Record<UserRole, string> = {
-    admin: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-    manager: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-    user: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
+    admin: 'bg-sign-500/15 text-sign-700 dark:bg-sign-500/20 dark:text-sign-400',
+    manager: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+    user: 'bg-slate-50 text-slate-500 dark:bg-slate-800/50 dark:text-slate-400',
   }
   return roleColors[role]
 }

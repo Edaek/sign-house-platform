@@ -12,6 +12,7 @@ import {
   ImageIcon
 } from 'lucide-react'
 import clsx from 'clsx'
+import { getProcessingStepColor } from '../lib/theme'
 
 interface ProcessingFile {
   filename: string
@@ -47,21 +48,23 @@ interface BatchUploadProgressProps {
 }
 
 const getStatusIcon = (status: ProcessingFile['status']) => {
+  const { icon } = getProcessingStepColor(status)
+  const className = `w-4 h-4 ${icon}`
   switch (status) {
     case 'pending':
-      return <FileText className="w-4 h-4 text-slate-400" />
+      return <FileText className={className} />
     case 'uploading':
-      return <Upload className="w-4 h-4 text-blue-400 animate-pulse" />
+      return <Upload className={className} />
     case 'converting':
-      return <ImageIcon className="w-4 h-4 text-purple-400 animate-pulse" />
+      return <ImageIcon className={className} />
     case 'detecting':
-      return <Scan className="w-4 h-4 text-amber-400 animate-pulse" />
+      return <Scan className={className} />
     case 'ocr':
-      return <Type className="w-4 h-4 text-cyan-400 animate-pulse" />
+      return <Type className={className} />
     case 'completed':
-      return <CheckCircle className="w-4 h-4 text-emerald-400" />
+      return <CheckCircle className={className} />
     case 'error':
-      return <AlertCircle className="w-4 h-4 text-red-400" />
+      return <AlertCircle className={className} />
   }
 }
 
@@ -84,29 +87,9 @@ const getStatusText = (status: ProcessingFile['status']) => {
   }
 }
 
-const getStatusColor = (status: ProcessingFile['status']) => {
-  switch (status) {
-    case 'pending':
-      return 'bg-slate-500'
-    case 'uploading':
-      return 'bg-blue-500'
-    case 'converting':
-      return 'bg-purple-500'
-    case 'detecting':
-      return 'bg-amber-500'
-    case 'ocr':
-      return 'bg-cyan-500'
-    case 'completed':
-      return 'bg-emerald-500'
-    case 'error':
-      return 'bg-red-500'
-  }
-}
-
 export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: BatchUploadProgressProps) {
   const pollIntervalRef = useRef<number | null>(null)
   
-  // Poll for status updates
   useEffect(() => {
     if (isOpen && job && (job.status === 'pending' || job.status === 'processing')) {
       pollIntervalRef.current = window.setInterval(() => {
@@ -117,14 +100,13 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
       }
     }
-  }, [isOpen, job?.status, onPoll])
+  }, [isOpen, job, onPoll])
   
   if (!isOpen || !job) return null
   
-  const overallProgress = job.total_files > 0 
+  const overallProgress = job.total_files > 0
     ? Math.round((job.files.reduce((sum, f) => sum + f.progress, 0) / job.total_files))
     : 0
   
@@ -141,17 +123,16 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
           exit={{ opacity: 0, scale: 0.95 }}
           className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-lg border border-slate-200 dark:border-slate-700 overflow-hidden"
         >
-          {/* Header */}
           <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
             <div className="flex items-center gap-3">
               {isComplete ? (
                 errorCount > 0 ? (
-                  <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
-                    <AlertCircle className="w-5 h-5 text-amber-400" />
+                  <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
+                    <AlertCircle className="w-5 h-5 text-red-400" />
                   </div>
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                    <CheckCircle className="w-5 h-5 text-emerald-400" />
+                  <div className="w-10 h-10 rounded-full bg-sign-500/20 flex items-center justify-center">
+                    <CheckCircle className="w-5 h-5 text-sign-500" />
                   </div>
                 )
               ) : (
@@ -182,7 +163,6 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
             </button>
           </div>
           
-          {/* Overall Progress */}
           <div className="p-4 border-b border-slate-200 dark:border-slate-700">
             <div className="flex items-center justify-between mb-2">
               <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -202,7 +182,6 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
             </div>
           </div>
           
-          {/* File List */}
           <div className="p-4 max-h-80 overflow-y-auto">
             <div className="space-y-3">
               {job.files.map((file, index) => (
@@ -216,7 +195,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                     file.status === 'error'
                       ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800'
                       : file.status === 'completed'
-                        ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800'
+                        ? 'bg-sign-500/5 dark:bg-sign-500/10 border-sign-200 dark:border-sign-800/40'
                         : 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700'
                   )}
                 >
@@ -228,46 +207,33 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                       </span>
                     </div>
                     <span className={clsx(
-                      'text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap',
-                      file.status === 'completed' && 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
+                      'text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0',
                       file.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+                      file.status === 'completed' && 'bg-sign-100 text-sign-700 dark:bg-sign-900/40 dark:text-sign-300',
                       file.status !== 'completed' && file.status !== 'error' && 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
                     )}>
                       {getStatusText(file.status)}
                     </span>
                   </div>
                   
-                  {/* Progress bar */}
-                  <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                    <div
-                      className={clsx(
-                        'h-full rounded-full transition-all duration-300',
-                        getStatusColor(file.status)
-                      )}
-                      style={{ width: `${file.progress}%` }}
-                    />
-                  </div>
-                  
-                  {/* Details */}
-                  {(file.pages_total > 0 || file.shapes_detected > 0) && (
-                    <div className="mt-2 flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                      {file.pages_total > 0 && (
-                        <span>
-                          {file.pages_processed}/{file.pages_total} pages
-                        </span>
-                      )}
-                      {file.shapes_detected > 0 && (
-                        <span>
-                          {file.shapes_detected} shapes detected
-                        </span>
-                      )}
+                  {file.status !== 'pending' && file.status !== 'error' && (
+                    <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                      <motion.div
+                        className={clsx('h-full rounded-full', getProcessingStepColor(file.status).bar)}
+                        initial={{ width: 0 }}
+                        animate={{ width: `${file.progress}%` }}
+                        transition={{ duration: 0.3 }}
+                      />
                     </div>
                   )}
                   
-                  {/* Error message */}
                   {file.error && (
-                    <p className="mt-2 text-xs text-red-600 dark:text-red-400">
-                      {file.error}
+                    <p className="mt-2 text-xs text-red-500 dark:text-red-400">{file.error}</p>
+                  )}
+                  
+                  {file.status === 'completed' && file.shapes_detected > 0 && (
+                    <p className="mt-2 text-xs text-sign-600 dark:text-sign-400">
+                      {file.shapes_detected} shapes detected across {file.pages_processed} pages
                     </p>
                   )}
                 </motion.div>
@@ -275,24 +241,18 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
             </div>
           </div>
           
-          {/* Footer */}
-          <div className="p-4 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
-            <button
-              onClick={onClose}
-              className={clsx(
-                'w-full btn',
-                isComplete ? 'btn-primary' : 'btn-secondary'
-              )}
-            >
-              {isComplete 
-                ? (errorCount > 0 ? 'Close & Review' : 'Done')
-                : 'Minimize (processing continues in background)'
-              }
-            </button>
-          </div>
+          {isComplete && (
+            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+              <button
+                onClick={onClose}
+                className="w-full btn btn-primary"
+              >
+                Done
+              </button>
+            </div>
+          )}
         </motion.div>
       </div>
     </AnimatePresence>
   )
 }
-

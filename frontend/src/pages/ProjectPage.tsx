@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import PageContainer from '../components/PageContainer'
 import { motion } from 'framer-motion'
 import { 
   Upload, 
@@ -275,9 +276,9 @@ export default function ProjectPage() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="w-5 h-5 text-emerald-400" />
+        return <CheckCircle className="w-5 h-5 text-sign-500" />
       case 'processing':
-        return <Clock className="w-5 h-5 text-blue-400" />
+        return <Clock className="w-5 h-5 text-sign-400" />
       default:
         return <AlertCircle className="w-5 h-5 text-slate-400" />
     }
@@ -304,18 +305,17 @@ export default function ProjectPage() {
   
   if (!currentProject) {
     return (
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      <PageContainer>
         <p className="text-slate-600 dark:text-slate-400 text-center py-20">Project not found</p>
-      </div>
+      </PageContainer>
     )
   }
   
   const allFloorsCompleted = currentProject.floorplans?.every(fp => fp.status === 'completed')
   
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8">
-      {/* Header */}
-      <div className="mb-8">
+    <PageContainer>
+      <div className="page-header">
         <Link 
           to="/" 
           className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white mb-4 transition-colors"
@@ -339,7 +339,7 @@ export default function ProjectPage() {
                 />
                 <button
                   onClick={handleSaveName}
-                  className="p-1.5 text-emerald-500 hover:text-emerald-400 transition-colors"
+                  className="p-1.5 text-sign-500 hover:text-sign-400 transition-colors"
                 >
                   <Check className="w-5 h-5" />
                 </button>
@@ -396,8 +396,8 @@ export default function ProjectPage() {
         >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
-                <Layers className="w-5 h-5 text-blue-400" />
+              <div className="w-10 h-10 bg-sign-500/20 rounded-lg flex items-center justify-center">
+                <Layers className="w-5 h-5 text-sign-500" />
               </div>
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-white">Floor Plan PDFs</h3>
@@ -412,7 +412,7 @@ export default function ProjectPage() {
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
                   (importTab === 'manual' ? detectionMode : watcherMode) === 'fast'
-                    ? 'bg-amber-500 text-white'
+                    ? 'bg-sign-500 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
               >
@@ -423,7 +423,7 @@ export default function ProjectPage() {
                 className={clsx(
                   'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
                   (importTab === 'manual' ? detectionMode : watcherMode) === 'accurate'
-                    ? 'bg-emerald-500 text-white'
+                    ? 'bg-sign-600 text-white'
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
                 )}
               >
@@ -458,8 +458,8 @@ export default function ProjectPage() {
               <Eye className="w-4 h-4" />
               Folder Watch
               {watcherStatus?.status === 'running' && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-sign-500/15 text-sign-700 dark:bg-sign-500/20 dark:text-sign-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sign-500 animate-pulse" />
                   Running
                 </span>
               )}
@@ -623,7 +623,7 @@ export default function ProjectPage() {
                           <FileText className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />
                           <span className="text-xs text-slate-700 dark:text-slate-300 truncate flex-1" title={f.filename}>{f.filename}</span>
                           {f.status === 'completed' ? (
-                            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400 flex-shrink-0">
+                            <span className="flex items-center gap-1 text-xs text-sign-600 dark:text-sign-400 flex-shrink-0">
                               <CheckCircle className="w-3 h-3" />
                               {f.shapes_detected > 0 ? `${f.shapes_detected} signs` : 'Done'}
                             </span>
@@ -633,7 +633,7 @@ export default function ProjectPage() {
                               Failed
                             </span>
                           ) : (
-                            <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 flex-shrink-0">
+                            <span className="flex items-center gap-1 text-xs text-sign-500 dark:text-sign-400 flex-shrink-0">
                               <Loader2 className="w-3 h-3 animate-spin" />
                               {f.status === 'converting' ? 'Converting' :
                                f.status === 'detecting' ? 'Detecting' :
@@ -710,7 +710,7 @@ export default function ProjectPage() {
                           className={clsx(
                             'ml-auto text-xs font-medium flex-shrink-0 transition-colors',
                             watcherFolder === folderBrowser.current_path
-                              ? 'text-green-600 dark:text-green-400'
+                              ? 'text-sign-600 dark:text-sign-400'
                               : 'text-sign-600 hover:underline'
                           )}
                         >
@@ -729,7 +729,7 @@ export default function ProjectPage() {
                             }}
                             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-left"
                           >
-                            <FolderOpen className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                            <FolderOpen className="w-3.5 h-3.5 text-sign-500 flex-shrink-0" />
                             {f.name}
                           </button>
                         ))
@@ -767,27 +767,27 @@ export default function ProjectPage() {
 
           {/* Watcher status bar — visible on Manual Upload tab when watcher is running */}
           {importTab === 'manual' && watcherStatus?.status === 'running' && (
-            <div className="mt-3 px-3 py-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/40 rounded-lg">
+            <div className="mt-3 px-3 py-2 bg-sign-500/10 dark:bg-sign-500/10 border border-sign-200 dark:border-sign-800/40 rounded-lg">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
-                  <span className="text-xs text-green-700 dark:text-green-400 truncate">
+                  <span className="w-1.5 h-1.5 rounded-full bg-sign-500 animate-pulse flex-shrink-0" />
+                  <span className="text-xs text-sign-700 dark:text-sign-400 truncate">
                     Watching: <span className="font-mono">{watcherStatus.watch_folder}</span>
                   </span>
-                  <span className="text-xs text-green-600/70 dark:text-green-500/70 flex-shrink-0">
+                  <span className="text-xs text-sign-600/70 dark:text-sign-500/70 flex-shrink-0">
                     · {watcherStatus.files_processed} processed
                     {watcherStatus.files_failed > 0 && <span className="text-red-500"> · {watcherStatus.files_failed} failed</span>}
                   </span>
                 </div>
                 <button
                   onClick={() => setImportTab('watcher')}
-                  className="text-xs text-green-600 dark:text-green-400 hover:underline flex-shrink-0 ml-2"
+                  className="text-xs text-sign-600 dark:text-sign-400 hover:underline flex-shrink-0 ml-2"
                 >
                   View details →
                 </button>
               </div>
               {watcherStatus.recent_files && watcherStatus.recent_files.some(f => f.status !== 'completed' && f.status !== 'error') && (
-                <div className="mt-1.5 flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-sign-500 dark:text-sign-400">
                   <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
                   {watcherStatus.recent_files.find(f => f.status !== 'completed' && f.status !== 'error')?.filename}
                   {' — '}
@@ -805,8 +805,8 @@ export default function ProjectPage() {
 
       {/* Info about sign table */}
       {currentProject.floorplans && currentProject.floorplans.length > 0 && (
-        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <p className="text-sm text-blue-200">
+        <div className="mb-6 p-4 bg-sign-500/10 border border-sign-500/30 rounded-lg">
+          <p className="text-sm text-sign-700 dark:text-sign-300">
             <span className="font-medium">Tip:</span> After processing floor plans, visit the Export page to view the auto-generated sign table with all extracted data.
           </p>
         </div>
@@ -865,7 +865,7 @@ export default function ProjectPage() {
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-blueprint-100 dark:bg-blueprint-900 rounded-lg flex items-center justify-center text-blueprint-700 dark:text-blueprint-400 font-mono font-bold">
+                    <div className="w-12 h-12 bg-sign-100 dark:bg-sign-900/40 rounded-lg flex items-center justify-center text-sign-700 dark:text-sign-400 font-mono font-bold">
                       {floorplan.floor_number}
                     </div>
                     
@@ -951,7 +951,7 @@ export default function ProjectPage() {
           </div>
         </motion.button>
       )}
-    </div>
+    </PageContainer>
   )
 }
 

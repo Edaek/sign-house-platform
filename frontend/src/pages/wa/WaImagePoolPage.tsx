@@ -270,7 +270,7 @@ export default function WaImagePoolPage() {
                         )}
                         {!img.projectId && (
                           <div className={`absolute top-2 left-2 h-5 w-5 rounded border-2 flex items-center justify-center transition-colors ${
-                            isSelected ? 'bg-sign-500 border-sign-500' : 'bg-white/80 border-gray-300 group-hover:border-gray-400'
+                            isSelected ? 'bg-sign-500 border-sign-500' : 'bg-white/80 border-slate-300 group-hover:border-slate-400'
                           }`}>
                             {isSelected && <Check className="h-3 w-3 text-white" />}
                           </div>

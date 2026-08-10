@@ -49,7 +49,7 @@ export default function Layout() {
   }
   
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
+    <div className="min-h-screen flex flex-col bg-[var(--color-bg)]">
       {/* Header */}
       <header className="h-16 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-700/50 sticky top-0 z-50">
         <div className="h-full w-full px-4 sm:px-6 lg:px-8 flex items-center justify-between">
@@ -74,10 +74,8 @@ export default function Layout() {
                   key={item.path}
                   to={item.path}
                   className={clsx(
-                    'flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200',
-                    isActive 
-                      ? 'bg-sign-500/20 text-sign-600 dark:text-sign-400' 
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800'
+                    'nav-link',
+                    isActive ? 'nav-link-active' : 'nav-link-inactive'
                   )}
                 >
                   <item.icon className="w-4 h-4" />
@@ -133,10 +131,8 @@ export default function Layout() {
                     to={item.path}
                     onClick={() => setMobileMenuOpen(false)}
                     className={clsx(
-                      'flex items-center gap-3 px-4 py-3 rounded-lg font-medium',
-                      isActive 
-                        ? 'bg-sign-500/20 text-sign-600 dark:text-sign-400' 
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800'
+                      'nav-link px-4 py-3',
+                      isActive ? 'nav-link-active' : 'nav-link-inactive'
                     )}
                   >
                     <item.icon className="w-5 h-5" />
@@ -157,7 +153,7 @@ export default function Layout() {
       {/* Footer - hidden on editor pages */}
       {!location.pathname.includes('/floor/') && (
         <footer className="py-6 border-t border-slate-200 dark:border-slate-800">
-          <div className="max-w-7xl mx-auto px-4 text-center text-slate-500 dark:text-slate-500 text-sm">
+          <div className="page-container py-6 text-center text-slate-500 dark:text-slate-500 text-sm">
             © {new Date().getFullYear()} Sign House. Floor Plan Analysis Tool.
           </div>
         </footer>

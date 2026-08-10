@@ -1,17 +1,26 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useWaStore } from '../../store/waStore'
+import { filterWaProjects } from '../../lib/waProjects'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import clsx from 'clsx'
-import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive } from 'lucide-react'
+import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive, Search } from 'lucide-react'
 
 export default function WaProjectsPage() {
   const { projects, fetchProjects, loading, nasStatus, fetchNasStatus } = useWaStore()
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     fetchProjects()
     fetchNasStatus()
   }, [fetchProjects, fetchNasStatus])
+
+  const filteredProjects = useMemo(
+    () => filterWaProjects(projects, search),
+    [projects, search]
+  )
+
+  const hasSearch = search.trim().length > 0
 
   return (
     <div className="space-y-6">
@@ -19,10 +28,25 @@ export default function WaProjectsPage() {
         <div>
           <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">WA Projects</h1>
           <p className="text-slate-600 dark:text-slate-400 mt-1">
-            {projects.length} active project{projects.length !== 1 ? 's' : ''}
+            {hasSearch
+              ? `${filteredProjects.length} of ${projects.length} project${projects.length !== 1 ? 's' : ''}`
+              : `${projects.length} active project${projects.length !== 1 ? 's' : ''}`}
           </p>
         </div>
         <Link to="/wa/admin/projects" className="btn btn-primary text-sm px-4 py-2">+ New Project</Link>
+      </div>
+
+      <div className="card p-4">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by code, name, location, status..."
+            className="input pl-9 w-full"
+          />
+        </div>
       </div>
 
       {/* NAS Connection Status */}
@@ -78,9 +102,15 @@ export default function WaProjectsPage() {
           <p className="text-slate-500 dark:text-slate-400">No projects yet</p>
           <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Create your first project to get started</p>
         </div>
+      ) : filteredProjects.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <Search className="h-12 w-12 text-slate-300 dark:text-slate-600 mb-4" />
+          <p className="text-slate-500 dark:text-slate-400">No projects match your search</p>
+          <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Try a different code, name, or location</p>
+        </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {projects.map((project) => (
+          {filteredProjects.map((project) => (
             <div key={project.id} className="group card hover:border-slate-400 dark:hover:border-slate-500 transition-colors p-5">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex-1 min-w-0">

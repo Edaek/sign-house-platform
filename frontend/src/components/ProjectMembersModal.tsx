@@ -149,7 +149,7 @@ export default function ProjectMembersModal({
                       </div>
                     </div>
                   </div>
-                  <span className="text-xs px-2.5 py-1 bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 rounded-full font-medium">
+                  <span className="text-xs px-2.5 py-1 bg-sign-500/15 text-sign-700 dark:bg-sign-500/20 dark:text-sign-400 rounded-full font-medium">
                     Owner
                   </span>
                 </div>

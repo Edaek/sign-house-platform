@@ -26,10 +26,9 @@ export default function LoginPage() {
   }
   
   return (
-    <div className="min-h-screen flex">
-      {/* Left Panel - Branding */}
+    <div className="min-h-screen flex bg-[var(--color-bg)]">
       <div className="hidden lg:flex lg:w-1/2 blueprint-bg relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-white/60 to-blueprint-100/80 dark:from-blueprint-950/90 dark:to-blueprint-900/80" />
+        <div className="absolute inset-0 bg-gradient-to-br from-white/70 to-sign-50/80 dark:from-slate-950/90 dark:to-slate-900/80" />
         
         <div className="relative z-10 flex flex-col justify-center px-16">
           <motion.div
@@ -43,11 +42,11 @@ export default function LoginPage() {
               </div>
               <div>
                 <h1 className="text-4xl font-display font-bold text-slate-900 dark:text-white">Sign House</h1>
-                <p className="text-blueprint-700 dark:text-blueprint-300 font-medium">Floor Plan Analysis</p>
+                <p className="text-sign-600 dark:text-sign-400 font-medium">Floor Plan Analysis</p>
               </div>
             </div>
             
-            <p className="text-xl text-slate-700 dark:text-blueprint-200 leading-relaxed max-w-md">
+            <p className="text-xl text-slate-700 dark:text-slate-300 leading-relaxed max-w-md">
               Extract room labels, areas, and data from floor plans using 
               computer vision and OCR technology.
             </p>
@@ -61,20 +60,17 @@ export default function LoginPage() {
           </motion.div>
         </div>
         
-        {/* Decorative elements */}
-        <div className="absolute bottom-0 right-0 w-96 h-96 bg-blueprint-500/10 rounded-full blur-3xl" />
-        <div className="absolute top-20 right-20 w-64 h-64 bg-sign-500/10 rounded-full blur-3xl" />
+        <div className="absolute bottom-0 right-0 w-96 h-96 bg-sign-500/10 rounded-full blur-3xl" />
+        <div className="absolute top-20 right-20 w-64 h-64 bg-sign-400/10 rounded-full blur-3xl" />
       </div>
       
-      {/* Right Panel - Login Form */}
-      <div className="flex-1 flex items-center justify-center p-8 bg-slate-50 dark:bg-slate-900">
+      <div className="flex-1 flex items-center justify-center p-8">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.4 }}
           className="w-full max-w-md"
         >
-          {/* Mobile Logo */}
           <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
             <div className="w-12 h-12 bg-gradient-to-br from-sign-500 to-sign-600 rounded-xl flex items-center justify-center">
               <FolderOpen className="w-6 h-6 text-white" />
@@ -136,7 +132,7 @@ export default function LoginPage() {
                 <motion.div
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-400 text-sm"
+                  className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-600 dark:text-red-400 text-sm"
                 >
                   {error}
                 </motion.div>
@@ -145,7 +141,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="btn btn-primary w-full py-3 flex items-center justify-center gap-2"
+                className="btn btn-primary w-full py-3"
               >
                 {isLoading ? (
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -175,8 +171,7 @@ function Feature({ text }: { text: string }) {
   return (
     <div className="flex items-center gap-3">
       <div className="w-2 h-2 bg-sign-500 rounded-full" />
-      <span className="text-slate-700 dark:text-blueprint-200">{text}</span>
+      <span className="text-slate-700 dark:text-slate-300">{text}</span>
     </div>
   )
 }
-

@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useWaStore } from '../../store/waStore'
+import { filterWaProjects } from '../../lib/waProjects'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import toast from 'react-hot-toast'
-import { Plus, FolderOpen, Trash2 } from 'lucide-react'
+import { Plus, FolderOpen, Trash2, Search } from 'lucide-react'
 
 export default function WaManageProjectsPage() {
   const { projects, fetchProjects, createProject, deleteProject, nasStatus, fetchNasStatus } = useWaStore()
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [stageFilter, setStageFilter] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; code: string } | null>(null)
   const [deleteNasFolder, setDeleteNasFolder] = useState(false)
@@ -17,6 +20,13 @@ export default function WaManageProjectsPage() {
     fetchProjects().then(() => setLoading(false))
     fetchNasStatus()
   }, [fetchProjects, fetchNasStatus])
+
+  const filteredProjects = useMemo(
+    () => filterWaProjects(projects, search, stageFilter || undefined),
+    [projects, search, stageFilter]
+  )
+
+  const hasFilters = search.trim().length > 0 || stageFilter.length > 0
 
   async function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -57,11 +67,41 @@ export default function WaManageProjectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Manage Projects</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">{projects.length} projects</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            {hasFilters
+              ? `${filteredProjects.length} of ${projects.length} projects`
+              : `${projects.length} projects`}
+          </p>
         </div>
         <button onClick={() => setDialogOpen(true)} className="btn btn-primary text-sm px-3 py-1.5 flex items-center gap-1.5">
           <Plus className="h-3.5 w-3.5" />New Project
         </button>
+      </div>
+
+      <div className="card p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by code, name, location, status..."
+              className="input pl-9 w-full"
+            />
+          </div>
+          <select
+            value={stageFilter}
+            onChange={(e) => setStageFilter(e.target.value)}
+            className="input sm:w-40"
+          >
+            <option value="">All stages</option>
+            <option value="planning">Planning</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="hold">On Hold</option>
+          </select>
+        </div>
       </div>
 
       {/* Create dialog */}
@@ -162,6 +202,11 @@ export default function WaManageProjectsPage() {
           <FolderOpen className="h-10 w-10 text-slate-300 dark:text-slate-600 mb-3" />
           <p className="text-sm text-slate-500 dark:text-slate-400">No projects yet</p>
         </div>
+      ) : filteredProjects.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <Search className="h-10 w-10 text-slate-300 dark:text-slate-600 mb-3" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">No projects match your search</p>
+        </div>
       ) : (
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
           <table className="w-full text-sm">
@@ -176,7 +221,7 @@ export default function WaManageProjectsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {projects.map((project) => (
+              {filteredProjects.map((project) => (
                 <tr key={project.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                   <td className="px-4 py-2.5 font-mono font-semibold text-slate-800 dark:text-slate-200">{project.code}</td>
                   <td className="px-4 py-2.5 font-medium text-slate-800 dark:text-slate-200">{project.name}</td>

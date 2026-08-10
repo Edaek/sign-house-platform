@@ -13,8 +13,9 @@ import {
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import { useAuthStore } from '../store/authStore'
+import PageContainer from '../components/PageContainer'
+import StatusBadge from '../components/StatusBadge'
 import toast from 'react-hot-toast'
-import clsx from 'clsx'
 
 export default function DashboardPage() {
   const { projects, fetchProjects, createProject, deleteProject, isLoading } = useProjectStore()
@@ -57,36 +58,23 @@ export default function DashboardPage() {
     setOpenMenu(null)
   }
   
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-      case 'in_progress':
-        return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
-      default:
-        return 'bg-slate-500/20 text-slate-400 border-slate-500/30'
-    }
-  }
-  
   return (
-    <div className="max-w-7xl mx-auto px-4 py-8">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+    <PageContainer>
+      <div className="flex items-center justify-between page-header">
         <div>
-          <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">Projects</h1>
-          <p className="text-slate-600 dark:text-slate-400 mt-1">Manage your floor plan analysis projects</p>
+          <h1 className="page-title">Projects</h1>
+          <p className="page-subtitle">Manage your floor plan analysis projects</p>
         </div>
         
         <button
           onClick={() => setShowNewProject(true)}
-          className="btn btn-primary flex items-center gap-2"
+          className="btn btn-primary"
         >
-          <Plus className="w-5 h-5" />
+          <Plus className="w-4 h-4" />
           New Project
         </button>
       </div>
       
-      {/* New Project Modal */}
       {showNewProject && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <motion.div
@@ -147,38 +135,35 @@ export default function DashboardPage() {
         </div>
       )}
       
-      {/* Loading State */}
       {isLoading && projects.length === 0 && (
         <div className="flex items-center justify-center py-20">
           <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
         </div>
       )}
       
-      {/* Empty State */}
       {!isLoading && projects.length === 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center py-20"
+          className="empty-state"
         >
-          <div className="w-20 h-20 bg-slate-100 dark:bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-6">
-            <FolderOpen className="w-10 h-10 text-slate-400 dark:text-slate-500" />
+          <div className="empty-state-icon">
+            <FolderOpen className="w-8 h-8 text-slate-400 dark:text-slate-500" />
           </div>
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">No projects yet</h2>
-          <p className="text-slate-600 dark:text-slate-400 mb-6 max-w-sm mx-auto">
+          <h2 className="empty-state-title">No projects yet</h2>
+          <p className="empty-state-desc">
             Create your first project to start analyzing floor plans
           </p>
           <button
             onClick={() => setShowNewProject(true)}
             className="btn btn-primary"
           >
-            <Plus className="w-5 h-5 mr-2" />
+            <Plus className="w-4 h-4" />
             Create First Project
           </button>
         </motion.div>
       )}
       
-      {/* Projects Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {projects.map((project, index) => (
           <motion.div
@@ -186,7 +171,7 @@ export default function DashboardPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05 }}
-            className="card group hover:border-slate-600 transition-colors"
+            className="card group hover:border-sign-500/30 dark:hover:border-sign-500/20 transition-colors"
           >
             <div className="p-5">
               <div className="flex items-start justify-between mb-4">
@@ -213,7 +198,7 @@ export default function DashboardPage() {
                       e.preventDefault()
                       setOpenMenu(openMenu === project.id ? null : project.id)
                     }}
-                    className="p-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-700 rounded-lg transition-colors"
+                    className="btn btn-ghost p-2"
                   >
                     <MoreVertical className="w-4 h-4" />
                   </button>
@@ -244,12 +229,7 @@ export default function DashboardPage() {
               </div>
               
               <div className="flex items-center justify-between">
-                <span className={clsx(
-                  'px-3 py-1 text-xs font-medium rounded-full border',
-                  getStatusColor(project.status)
-                )}>
-                  {project.status.replace('_', ' ')}
-                </span>
+                <StatusBadge status={project.status} />
                 
                 <Link
                   to={`/project/${project.id}`}
@@ -263,7 +243,6 @@ export default function DashboardPage() {
           </motion.div>
         ))}
       </div>
-    </div>
+    </PageContainer>
   )
 }
-

@@ -16,6 +16,7 @@ import {
   Loader2
 } from 'lucide-react'
 import api from '../lib/api'
+import PageContainer from '../components/PageContainer'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
 
@@ -343,7 +344,7 @@ export default function DictionaryPage() {
             key={idx}
             className={clsx(
               'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-sm',
-              'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+              'bg-sign-100 text-sign-800 dark:bg-sign-900/40 dark:text-sign-200'
             )}
           >
             {cn}
@@ -362,16 +363,15 @@ export default function DictionaryPage() {
   }
   
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Header */}
-      <div className="mb-8">
+    <PageContainer>
+      <div className="page-header">
         <div className="flex items-center gap-3 mb-2">
           <Book className="h-8 w-8 text-sign-500" />
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
+          <h1 className="page-title">
             Dictionary
           </h1>
         </div>
-        <p className="text-slate-600 dark:text-slate-400">
+        <p className="page-subtitle">
           English-Sign-Chinese dictionary with multiple Chinese translations per word
         </p>
       </div>
@@ -384,11 +384,11 @@ export default function DictionaryPage() {
             <div className="text-sm text-slate-500 dark:text-slate-400">English Words</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
-            <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{stats.total_translations}</div>
+            <div className="text-2xl font-bold text-sign-600 dark:text-sign-400">{stats.total_translations}</div>
             <div className="text-sm text-slate-500 dark:text-slate-400">Chinese Translations</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
-            <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{stats.with_chinese}</div>
+            <div className="text-2xl font-bold text-sign-600 dark:text-sign-400">{stats.with_chinese}</div>
             <div className="text-sm text-slate-500 dark:text-slate-400">With Translations</div>
           </div>
           <div className="bg-white dark:bg-slate-800 rounded-lg p-4 border border-slate-200 dark:border-slate-700">
@@ -410,43 +410,39 @@ export default function DictionaryPage() {
                 placeholder="Search English or Chinese..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-sign-500 dark:bg-slate-700 dark:text-white"
+                className="input pl-10"
               />
             </div>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-sign-500 hover:bg-sign-600 text-white rounded-lg transition-colors"
-            >
+            <button type="submit" className="btn btn-primary">
               Search
             </button>
           </form>
           
-          {/* Actions */}
           <div className="flex gap-2">
             <button
               onClick={() => setShowAddForm(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors"
+              className="btn btn-primary"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Add Entry</span>
             </button>
             <button
               onClick={() => setShowBulkImport(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
+              className="btn btn-secondary"
             >
               <Upload className="w-4 h-4" />
               <span className="hidden sm:inline">Import</span>
             </button>
             <button
               onClick={handleExport}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
+              className="btn btn-secondary"
             >
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">Export</span>
             </button>
             <button
               onClick={() => fetchEntries()}
-              className="p-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
+              className="btn btn-secondary p-2"
             >
               <RefreshCw className="w-5 h-5" />
             </button>
@@ -459,34 +455,34 @@ export default function DictionaryPage() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-4 mb-6 border border-emerald-200 dark:border-emerald-800"
+          className="card p-4 mb-6"
         >
-          <h3 className="font-semibold text-emerald-800 dark:text-emerald-200 mb-3">Add New Entry</h3>
+          <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Add New Entry</h3>
           <div className="space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">English Word</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">English Word</label>
                 <input
                   type="text"
                   placeholder="Enter English word"
                   value={newEnglish}
                   onChange={(e) => setNewEnglish(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">Sign Name/Code</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Sign Name/Code</label>
                 <input
                   type="text"
                   placeholder="Enter sign name (optional)"
                   value={newSign}
                   onChange={(e) => setNewSign(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                  className="input"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">Chinese Translations</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Chinese Translations</label>
               <div className="flex gap-2 mb-2">
                 <input
                   type="text"
@@ -499,12 +495,12 @@ export default function DictionaryPage() {
                       handleAddNewChinese()
                     }
                   }}
-                  className="flex-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-emerald-500 dark:bg-slate-700 dark:text-white"
+                  className="input flex-1"
                 />
                 <button
                   onClick={handleAddNewChinese}
                   type="button"
-                  className="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg transition-colors"
+                  className="btn btn-primary btn-sm"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
@@ -514,7 +510,7 @@ export default function DictionaryPage() {
                   {newChineseList.map((cn, idx) => (
                     <span 
                       key={idx}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-sm bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-sm bg-sign-100 text-sign-800 dark:bg-sign-900/40 dark:text-sign-200"
                     >
                       {cn}
                       <button
@@ -532,7 +528,7 @@ export default function DictionaryPage() {
               <button
                 onClick={handleAdd}
                 disabled={isAdding}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50"
+                className="btn btn-primary"
               >
                 {isAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 Save Entry
@@ -545,7 +541,7 @@ export default function DictionaryPage() {
                   setNewChineseList([])
                   setNewChineseInputField('')
                 }}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
+                className="btn btn-secondary"
               >
                 <X className="w-4 h-4" />
                 Cancel
@@ -560,14 +556,13 @@ export default function DictionaryPage() {
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 mb-6 border border-blue-200 dark:border-blue-800"
+          className="card p-4 mb-6"
         >
-          <h3 className="font-semibold text-blue-800 dark:text-blue-200 mb-3">Import Dictionary</h3>
+          <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Import Dictionary</h3>
           
-          {/* File Upload Section */}
-          <div className="mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border-2 border-dashed border-blue-300 dark:border-blue-700">
+          <div className="mb-4 p-4 bg-slate-50 dark:bg-slate-800/50 rounded-lg border-2 border-dashed border-slate-300 dark:border-slate-600">
             <div className="text-center">
-              <Upload className="w-8 h-8 mx-auto mb-2 text-blue-500" />
+              <Upload className="w-8 h-8 mx-auto mb-2 text-sign-500" />
               <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
                 Upload a CSV file (compatible with export format)
               </p>
@@ -583,7 +578,7 @@ export default function DictionaryPage() {
               <label
                 htmlFor="csv-upload"
                 className={clsx(
-                  "inline-flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors cursor-pointer",
+                  "btn btn-primary cursor-pointer",
                   isImporting && "opacity-50 cursor-not-allowed"
                 )}
               >
@@ -593,29 +588,27 @@ export default function DictionaryPage() {
             </div>
           </div>
           
-          {/* Divider */}
           <div className="flex items-center gap-3 mb-4">
-            <div className="flex-1 border-t border-blue-200 dark:border-blue-700"></div>
-            <span className="text-sm text-blue-500 dark:text-blue-400">or paste data</span>
-            <div className="flex-1 border-t border-blue-200 dark:border-blue-700"></div>
+            <div className="flex-1 border-t border-slate-200 dark:border-slate-700"></div>
+            <span className="text-sm text-slate-500 dark:text-slate-400">or paste data</span>
+            <div className="flex-1 border-t border-slate-200 dark:border-slate-700"></div>
           </div>
           
-          {/* Text Paste Section */}
-          <p className="text-sm text-blue-600 dark:text-blue-400 mb-2">
-            Format: <code className="bg-blue-100 dark:bg-blue-900/40 px-1 rounded">English,Sign,Chinese1;Chinese2</code>
+          <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">
+            Format: <code className="bg-slate-100 dark:bg-slate-700 px-1 rounded">English,Sign,Chinese1;Chinese2</code>
           </p>
           <textarea
             value={bulkData}
             onChange={(e) => setBulkData(e.target.value)}
             placeholder="Exit,EXIT-001,出口;退出&#10;Fire,FIRE-001,火;火災&#10;Emergency,EMERG-001,緊急;急救"
             rows={4}
-            className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:text-white font-mono text-sm"
+            className="input font-mono text-sm"
           />
           <div className="flex gap-2 mt-3">
             <button
               onClick={handleBulkImport}
               disabled={isImporting || !bulkData.trim()}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors disabled:opacity-50"
+              className="btn btn-primary"
             >
               {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
               Import Text
@@ -625,7 +618,7 @@ export default function DictionaryPage() {
                 setShowBulkImport(false)
                 setBulkData('')
               }}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
+              className="btn btn-secondary"
             >
               <X className="w-4 h-4" />
               Cancel
@@ -656,7 +649,7 @@ export default function DictionaryPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/5">
                       English
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-blue-500 dark:text-blue-400 uppercase tracking-wider w-1/5">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-1/5">
                       Sign
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
@@ -692,10 +685,10 @@ export default function DictionaryPage() {
                             value={editSign}
                             onChange={(e) => setEditSign(e.target.value)}
                             placeholder="Sign name"
-                            className="w-full px-2 py-1 border border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-blue-500 dark:bg-slate-700 dark:text-white"
+                            className="w-full px-2 py-1 border border-slate-300 dark:border-slate-600 rounded focus:ring-2 focus:ring-sign-500 dark:bg-slate-700 dark:text-white"
                           />
                         ) : (
-                          <span className="text-blue-600 dark:text-blue-400">
+                          <span className="text-sign-600 dark:text-sign-400">
                             {entry.sign || <span className="text-slate-400 dark:text-slate-500 italic">—</span>}
                           </span>
                         )}
@@ -719,7 +712,7 @@ export default function DictionaryPage() {
                               />
                               <button
                                 onClick={handleAddEditChinese}
-                                className="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors"
+                                className="btn btn-primary btn-sm px-2 py-1"
                               >
                                 <Plus className="w-3 h-3" />
                               </button>
@@ -735,7 +728,7 @@ export default function DictionaryPage() {
                           <div className="flex justify-end gap-2">
                             <button
                               onClick={handleSaveEdit}
-                              className="p-1.5 text-emerald-600 hover:bg-emerald-100 dark:text-emerald-400 dark:hover:bg-emerald-900/30 rounded transition-colors"
+                              className="p-1.5 text-sign-600 hover:bg-sign-100 dark:text-sign-400 dark:hover:bg-sign-900/30 rounded transition-colors"
                               title="Save"
                             >
                               <Check className="w-4 h-4" />
@@ -752,7 +745,7 @@ export default function DictionaryPage() {
                           <div className="flex justify-end gap-2">
                             <button
                               onClick={() => handleEdit(entry)}
-                              className="p-1.5 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded transition-colors"
+                              className="p-1.5 text-sign-600 hover:bg-sign-100 dark:text-sign-400 dark:hover:bg-sign-900/30 rounded transition-colors"
                               title="Edit"
                             >
                               <Edit3 className="w-4 h-4" />
@@ -784,7 +777,7 @@ export default function DictionaryPage() {
                   <button
                     onClick={() => setPage(p => Math.max(1, p - 1))}
                     disabled={page === 1}
-                    className="p-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="btn btn-secondary p-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
@@ -794,7 +787,7 @@ export default function DictionaryPage() {
                   <button
                     onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                     disabled={page === totalPages}
-                    className="p-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="btn btn-secondary p-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -804,6 +797,6 @@ export default function DictionaryPage() {
           </>
         )}
       </div>
-    </div>
+    </PageContainer>
   )
 }

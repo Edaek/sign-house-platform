@@ -1,6 +1,7 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
 import clsx from 'clsx'
+import PageContainer from '../../components/PageContainer'
 import {
   LayoutDashboard,
   FolderOpen,
@@ -47,8 +48,7 @@ export default function WaLayout() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
-      {/* Sub-navigation */}
+    <PageContainer className="py-6">
       <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-1 scrollbar-hide">
         {allNav.map((item) => {
           const active = isActive(item.path, item.exact)
@@ -57,21 +57,18 @@ export default function WaLayout() {
               key={item.path}
               to={item.path}
               className={clsx(
-                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all duration-200',
-                active
-                  ? 'bg-sign-500/20 text-sign-600 dark:text-sign-400'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800'
+                'nav-link',
+                active ? 'nav-link-active' : 'nav-link-inactive'
               )}
             >
-              <item.icon className="h-3.5 w-3.5 shrink-0" />
+              <item.icon className="w-4 h-4 shrink-0" />
               {item.label}
             </Link>
           )
         })}
       </div>
 
-      {/* Page content */}
       <Outlet />
-    </div>
+    </PageContainer>
   )
 }

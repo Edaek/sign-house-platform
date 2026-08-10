@@ -187,10 +187,10 @@ function EditableFloorCountCell({
           onBlur={handleSave}
           onKeyDown={handleKeyDown}
           disabled={isSaving}
-          className="w-full px-2 py-1 text-sm text-center bg-white dark:bg-slate-700 border-2 border-emerald-500 rounded focus:outline-none"
+          className="w-full px-2 py-1 text-sm text-center bg-white dark:bg-slate-700 border-2 border-sign-500 rounded focus:outline-none"
         />
         {isSaving && (
-          <Loader2 className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-emerald-500" />
+          <Loader2 className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-500" />
         )}
       </div>
     )
@@ -199,11 +199,11 @@ function EditableFloorCountCell({
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm text-center hover:bg-emerald-500/10"
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm text-center hover:bg-sign-500/10"
       title="Click to edit"
     >
       {value > 0 ? (
-        <span className="text-emerald-400 font-medium">{value}</span>
+        <span className="text-sign-400 font-medium">{value}</span>
       ) : (
         <span className="text-slate-600">—</span>
       )}
@@ -386,12 +386,12 @@ function EnglishAutocompleteCell({
             onKeyDown={handleKeyDown}
             disabled={isSaving}
             placeholder="Type to search..."
-            className="w-full px-2 py-1 pr-8 text-sm bg-white dark:bg-slate-700 border-2 border-blue-500 rounded focus:outline-none"
+            className="w-full px-2 py-1 pr-8 text-sm bg-white dark:bg-slate-700 border-2 border-sign-500 rounded focus:outline-none"
           />
           {isSearching ? (
-            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-blue-500" />
+            <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-500" />
           ) : (
-            <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-blue-400" />
+            <Search className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-sign-400" />
           )}
         </div>
         
@@ -411,13 +411,13 @@ function EnglishAutocompleteCell({
                 onClick={() => handleSelectSuggestion(suggestion)}
                 className={clsx(
                   'px-3 py-2 cursor-pointer text-sm border-b border-slate-700 last:border-0',
-                  idx === selectedIndex ? 'bg-blue-600/30' : 'hover:bg-slate-700'
+                  idx === selectedIndex ? 'bg-sign-600/30' : 'hover:bg-slate-700'
                 )}
               >
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-white">{suggestion.english}</span>
                   {suggestion.sign && (
-                    <span className="text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-300 rounded">
+                    <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-300 rounded">
                       {suggestion.sign}
                     </span>
                   )}
@@ -438,11 +438,11 @@ function EnglishAutocompleteCell({
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-blue-500/10 border border-transparent hover:border-blue-500/30"
+      className="px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-sign-500/10 border border-transparent hover:border-sign-500/30"
       title="Click to edit with dictionary search"
     >
       {value !== '' ? (
-        <span className="text-blue-300">{value}</span>
+        <span className="text-sign-300">{value}</span>
       ) : (
         <span className="text-slate-500 flex items-center gap-1">
           <Search className="w-3 h-3" />
@@ -543,10 +543,10 @@ function ChineseEditableCell({
           onBlur={handleSave}
           onKeyDown={handleKeyDown}
           disabled={isSaving}
-          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-purple-500 rounded focus:outline-none"
+          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-sign-400 rounded focus:outline-none"
         />
         {isSaving && (
-          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-400" />
         )}
       </div>
     )
@@ -556,11 +556,11 @@ function ChineseEditableCell({
     <div className="flex items-center gap-1">
       <div
         onClick={() => setIsEditing(true)}
-        className="flex-1 px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-purple-500/10 border border-transparent hover:border-purple-500/30"
+        className="flex-1 px-2 py-1.5 cursor-pointer rounded transition-colors min-h-[32px] text-sm hover:bg-sign-400/10 border border-transparent hover:border-sign-400/30"
         title="Click to edit"
       >
         {value !== '' ? (
-          <span className="text-purple-300">{value}</span>
+          <span className="text-sign-200">{value}</span>
         ) : (
           <span className="text-slate-500">—</span>
         )}
@@ -571,7 +571,7 @@ function ChineseEditableCell({
         <button
           onClick={handleSaveToDictionary}
           disabled={isSavingToDict}
-          className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors"
+          className="p-1 rounded hover:bg-sign-500/20 text-sign-400 hover:text-sign-300 transition-colors"
           title="Save to dictionary"
         >
           {isSavingToDict ? (
@@ -584,7 +584,7 @@ function ChineseEditableCell({
       
       {/* Just saved indicator */}
       {justSaved && (
-        <span className="text-emerald-400">
+        <span className="text-sign-400">
           <Check className="w-4 h-4" />
         </span>
       )}
@@ -694,10 +694,10 @@ function ChineseSelectCell({
           onKeyDown={handleKeyDown}
           disabled={isSaving}
           placeholder="Enter new translation..."
-          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-purple-500 rounded focus:outline-none"
+          className="w-full px-2 py-1 text-sm bg-white dark:bg-slate-700 border-2 border-sign-400 rounded focus:outline-none"
         />
         {isSaving && (
-          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+          <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-400" />
         )}
       </div>
     )
@@ -710,7 +710,7 @@ function ChineseSelectCell({
           value={value || ''}
           onChange={(e) => handleSelect(e.target.value)}
           disabled={isSaving}
-          className="w-full px-2 py-1.5 text-sm bg-purple-900/20 border border-purple-500/40 rounded text-purple-200 cursor-pointer appearance-none focus:outline-none hover:bg-purple-900/30"
+          className="w-full px-2 py-1.5 text-sm bg-sign-900/20 border border-sign-400/40 rounded text-sign-200 cursor-pointer appearance-none focus:outline-none hover:bg-sign-900/30"
         >
           {!value && <option value="" disabled>Select translation...</option>}
           {/* Show current value if it's not in options (manual entry) */}
@@ -725,13 +725,13 @@ function ChineseSelectCell({
             </option>
           ))}
           {/* Add new option */}
-          <option value="__add_new__" className="bg-slate-700 text-emerald-400">
+          <option value="__add_new__" className="bg-slate-700 text-sign-400">
             ＋ Add new translation...
           </option>
         </select>
-        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 pointer-events-none" />
+        <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-sign-300 pointer-events-none" />
         {isSaving && (
-          <Loader2 className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-purple-500" />
+          <Loader2 className="absolute right-7 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-sign-400" />
         )}
       </div>
       
@@ -740,7 +740,7 @@ function ChineseSelectCell({
         <button
           onClick={handleSaveToDictionary}
           disabled={isSavingToDict}
-          className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 hover:text-emerald-300 transition-colors"
+          className="p-1 rounded hover:bg-sign-500/20 text-sign-400 hover:text-sign-300 transition-colors"
           title="Save to dictionary"
         >
           {isSavingToDict ? (
@@ -753,7 +753,7 @@ function ChineseSelectCell({
       
       {/* Just saved indicator */}
       {justSaved && (
-        <span className="text-emerald-400">
+        <span className="text-sign-400">
           <Check className="w-4 h-4" />
         </span>
       )}
@@ -788,7 +788,7 @@ function FloorThumbnail({ floorplanId, floorName, signNo, entryId, onClick }: {
   return (
     <button
       onClick={() => onClick(entryId)}
-      className="flex flex-col items-center w-full p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md transition-all group cursor-pointer"
+      className="flex flex-col items-center w-full p-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded hover:border-sign-400 dark:hover:border-sign-500 hover:shadow-md transition-all group cursor-pointer"
     >
       <div className="w-full h-14 bg-slate-100 dark:bg-slate-700 rounded overflow-hidden">
         {src ? (
@@ -880,7 +880,7 @@ function FloorThumbnailCell({ floorplanId, floorName, signNo, count, projectId }
       {entries.length > THUMB_COLLAPSE_LIMIT && (
         <button
           onClick={() => setExpanded(prev => !prev)}
-          className="text-[9px] text-blue-500 dark:text-blue-400 hover:underline cursor-pointer py-0.5"
+          className="text-[9px] text-sign-500 dark:text-sign-400 hover:underline cursor-pointer py-0.5"
         >
           {expanded ? 'Show less' : `+${hiddenCount} more`}
         </button>
@@ -1174,17 +1174,17 @@ function SignTablePreview({
             <th className="px-3 py-2 text-left text-xs font-medium text-slate-300 border-b border-slate-700 min-w-[120px]">
               Sign
             </th>
-            <th className="px-3 py-2 text-left text-xs font-medium text-blue-300 border-b border-slate-700 min-w-[150px] bg-blue-900/20">
+            <th className="px-3 py-2 text-left text-xs font-medium text-sign-300 border-b border-slate-700 min-w-[150px] bg-sign-900/20">
               English
             </th>
-            <th className="px-3 py-2 text-left text-xs font-medium text-purple-300 border-b border-slate-700 min-w-[120px] bg-purple-900/20">
+            <th className="px-3 py-2 text-left text-xs font-medium text-sign-200 border-b border-slate-700 min-w-[120px] bg-sign-900/20">
               Chinese
             </th>
             
             {floorColumnNames.map((name, idx) => (
               <th 
                 key={floorColumns[idx]}
-                className="px-3 py-2 text-center text-xs font-medium text-emerald-300 border-b border-slate-700 min-w-[80px] bg-emerald-900/10"
+                className="px-3 py-2 text-center text-xs font-medium text-sign-300 border-b border-slate-700 min-w-[80px] bg-sign-900/10"
               >
                 {name}
               </th>
@@ -1205,7 +1205,7 @@ function SignTablePreview({
                     className={clsx(
                       'flex items-center gap-1 w-full px-2 py-1 text-xs font-mono rounded transition-colors',
                       hasFloors
-                        ? 'text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer'
+                        ? 'text-sign-600 dark:text-sign-400 hover:bg-sign-50 dark:hover:bg-sign-900/20 cursor-pointer'
                         : 'text-slate-400 dark:text-slate-500 cursor-default'
                     )}
                     disabled={!hasFloors}
@@ -1241,7 +1241,7 @@ function SignTablePreview({
                 </td>
                 
                 {/* English (editable with autocomplete) */}
-                <td className="px-1 py-0.5 bg-blue-50/50 dark:bg-blue-900/5">
+                <td className="px-1 py-0.5 bg-sign-50/50 dark:bg-sign-900/5">
                   <EnglishAutocompleteCell
                     value={row.english}
                     rowNumber={row.row_number}
@@ -1253,7 +1253,7 @@ function SignTablePreview({
                 </td>
                 
                 {/* Chinese (editable, with dropdown for multiple options) */}
-                <td className="px-1 py-0.5 bg-purple-50/50 dark:bg-purple-900/5">
+                <td className="px-1 py-0.5 bg-sign-50/50 dark:bg-sign-900/5">
                   {chineseOptions[row.row_number] && chineseOptions[row.row_number].length > 1 ? (
                     <ChineseSelectCell
                       value={row.chinese}
@@ -1280,7 +1280,7 @@ function SignTablePreview({
                   return (
                     <td 
                       key={`${row.row_number}-${fpId}`}
-                      className="px-1 py-0.5 bg-emerald-50/30 dark:bg-emerald-900/5"
+                      className="px-1 py-0.5 bg-sign-50/30 dark:bg-sign-900/5"
                     >
                       <EditableFloorCountCell
                         value={count}
@@ -1438,20 +1438,20 @@ export default function ExportPage() {
       
       {/* Warning for incomplete floors */}
       {incompleteFoors.length > 0 && (
-        <div className="flex-shrink-0 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 flex items-center gap-2 text-sm">
-          <AlertTriangle className="w-4 h-4 text-amber-400" />
-          <span className="text-amber-200">
+        <div className="flex-shrink-0 px-4 py-2 bg-sign-400/10 border-b border-sign-400/30 flex items-center gap-2 text-sm">
+          <AlertTriangle className="w-4 h-4 text-sign-400" />
+          <span className="text-sign-200">
             {incompleteFoors.length} floor(s) pending: {incompleteFoors.map(f => f.floor_name).join(', ')}
           </span>
         </div>
       )}
       
       {/* Info bar */}
-      <div className="flex-shrink-0 px-4 py-2 bg-blue-500/10 border-b border-blue-500/30 flex items-center gap-2 text-sm">
-        <Search className="w-4 h-4 text-blue-400" />
-        <span className="text-blue-200">
-          Click on <span className="text-blue-300 font-medium">English</span> cells to search the dictionary. 
-          <span className="text-slate-300 ml-1">Sign</span> and <span className="text-purple-300">Chinese</span> auto-fill from matches.
+      <div className="flex-shrink-0 px-4 py-2 bg-sign-500/10 border-b border-sign-500/30 flex items-center gap-2 text-sm">
+        <Search className="w-4 h-4 text-sign-400" />
+        <span className="text-sign-700 dark:text-sign-300">
+          Click on <span className="text-sign-300 font-medium">English</span> cells to search the dictionary. 
+          <span className="text-slate-300 ml-1">Sign</span> and <span className="text-sign-200">Chinese</span> auto-fill from matches.
         </span>
       </div>
       
@@ -1468,7 +1468,7 @@ export default function ExportPage() {
               <h2 className="text-base font-semibold text-white">
                 Sign Table
               </h2>
-              <span className="text-xs px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded">
+              <span className="text-xs px-2 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                 Auto-generated
               </span>
             </div>
@@ -1518,9 +1518,9 @@ export default function ExportPage() {
                       setExportSelectedIdxs(new Set(allFloorColumns.map((_, i) => i)))
                     }
                   }}
-                  className="accent-emerald-500 w-4 h-4 cursor-pointer"
+                  className="accent-sign-500 w-4 h-4 cursor-pointer"
                 />
-                <span className="text-sm font-medium text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-300 transition-colors">
+                <span className="text-sm font-medium text-slate-900 dark:text-white group-hover:text-sign-600 dark:group-hover:text-sign-300 transition-colors">
                   Select All
                 </span>
               </label>
@@ -1543,7 +1543,7 @@ export default function ExportPage() {
                         return next
                       })
                     }}
-                    className="accent-blue-500 w-4 h-4 cursor-pointer"
+                    className="accent-sign-500 w-4 h-4 cursor-pointer"
                   />
                   <span className="text-sm text-slate-700 dark:text-slate-200">{col}</span>
                 </label>
@@ -1565,7 +1565,7 @@ export default function ExportPage() {
                         return next
                       })
                     }}
-                    className="accent-emerald-500 w-4 h-4 cursor-pointer"
+                    className="accent-sign-500 w-4 h-4 cursor-pointer"
                   />
                   <span className="text-sm text-slate-700 dark:text-slate-200">{allFloorColumnNames[idx] ?? _id}</span>
                 </label>
