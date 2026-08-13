@@ -14,6 +14,11 @@ class CVService:
     
     FAST_MODE = 'fast'
     ACCURATE_MODE = 'accurate'
+
+    @staticmethod
+    def _is_portrait(img):
+        h, w = img.shape[:2]
+        return h > w
     
     def __init__(self, mode='accurate'):
         """Initialize CV service with default parameters.
@@ -59,13 +64,13 @@ class CVService:
         
         # Red rectangle detection parameters
         self.red_rect_params = {
-            'min_area': 1400,  # Increased to filter small false positives
+            'min_area': 700,  # Lowered to catch short labels like A1, A7 (~35x20)
             'max_area': 5000,  # Labels are small
-            'min_width': 50,  # Labels are at least ~50px wide
+            'min_width': 30,  # Lowered for 2-char labels like A1 (~30-45px wide)
             'max_width': 115,  # Allow wider labels like S10-122 (~108px)
-            'min_height': 22,  # Labels are at least ~22px tall
+            'min_height': 18,  # Lowered for short labels with thin borders
             'max_height': 38,  # Labels are not too tall
-            'min_aspect_ratio': 1.5,  # Labels are wider than tall (w/h > 1.5)
+            'min_aspect_ratio': 1.2,  # Lowered for short labels (w/h can be ~1.2-1.5)
             'max_aspect_ratio': 4.5,  # Allow wide labels like S10-122
             'approx_epsilon': 0.03,
             # Red color ranges in HSV (red wraps around at 0/180)
@@ -1177,6 +1182,80 @@ class CVService:
 
         return None
 
+    def _detect_bottom_strip(self, img):
+        """Detect a full-width title block strip at the bottom (portrait PDFs).
+
+        Portrait drawings have a horizontal dividing line separating the drawing
+        area from the title block row at the bottom.  This mirrors
+        _detect_right_strip but searches for horizontal lines instead.
+
+        Returns:
+            Tuple (0, y, w, h-y) covering the bottom strip, or None.
+        """
+        h, w = img.shape[:2]
+
+        search_ratio = 0.25
+        search_y = int(h * (1 - search_ratio))
+        region = img[search_y:h, 0:w]
+
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+
+        # Strategy 1: HoughLinesP for near-horizontal lines spanning most of width
+        min_line_len = int(w * 0.75)
+        lines = cv2.HoughLinesP(
+            edges, rho=1, theta=np.pi / 180, threshold=100,
+            minLineLength=min_line_len, maxLineGap=int(w * 0.05)
+        )
+
+        candidates = []
+        if lines is not None:
+            for line in lines:
+                seg = line[0] if line.ndim == 2 else line
+                if seg.shape[0] != 4:
+                    continue
+                x1, y1, x2, y2 = seg
+                dx = abs(x2 - x1)
+                dy = abs(y2 - y1)
+                if dx == 0:
+                    continue
+                angle_deg = np.degrees(np.arctan(dy / dx))
+                if angle_deg > 5:
+                    continue
+                line_y = min(y1, y2)
+                abs_y = search_y + line_y
+                if abs_y < h * 0.75:
+                    continue
+                candidates.append(abs_y)
+
+        if candidates:
+            candidates.sort()
+            for cand_y in candidates:
+                abs_y = max(0, cand_y - 5)
+                strip_ratio = (h - abs_y) / h
+                if 0.08 <= strip_ratio <= 0.25:
+                    logger.debug(f"Bottom strip detected via Hough at y={abs_y} "
+                                 f"({strip_ratio:.1%} height, image {w}x{h})")
+                    return (0, abs_y, w, h - abs_y)
+
+        # Strategy 2: Row edge-density projection
+        row_sum = np.sum(edges > 0, axis=1).astype(float)
+        kernel_size = max(3, int(region.shape[0] * 0.02)) | 1
+        row_smooth = np.convolve(row_sum, np.ones(kernel_size) / kernel_size, mode='same')
+
+        if row_smooth.max() > 0:
+            threshold = row_smooth.mean() + row_smooth.std() * 1.5
+            for ry in range(len(row_smooth)):
+                if row_smooth[ry] >= threshold:
+                    abs_y = max(0, search_y + ry - 5)
+                    strip_ratio = (h - abs_y) / h
+                    if abs_y >= h * 0.75 and 0.08 <= strip_ratio <= 0.25:
+                        logger.debug(f"Bottom strip detected via projection at y={abs_y} "
+                                     f"({strip_ratio:.1%} height, image {w}x{h})")
+                        return (0, abs_y, w, h - abs_y)
+
+        return None
+
     def _detect_drawing_frame(self, img):
         """Detect the drawing frame borders (top and bottom horizontal lines).
 
@@ -1199,8 +1278,10 @@ class CVService:
         top_y = None
         bottom_y = None
 
-        # Detect bottom frame border (search bottom 5% of image)
-        bottom_start = int(h * 0.95)
+        # Portrait: frame bottom border is above the title block (~80-90% of height),
+        # so search a wider band; landscape: border is near the page edge (bottom 5%).
+        bottom_pct = 0.80 if self._is_portrait(img) else 0.95
+        bottom_start = int(h * bottom_pct)
         bottom_search = edges[bottom_start:h, :]
         lines = cv2.HoughLinesP(bottom_search, 1, np.pi / 180, 100,
                                 minLineLength=min_line_len, maxLineGap=30)
@@ -1240,11 +1321,11 @@ class CVService:
         return result
 
     def _detect_title_block(self, img):
-        """Detect the title block region on the right side or bottom-right corner.
+        """Detect the title block region.
 
-        Tries full-height right strip detection first; falls back to the
-        original bottom-right corner rectangle search.  If both fail, uses
-        a conservative fixed 15% right-side strip as a safety net.
+        Landscape: right-side strip or bottom-right corner rectangle.
+        Portrait: full-width bottom strip (title block is at the bottom,
+        rotated 90 deg relative to the drawing content).
 
         Returns:
             Tuple (x, y, w, h) in full image coordinates.
@@ -1254,14 +1335,21 @@ class CVService:
         if hasattr(self, '_title_block_cache') and self._title_block_cache[0] == cache_key:
             return self._title_block_cache[1]
 
-        result = self._detect_right_strip(img)
-        if result is None:
-            result = self._detect_title_block_corner(img)
-
-        if result is None:
-            fallback_x = int(w * 0.85)
-            result = (fallback_x, 0, w - fallback_x, h)
-            logger.info(f"Title block fallback: fixed 20% strip at x={fallback_x} (image {w}x{h})")
+        if self._is_portrait(img):
+            result = self._detect_bottom_strip(img)
+            if result is None:
+                fallback_y = int(h * 0.85)
+                result = (0, fallback_y, w, h - fallback_y)
+                logger.info(f"Title block fallback (portrait): fixed bottom strip at y={fallback_y} "
+                            f"(image {w}x{h})")
+        else:
+            result = self._detect_right_strip(img)
+            if result is None:
+                result = self._detect_title_block_corner(img)
+            if result is None:
+                fallback_x = int(w * 0.85)
+                result = (fallback_x, 0, w - fallback_x, h)
+                logger.info(f"Title block fallback: fixed 20% strip at x={fallback_x} (image {w}x{h})")
 
         self._title_block_cache = (cache_key, result)
         return result
@@ -1705,9 +1793,11 @@ class CVService:
         return best_contour, best_circularity, best_radius
     
     def _analyze_sample_circle(self, img):
-        """Analyze the sample circle in upper-right corner to extract its properties.
-        
-        Tries multiple color channels (blue, red) to find the sample circle.
+        """Analyze the sample circle to extract its properties.
+
+        Landscape: searches the upper-right 15% corner.
+        Portrait: searches the bottom-right 15% corner (title block is at the
+        bottom in portrait drawings, and the sample circle lives there).
         
         Args:
             img: BGR image
@@ -1720,7 +1810,17 @@ class CVService:
         
         search_w = int(w * ratio)
         search_h = int(h * ratio)
-        search_region = img[0:search_h, w - search_w:w]
+
+        if self._is_portrait(img):
+            search_region = img[h - search_h:h, w - search_w:w]
+            offset_x = w - search_w
+            offset_y = h - search_h
+            logger.debug(f"Sample circle search: portrait bottom-right "
+                         f"({offset_x},{offset_y})-({w},{h})")
+        else:
+            search_region = img[0:search_h, w - search_w:w]
+            offset_x = w - search_w
+            offset_y = 0
         
         # Try each color in priority order
         candidates = []
@@ -1746,13 +1846,12 @@ class CVService:
         color_mask = best['color_mask']
         
         (cx_local, cy_local), _ = cv2.minEnclosingCircle(best_contour)
-        # Use moments centroid for more accurate center
         M = cv2.moments(best_contour)
         if M['m00'] > 0:
             cx_local = M['m10'] / M['m00']
             cy_local = M['m01'] / M['m00']
-        cx_full = int(round(cx_local)) + (w - search_w)
-        cy_full = int(round(cy_local))
+        cx_full = int(round(cx_local)) + offset_x
+        cy_full = int(round(cy_local)) + offset_y
         
         # Sample BGR from the colored pixels only (outline), not the filled interior
         # This avoids averaging with white background inside thin-outline circles
@@ -1782,9 +1881,8 @@ class CVService:
         }
     
     def has_sample_circle(self, image_path):
-        """Check if the image has a sample circle in the upper-right corner.
-        
-        Used for auto-detection to decide between circle and rectangle detection.
+        """Check if the image has a sample circle (upper-right for landscape,
+        bottom-right for portrait).
         
         Args:
             image_path: Path to the image file
@@ -2075,7 +2173,7 @@ class CVService:
                 bounding_area = w * h
                 
                 # Label size filter (h min lowered to 14 for thin borders)
-                if w >= 40 and w <= 110 and h >= 14 and h <= 60 and bounding_area >= 600:
+                if w >= 25 and w <= 110 and h >= 14 and h <= 60 and bounding_area >= 400:
                     if bounding_area > 0 and area > 0:
                         rect_ratio = area / bounding_area
                         if rect_ratio >= 0.15:  # Very low threshold for thin border contours
@@ -2120,8 +2218,8 @@ class CVService:
                 if rectangularity < 0.7:  # At least 70% fill
                     continue
             
-            # Duplicate check (very large grid to merge near-duplicates)
-            rect_key = (x // 30, y // 30)
+            # Duplicate check (finer grid to avoid merging small nearby labels)
+            rect_key = (x // 15, y // 15)
             if rect_key in seen_rects:
                 continue
             
@@ -2371,13 +2469,17 @@ class CVService:
         total_pixels = interior.size
         white_ratio = white_pixels / total_pixels
         
-        # Must have enough white (label background)
-        if white_ratio < self.red_rect_params['white_ratio_min']:
+        area = w * h
+        if area < 1500:
+            min_white = 0.40
+        else:
+            min_white = self.red_rect_params['white_ratio_min']
+        max_white = 0.92
+        
+        if white_ratio < min_white:
             return False
         
-        # But not TOO white - valid labels have BLACK text inside
-        # If > 82% white, it's likely empty area or red text (not black)
-        if white_ratio > 0.82:
+        if white_ratio > max_white:
             return False
         
         return True

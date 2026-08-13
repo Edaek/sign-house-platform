@@ -518,19 +518,11 @@ class OCRService:
 
     def extract_title_from_floorplan(self, image_path, x_start_pct=60, y_start_pct=85,
                                      width_pct=40, height_pct=15):
-        """Extract title/sheet information from lower right corner of a floor plan.
+        """Extract title/sheet information from a floor plan image.
 
-        Tries multiple strategies:
-        1. Look for "Sheet Title & Sign No:" field
-        2. Look for "Dwg. No." field
-        3. Fall back to region text
-
-        Args:
-            image_path: Path to the floor plan image file
-            x_start_pct: Percentage from left where title region starts
-            y_start_pct: Percentage from top where title region starts
-            width_pct: Width of title region as percentage
-            height_pct: Height of title region as percentage
+        Landscape: searches the lower-right corner.
+        Portrait: extracts the bottom strip (title block), rotates 90 deg CCW
+        to make its text readable, then searches within the rotated crop.
 
         Returns:
             Cleaned title text string, or None if extraction fails
@@ -543,12 +535,26 @@ class OCRService:
 
         img_height, img_width = img.shape[:2]
 
+        # Portrait handling: title block is at the bottom, text rotated 90 deg CW.
+        # Crop the bottom strip and rotate it so downstream region logic applies.
+        is_portrait = img_height > img_width
+        if is_portrait:
+            bottom_crop = img[int(img_height * 0.85):img_height, 0:img_width]
+            rotated = cv2.rotate(bottom_crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            img = rotated
+            img_height, img_width = img.shape[:2]
+            logger.info(f"Portrait title extraction: rotated bottom strip to {img_width}x{img_height}")
+
         regions_to_try = [
             {'x_pct': 84, 'y_pct': 76, 'w_pct': 15, 'h_pct': 12, 'name': 'sheet_title_primary'},
             {'x_pct': 83, 'y_pct': 75, 'w_pct': 16, 'h_pct': 14, 'name': 'sheet_title_extended'},
             {'x_pct': 84, 'y_pct': 74, 'w_pct': 15, 'h_pct': 15, 'name': 'sheet_title_with_label'},
             {'x_pct': x_start_pct, 'y_pct': y_start_pct, 'w_pct': width_pct, 'h_pct': height_pct, 'name': 'user_default'},
         ]
+        if is_portrait:
+            regions_to_try.append(
+                {'x_pct': 0, 'y_pct': 0, 'w_pct': 100, 'h_pct': 100, 'name': 'full_region_fallback'}
+            )
 
         best_title = None
         best_score = 0
