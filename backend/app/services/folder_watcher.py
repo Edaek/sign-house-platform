@@ -13,6 +13,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Dict, List, Optional
 
 from app import mongo
 from app.services.batch_processor import start_batch_processing
@@ -34,7 +35,7 @@ class _WatcherState:
 
     def __init__(self, thread: threading.Thread, stop_event: threading.Event,
                  project_id: str, watch_folder: str, detection_mode: str,
-                 marker_colors: list[str] | None = None):
+                 marker_colors: Optional[List[str]] = None):
         self.thread = thread
         self.stop_event = stop_event
         self.project_id = project_id
@@ -51,7 +52,7 @@ class FolderWatcherManager:
     """Manages folder-watching threads, one per project."""
 
     def __init__(self):
-        self._watchers: dict[str, _WatcherState] = {}
+        self._watchers: Dict[str, _WatcherState] = {}
         self._lock = threading.Lock()
         self._app = None
         self._upload_folder = ''
@@ -70,14 +71,14 @@ class FolderWatcherManager:
         }
 
     def _watch_loop(self, project_id: str, watch_folder: str,
-                    detection_mode: str, marker_colors: list[str],
+                    detection_mode: str, marker_colors: List[str],
                     stop_event: threading.Event):
         """Main polling loop that scans folder for new PDFs."""
         watch_path = Path(watch_folder)
         processed_dir = watch_path / 'processed'
         processed_dir.mkdir(parents=True, exist_ok=True)
 
-        pending: dict[str, float] = {}
+        pending: Dict[str, float] = {}
 
         logger.info('[watcher:%s] Watching folder: %s', project_id, watch_path)
 
@@ -110,7 +111,7 @@ class FolderWatcherManager:
 
     def _process_file(self, project_id: str, file_path: str,
                       watch_folder: str, detection_mode: str,
-                      marker_colors: list[str], processed_dir: Path):
+                      marker_colors: List[str], processed_dir: Path):
         """Copy PDF into the standard upload tree and kick off batch processing."""
         source = Path(file_path)
         try:
@@ -177,7 +178,7 @@ class FolderWatcherManager:
 
     def start(self, project_id: str, watch_folder: str,
               detection_mode: str = 'accurate',
-              marker_colors: list[str] | None = None):
+              marker_colors: Optional[List[str]] = None):
         marker_colors = marker_colors or list(CVService.MARKER_COLORS)
         with self._lock:
             existing = self._watchers.get(project_id)
