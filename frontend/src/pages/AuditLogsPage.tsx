@@ -1,9 +1,16 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FileText, Search, RefreshCw } from 'lucide-react'
+import { FileText, Search, RefreshCw, ChevronDown } from 'lucide-react'
+import clsx from 'clsx'
 import { useAuthStore } from '../store/authStore'
 import PageContainer from '../components/PageContainer'
-import { getActionColor } from '../lib/theme'
+import {
+  formatAuditDetailValue,
+  formatAuditTimestamp,
+  formatResourceType,
+  formatStatusLabel,
+  getActionColor,
+} from '../lib/theme'
 import api from '../lib/api'
 
 interface AuditLog {
@@ -13,9 +20,39 @@ interface AuditLog {
   action: string
   resource_type?: string
   resource_id?: string
-  details: Record<string, any>
+  details: Record<string, unknown>
   ip_address?: string
   timestamp: string
+}
+
+function EmptyCell() {
+  return <span className="text-slate-400 dark:text-slate-500">—</span>
+}
+
+function AuditDetails({ details }: { details: Record<string, unknown> }) {
+  const entries = Object.entries(details)
+  if (entries.length === 0) return <EmptyCell />
+
+  return (
+    <details className="group">
+      <summary className="flex cursor-pointer list-none items-center gap-1 text-sm font-medium text-sign-600 transition-colors hover:text-sign-500 dark:text-sign-400 dark:hover:text-sign-300 [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-180" />
+        View details
+      </summary>
+      <dl className="mt-2 space-y-1.5 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/60">
+        {entries.map(([key, value]) => (
+          <div key={key} className="grid grid-cols-[minmax(5rem,auto)_1fr] gap-x-3 gap-y-0.5 text-xs">
+            <dt className="font-medium text-slate-500 dark:text-slate-400">
+              {formatStatusLabel(key)}
+            </dt>
+            <dd className="break-all font-mono text-slate-700 dark:text-slate-300">
+              {formatAuditDetailValue(value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  )
 }
 
 export default function AuditLogsPage() {
@@ -30,7 +67,6 @@ export default function AuditLogsPage() {
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
 
-  // Redirect if not admin
   useEffect(() => {
     if (!isAdmin()) {
       navigate('/dashboard')
@@ -86,33 +122,29 @@ export default function AuditLogsPage() {
   return (
     <PageContainer>
       <div className="page-header">
-        <div className="flex items-center gap-3 mb-2">
+        <div className="mb-2 flex items-center gap-3">
           <FileText className="h-8 w-8 text-sign-500" />
-          <h1 className="page-title">
-            Audit Logs
-          </h1>
+          <h1 className="page-title">Audit Logs</h1>
         </div>
-        <p className="page-subtitle">
-          Track all system actions and user activities
-        </p>
+        <p className="page-subtitle">Track all system actions and user activities</p>
       </div>
 
-      <div className="card p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+      <div className="card mb-6 p-6">
+        <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
               Action
             </label>
             <input
               type="text"
-              placeholder="e.g., login, project_created"
+              placeholder="Login, Project Created…"
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
               className="input"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
               Resource Type
             </label>
             <select
@@ -127,7 +159,7 @@ export default function AuditLogsPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
               Start Date
             </label>
             <input
@@ -138,7 +170,7 @@ export default function AuditLogsPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+            <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">
               End Date
             </label>
             <input
@@ -157,7 +189,7 @@ export default function AuditLogsPage() {
           <button onClick={handleReset} className="btn btn-secondary">
             Reset
           </button>
-          <button onClick={fetchLogs} className="btn btn-secondary p-2">
+          <button onClick={fetchLogs} className="btn btn-secondary p-2" aria-label="Refresh">
             <RefreshCw className="h-5 w-5" />
           </button>
         </div>
@@ -178,22 +210,22 @@ export default function AuditLogsPage() {
               <table className="w-full">
                 <thead className="bg-slate-50 dark:bg-slate-700/50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       Timestamp
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       User
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       Action
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       Resource
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       Details
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       IP Address
                     </th>
                   </tr>
@@ -201,47 +233,59 @@ export default function AuditLogsPage() {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                   {logs.map((log) => (
                     <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                      <td className="px-6 py-4 text-sm text-slate-900 dark:text-white whitespace-nowrap">
-                        {new Date(log.timestamp).toLocaleString()}
+                      <td className="whitespace-nowrap px-6 py-4">
+                        <time
+                          dateTime={log.timestamp}
+                          className="text-sm tabular-nums text-slate-700 dark:text-slate-200"
+                        >
+                          {formatAuditTimestamp(log.timestamp)}
+                        </time>
                       </td>
-                      <td className="px-6 py-4 text-sm text-slate-900 dark:text-white">
-                        {log.username || 'Unknown'}
+                      <td className="px-6 py-4">
+                        <span className="text-sm font-medium text-slate-900 dark:text-white">
+                          {log.username || 'Unknown'}
+                        </span>
                       </td>
                       <td className="px-6 py-4">
                         <span
-                          className={`text-xs px-2 py-1 rounded-full font-medium ${getActionColor(log.action)}`}
+                          className={clsx(
+                            'inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium',
+                            getActionColor(log.action),
+                          )}
                         >
-                          {log.action}
+                          {formatStatusLabel(log.action)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-sm text-slate-900 dark:text-white">
+                      <td className="px-6 py-4">
                         {log.resource_type ? (
-                          <div>
-                            <div className="font-medium">{log.resource_type}</div>
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                              {formatResourceType(log.resource_type)}
+                            </span>
                             {log.resource_id && (
-                              <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                                {log.resource_id.substring(0, 8)}...
+                              <div
+                                className="font-mono text-[11px] text-slate-500 dark:text-slate-400"
+                                title={log.resource_id}
+                              >
+                                {log.resource_id}
                               </div>
                             )}
                           </div>
                         ) : (
-                          '-'
+                          <EmptyCell />
                         )}
                       </td>
-                      <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400 max-w-xs truncate">
-                        {Object.keys(log.details).length > 0 ? (
-                          <details className="cursor-pointer">
-                            <summary className="hover:text-sign-600 dark:hover:text-sign-400">View details</summary>
-                            <pre className="mt-2 text-xs bg-slate-100 dark:bg-slate-900 p-2 rounded overflow-x-auto">
-                              {JSON.stringify(log.details, null, 2)}
-                            </pre>
-                          </details>
+                      <td className="max-w-xs px-6 py-4">
+                        <AuditDetails details={log.details} />
+                      </td>
+                      <td className="px-6 py-4">
+                        {log.ip_address ? (
+                          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            {log.ip_address}
+                          </code>
                         ) : (
-                          '-'
+                          <EmptyCell />
                         )}
-                      </td>
-                      <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400 font-mono">
-                        {log.ip_address || '-'}
                       </td>
                     </tr>
                   ))}
@@ -250,21 +294,21 @@ export default function AuditLogsPage() {
             </div>
 
             {totalPages > 1 && (
-              <div className="px-6 py-4 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
+              <div className="flex items-center justify-between border-t border-slate-200 px-6 py-4 dark:border-slate-700">
                 <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Previous
                 </button>
-                <span className="text-sm text-slate-600 dark:text-slate-400">
+                <span className="text-sm tabular-nums text-slate-600 dark:text-slate-400">
                   Page {page} of {totalPages}
                 </span>
                 <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                   disabled={page === totalPages}
-                  className="btn btn-secondary disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Next
                 </button>
@@ -276,4 +320,3 @@ export default function AuditLogsPage() {
     </PageContainer>
   )
 }
-

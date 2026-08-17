@@ -24,9 +24,11 @@ import {
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
 import BatchUploadProgress from '../components/BatchUploadProgress'
+import MarkerColorMenu from '../components/MarkerColorMenu'
 import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import { DEFAULT_MARKER_COLORS, type MarkerColor } from '../lib/markerColors'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -56,6 +58,7 @@ export default function ProjectPage() {
   
   const [isReExtractingTitles, setIsReExtractingTitles] = useState(false)
   const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
+  const [markerColors, setMarkerColors] = useState<MarkerColor[]>(DEFAULT_MARKER_COLORS)
 
   // Import tab & folder watcher state
   const [importTab, setImportTab] = useState<'manual' | 'watcher'>('manual')
@@ -169,7 +172,7 @@ export default function ProjectPage() {
     }
     
     try {
-      const job = await uploadFloorplans(projectId, selectedFiles, detectionMode)
+      const job = await uploadFloorplans(projectId, selectedFiles, detectionMode, markerColors)
       setSelectedFiles([])
       setShowBatchProgress(true)
       toast.success(`Started processing ${job.total_files} PDF files`)
@@ -361,6 +364,11 @@ export default function ProjectPage() {
           </div>
           
           <div className="flex items-center gap-3">
+            <MarkerColorMenu
+              colors={markerColors}
+              onChange={setMarkerColors}
+              variant="toolbar"
+            />
             <button
               onClick={() => setShowMembersModal(true)}
               className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
@@ -431,7 +439,7 @@ export default function ProjectPage() {
               </button>
             </div>
           </div>
-          
+
           {/* Import Mode Tabs */}
           <div className="flex border-b border-slate-200 dark:border-slate-700">
             <button
@@ -744,7 +752,7 @@ export default function ProjectPage() {
                         return
                       }
                       try {
-                        await startWatcher(projectId, watcherFolder.trim(), watcherMode)
+                        await startWatcher(projectId, watcherFolder.trim(), watcherMode, markerColors)
                         toast.success('Folder watcher started')
                       } catch {
                         toast.error('Failed to start watcher')

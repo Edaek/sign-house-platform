@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import traceback
 import logging
 import cv2
@@ -29,6 +30,29 @@ logger = logging.getLogger(__name__)
 processing_bp = Blueprint('processing', __name__)
 
 
+def normalize_marker_colors(raw):
+    """Parse and validate marker color list; default to all preset colors."""
+    if raw is None or raw == '':
+        return list(CVService.MARKER_COLORS)
+
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [part.strip() for part in raw.split(',') if part.strip()]
+
+    if not isinstance(raw, list):
+        raise ValueError('marker_colors must be a list')
+
+    invalid = [c for c in raw if c not in CVService.MARKER_COLORS]
+    if invalid:
+        raise ValueError(f'Invalid marker colors: {invalid}')
+
+    seen = set()
+    normalized = [c for c in raw if not (c in seen or seen.add(c))]
+    return normalized or list(CVService.MARKER_COLORS)
+
+
 def allowed_file(filename, allowed_extensions):
     """Check if file extension is allowed."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
@@ -55,6 +79,40 @@ def detect_shapes(floorplan_id):
     data = request.get_json() or {}
     shape_type = data.get('shape_type', 'auto')
     detection_mode = data.get('mode', 'accurate')  # 'fast' or 'accurate'
+    marker_colors = data.get('marker_colors')
+    color_samples = data.get('color_samples')
+
+    if marker_colors is not None:
+        if not isinstance(marker_colors, list):
+            return jsonify({'error': 'marker_colors must be a list'}), 400
+        invalid = [c for c in marker_colors if c not in CVService.MARKER_COLORS]
+        if invalid:
+            return jsonify({'error': f'Invalid marker colors: {invalid}'}), 400
+        seen = set()
+        marker_colors = [c for c in marker_colors if not (c in seen or seen.add(c))]
+    else:
+        marker_colors = None
+
+    normalized_samples = []
+    if color_samples is not None:
+        if not isinstance(color_samples, list):
+            return jsonify({'error': 'color_samples must be a list'}), 400
+        for sample in color_samples:
+            if not isinstance(sample, dict) or not all(k in sample for k in ('b', 'g', 'r')):
+                return jsonify({'error': 'Each color sample must include b, g, r values'}), 400
+            for channel in ('b', 'g', 'r'):
+                value = sample[channel]
+                if not isinstance(value, (int, float)) or value < 0 or value > 255:
+                    return jsonify({'error': 'Color channel values must be numbers between 0 and 255'}), 400
+            normalized_samples.append({
+                'b': int(sample['b']),
+                'g': int(sample['g']),
+                'r': int(sample['r']),
+                'label': sample.get('label'),
+            })
+
+    if not marker_colors and not normalized_samples:
+        marker_colors = list(CVService.MARKER_COLORS)
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
         return jsonify({'error': 'Floorplan image not found'}), 404
@@ -75,7 +133,15 @@ def detect_shapes(floorplan_id):
 
         stage = 'shape_detection'
         if shape_type == 'circle':
-            shapes = cv_service.detect_circles_by_template(image_path)
+            detect_params = {}
+            if marker_colors is not None:
+                detect_params['marker_colors'] = marker_colors
+            if normalized_samples:
+                detect_params['color_samples'] = normalized_samples
+            shapes = cv_service.detect_circles_by_template(
+                image_path,
+                params=detect_params or None,
+            )
             detected_type = 'circle'
         else:
             shapes = cv_service.detect_red_rectangles(image_path)
@@ -142,15 +208,23 @@ def detect_shapes(floorplan_id):
                         shape['x'], shape['y'], shape['width'], shape['height'],
                         padding=0, label_mode=True, capture_adjacent=False
                     )
-                cleaned = clean_ocr_text(text)
-                if not is_valid_sign_code(cleaned):
-                    continue
+                cleaned = clean_ocr_text(text) if text else ''
+                if not confidence:
+                    confidence = 0.0
 
-            quantity = ocr_service.find_multiplier_near_region(
-                image_path,
-                shape['x'], shape['y'], shape['width'], shape['height'],
-                img=img_for_ocr
+            cleaned, quantity = ocr_service.resolve_quantity(
+                cleaned,
+                image_path=image_path,
+                x=shape['x'],
+                y=shape['y'],
+                width=shape['width'],
+                height=shape['height'],
+                img=img_for_ocr,
             )
+
+            if shape.get('detection_method') != 'learned':
+                if not cleaned or not is_valid_sign_code(cleaned, strict=True):
+                    continue
 
             shape_data = None
             if 'radius' in shape:
@@ -172,7 +246,8 @@ def detect_shapes(floorplan_id):
                 floorplan_id=floorplan_id,
                 shape_data=shape_data
             )
-            doc['extracted_text'] = cleaned
+            doc['extracted_text'] = cleaned or None
+            doc['display_text'] = cleaned or None
             doc['confidence'] = confidence
             doc['quantity'] = quantity
 
@@ -180,9 +255,11 @@ def detect_shapes(floorplan_id):
                 doc['detection_method'] = 'learned'
                 doc['template_id'] = shape.get('template_id')
 
+            if shape.get('marker_color'):
+                doc['marker_color'] = shape['marker_color']
+
             result = mongo.db.extracted_data.insert_one(doc)
             doc['_id'] = result.inserted_id
-            doc['display_text'] = text
             ocr_results.append(doc)
 
         matched_template_ids = set()
@@ -292,30 +369,30 @@ def extract_text(floorplan_id):
                     capture_adjacent=False
                 )
             
-            # Search for multiplier in nearby regions (x2, x3, etc.)
-            quantity = ocr_service.find_multiplier_near_region(
-                floorplan['image_filepath'],
-                data['x'], data['y'], data['width'], data['height']
+            cleaned = clean_ocr_text(text)
+            cleaned, quantity = ocr_service.resolve_quantity(
+                cleaned,
+                image_path=floorplan['image_filepath'],
+                x=data['x'],
+                y=data['y'],
+                width=data['width'],
+                height=data['height'],
             )
-            
-            # Log for debugging
-            if quantity > 1:
-                current_app.logger.info(f"Found multiplier x{quantity} near rectangle at ({data['x']}, {data['y']}): '{text}'")
-            
+
             mongo.db.extracted_data.update_one(
                 {'_id': data['_id']},
                 {'$set': {
-                    'extracted_text': text,
+                    'extracted_text': cleaned,
                     'confidence': confidence,
                     'quantity': quantity,
                     'updated_at': datetime.utcnow()
                 }}
             )
             
-            data['extracted_text'] = text
+            data['extracted_text'] = cleaned
             data['confidence'] = confidence
             data['quantity'] = quantity
-            data['display_text'] = data.get('manual_text') or text
+            data['display_text'] = data.get('manual_text') or cleaned
             results.append(data)
         
         response_results = [serialize_doc(data) for data in results]
@@ -388,14 +465,16 @@ def ocr_manual_region(floorplan_id):
             capture_adjacent=False
         )
         
-        # Search for multiplier in nearby regions
-        quantity = ocr_service.find_multiplier_near_region(
-            floorplan['image_filepath'],
-            int(x), int(y), int(width), int(height)
+        cleaned = clean_ocr_text(text)
+        cleaned, quantity = ocr_service.resolve_quantity(
+            cleaned,
+            image_path=floorplan['image_filepath'],
+            x=int(x),
+            y=int(y),
+            width=int(width),
+            height=int(height),
         )
-        
-        # Log for debugging
-        current_app.logger.info(f"Manual OCR - Text: '{text}' | Quantity: {quantity}")
+        current_app.logger.info(f"Manual OCR - Text: '{cleaned}' | Quantity: {quantity}")
         
         # Get next shape index
         max_doc = mongo.db.extracted_data.find_one(
@@ -415,7 +494,7 @@ def ocr_manual_region(floorplan_id):
             floorplan_id=floorplan_id,
             shape_data=shape_data
         )
-        doc['extracted_text'] = text
+        doc['extracted_text'] = cleaned
         doc['confidence'] = confidence
         doc['quantity'] = quantity
         doc['is_manual'] = True
@@ -423,7 +502,7 @@ def ocr_manual_region(floorplan_id):
         
         result = mongo.db.extracted_data.insert_one(doc)
         doc['_id'] = result.inserted_id
-        doc['display_text'] = text
+        doc['display_text'] = cleaned
         
         # Auto-save as shape template for self-learning
         template_id = None
@@ -1057,13 +1136,18 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
     # Options: 'auto' (auto-detect), 'rectangle' (red rectangles), or 'circle' (template-based circle detection)
     detection_method = request.form.get('detection_method', 'auto')
     batch_mode = request.form.get('detection_mode', 'accurate')
+    try:
+        marker_colors = normalize_marker_colors(request.form.get('marker_colors'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     
     config = {
         'TITLE_REGION_X_START': current_app.config.get('TITLE_REGION_X_START', 60),
         'TITLE_REGION_Y_START': current_app.config.get('TITLE_REGION_Y_START', 85),
         'TITLE_REGION_WIDTH': current_app.config.get('TITLE_REGION_WIDTH', 40),
         'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15),
-        'detection_method': detection_method
+        'detection_method': detection_method,
+        'marker_colors': marker_colors,
     }
     
     start_batch_processing(

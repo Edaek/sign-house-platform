@@ -156,7 +156,11 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 
                 detect_t0 = _time.time()
                 if detection_method == 'circle':
-                    shapes = cv_service.detect_circles_by_template(page_info['image_path'])
+                    marker_colors = config.get('marker_colors') or list(CVService.MARKER_COLORS)
+                    shapes = cv_service.detect_circles_by_template(
+                        page_info['image_path'],
+                        params={'marker_colors': marker_colors},
+                    )
                     shape_type = 'circle'
                 else:
                     shapes = cv_service.detect_red_rectangles(page_info['image_path'])
@@ -236,11 +240,14 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 if not is_valid_sign_code(cleaned):
                                     continue
 
-                            quantity = ocr_service.find_multiplier_near_region(
-                                page_info['image_path'],
-                                shape['x'], shape['y'],
-                                shape['width'], shape['height'],
-                                img=page_img
+                            cleaned, quantity = ocr_service.resolve_quantity(
+                                cleaned,
+                                image_path=page_info['image_path'],
+                                x=shape['x'],
+                                y=shape['y'],
+                                width=shape['width'],
+                                height=shape['height'],
+                                img=page_img,
                             )
                             
                             shape_data = None

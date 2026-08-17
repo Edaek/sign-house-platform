@@ -6,6 +6,7 @@ from bson import ObjectId
 
 from app import mongo
 from app.services.folder_watcher import watcher_manager
+from app.api.processing import normalize_marker_colors
 
 watcher_bp = Blueprint('watcher', __name__)
 
@@ -33,6 +34,10 @@ def start_watcher():
     project_id = data.get('project_id')
     watch_folder = data.get('watch_folder', '')
     detection_mode = data.get('detection_mode', 'accurate')
+    try:
+        marker_colors = normalize_marker_colors(data.get('marker_colors'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     if not project_id or not watch_folder:
         return jsonify({'error': 'project_id and watch_folder are required'}), 400
@@ -41,7 +46,7 @@ def start_watcher():
     if not project:
         return jsonify({'error': 'Project not found'}), 404
 
-    started = watcher_manager.start(project_id, watch_folder, detection_mode)
+    started = watcher_manager.start(project_id, watch_folder, detection_mode, marker_colors)
     if not started:
         return jsonify({'message': 'Watcher already running', 'status': 'running'}), 200
 
@@ -50,6 +55,7 @@ def start_watcher():
         {'$set': {
             'watcher_folder': watch_folder,
             'watcher_detection_mode': detection_mode,
+            'watcher_marker_colors': marker_colors,
         }}
     )
 
@@ -58,6 +64,7 @@ def start_watcher():
         'status': 'running',
         'watch_folder': watch_folder,
         'detection_mode': detection_mode,
+        'marker_colors': marker_colors,
     }), 200
 
 

@@ -19,11 +19,18 @@ import {
   Loader2,
   Scissors,
   Layers,
+  PanelRightOpen,
+  PanelRightClose,
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
+import MarkerColorMenu from '../components/MarkerColorMenu'
 import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import {
+  DEFAULT_MARKER_COLORS,
+  type MarkerColor,
+} from '../lib/markerColors'
 
 interface DrawingRect {
   startX: number
@@ -69,6 +76,8 @@ export default function EditorPage() {
   const [tool, setTool] = useState<'select' | 'draw' | 'draw-circle' | 'crop'>('select')
   const [shapeType, setShapeType] = useState<'auto' | 'circle' | 'rectangle'>('auto')
   const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
+  const [markerColors, setMarkerColors] = useState<MarkerColor[]>(DEFAULT_MARKER_COLORS)
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
@@ -212,8 +221,10 @@ export default function EditorPage() {
         const isLearned = shape.detection_method === 'learned'
         const isMultiple = (shape.quantity || 1) > 1
         
-        const defaultStroke = isMultiple ? '#10b981' : isLearned ? '#f59e0b' : '#3b9df6'
-        const defaultFill = isMultiple ? 'rgba(16, 185, 129, 0.1)' : isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)'
+        const defaultStroke = isMultiple ? '#10b981' : (isLearned ? '#f59e0b' : '#3b9df6')
+        const defaultFill = isMultiple
+          ? 'rgba(16, 185, 129, 0.1)'
+          : (isLearned ? 'rgba(245, 158, 11, 0.1)' : 'rgba(59, 157, 246, 0.1)')
 
         if (isFlashing) {
           const pulse = Math.sin(flashPhaseRef.current * 0.014) * 0.5 + 0.5
@@ -253,8 +264,7 @@ export default function EditorPage() {
         
         ctx.fillStyle = isSelected || isFlashing ? '#ed751d' : defaultStroke
         ctx.font = `bold ${14 / scale}px sans-serif`
-        const label = isMultiple ? `${index + 1} ×${shape.quantity}` : `${index + 1}`
-        ctx.fillText(label, shape.x + 4, shape.y + 16)
+        ctx.fillText(`${index + 1}`, shape.x + 4, shape.y + 16)
       })
     }
     
@@ -539,11 +549,17 @@ export default function EditorPage() {
   // Actions
   const handleDetectShapes = async () => {
     if (!floorId || isDetectingShapes) return
+
+    if (markerColors.length === 0) {
+      toast.error('请至少选择一种 Marker color')
+      return
+    }
     
     setIsDetectingShapes(true)
     try {
-      await detectShapes(floorId, shapeType, detectionMode)
-      toast.success('Shapes detected!')
+      await detectShapes(floorId, shapeType, detectionMode, markerColors)
+      const count = useProjectStore.getState().currentFloorplan?.extracted_data?.length ?? 0
+      toast.success(`检测完成，共 ${count} 个标识`)
     } catch (err: any) {
       const detail = err?.response?.data?.error || 'Shape detection failed'
       const stage = err?.response?.data?.stage
@@ -849,18 +865,28 @@ export default function EditorPage() {
           </Link>
         </div>
         
-        <button
-          onClick={handleMarkComplete}
-          className="btn btn-primary text-sm"
-        >
-          <Check className="w-4 h-4 mr-1" />
-          Mark Complete
-        </button>
+        <div className="flex items-center gap-2">
+          <MarkerColorMenu colors={markerColors} onChange={setMarkerColors} />
+          <button
+            onClick={() => setRightPanelOpen((open) => !open)}
+            className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white transition-colors"
+            title={rightPanelOpen ? 'Hide detection panel' : 'Show detection panel'}
+          >
+            {rightPanelOpen ? <PanelRightClose className="w-5 h-5" /> : <PanelRightOpen className="w-5 h-5" />}
+          </button>
+          <button
+            onClick={handleMarkComplete}
+            className="btn btn-primary text-sm"
+          >
+            <Check className="w-4 h-4 mr-1" />
+            Mark Complete
+          </button>
+        </div>
       </div>
       
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-w-0">
         {/* Toolbar */}
-        <div className="w-14 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 flex flex-col items-center py-4 gap-2">
+        <div className="w-14 shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 flex flex-col items-center py-4 gap-2">
           <button
             onClick={() => setTool('select')}
             className={clsx(
@@ -935,7 +961,7 @@ export default function EditorPage() {
         {/* Canvas Area */}
         <div 
           ref={containerRef}
-          className="flex-1 relative overflow-hidden bg-slate-50 dark:bg-slate-900"
+          className="flex-1 min-w-0 relative overflow-hidden bg-slate-50 dark:bg-slate-900"
         >
           <canvas
             ref={canvasRef}
@@ -981,7 +1007,8 @@ export default function EditorPage() {
         </div>
         
         {/* Right Panel */}
-        <div className="w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col">
+        {rightPanelOpen && (
+        <div className="w-80 shrink-0 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col min-h-0 overflow-hidden">
           {/* Crop Mode Panel */}
           {(tool === 'crop' || cropRegions.length > 0) && (
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-sign-50 dark:bg-sign-950/30">
@@ -1416,6 +1443,7 @@ export default function EditorPage() {
             </div>
           </div>
         </div>
+        )}
       </div>
       
       {/* Delete Confirmation Modal */}

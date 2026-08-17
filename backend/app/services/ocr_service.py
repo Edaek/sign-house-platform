@@ -24,7 +24,7 @@ _REJECT_WORDS = frozenset({
     'utility', 'master', 'common', 'typical', 'plan',
     'elevation', 'section', 'detail', 'note', 'ref',
     'ac', 'db', 'dp', 'up', 'dn', 'fl', 'rm',
-    'no', 'nr', 'wc', 'tv', 'tel', 'rev',
+    'no', 'nr', 'wc', 'tv', 'tel', 'rev', 'x',
 })
 
 
@@ -76,6 +76,7 @@ def is_valid_sign_code(text, strict=False):
       1. Empty / whitespace-only  -> False  (nothing readable)
       2. Matches SIGN_CODE_PATTERN -> True
       -- strict mode stops here (+ letter+digit heuristic) --
+      2b. 2–4 pure uppercase letters (e.g. WMC, CMC), not in reject list -> True
       3. 3+ words                 -> False
       4. Contains a known non-sign word -> False
       5. 2 words AND >12 chars    -> False
@@ -94,9 +95,10 @@ def is_valid_sign_code(text, strict=False):
         return False
 
     if re.match(r'^[A-Z]{1,4}$', cleaned):
-        if cleaned.lower() not in _REJECT_WORDS:
-            if strict or len(cleaned) >= 2:
-                return True
+        if cleaned.lower() not in _REJECT_WORDS and len(cleaned) >= 2:
+            return True
+        if strict and len(cleaned) == 1:
+            return False
 
     if strict and len(cleaned) < 2:
         return False
@@ -281,6 +283,33 @@ class OCRService:
 
         return denoised
 
+    def _preprocess_red_multiplier(self, image):
+        """Isolate red multiplier annotations (x2, x3) for OCR."""
+        img = image.copy()
+        h, w = img.shape[:2]
+        if h < 2 or w < 2:
+            return img
+
+        if len(img.shape) == 3:
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            lower_red1 = np.array([0, 50, 50])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([170, 50, 50])
+            upper_red2 = np.array([180, 255, 255])
+            red_mask = cv2.bitwise_or(
+                cv2.inRange(hsv, lower_red1, upper_red1),
+                cv2.inRange(hsv, lower_red2, upper_red2),
+            )
+            gray = np.full((h, w), 255, dtype=np.uint8)
+            gray[red_mask > 0] = 0
+        else:
+            gray = img.copy()
+
+        scale_factor = max(4, 120 / max(h, 1))
+        scaled = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor,
+                            interpolation=cv2.INTER_CUBIC)
+        return scaled
+
     def _preprocess_label(self, image):
         """Specialized preprocessing for label boxes with red borders."""
         img = image.copy()
@@ -325,7 +354,7 @@ class OCRService:
         h, w = image.shape[:2]
         cx, cy = w // 2, h // 2
 
-        inner_radius = max(5, int(radius * 0.98))
+        inner_radius = max(5, int(radius * 0.82))
         circle_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(circle_mask, (cx, cy), inner_radius, 255, -1)
 
@@ -459,37 +488,100 @@ class OCRService:
 
         return self.extract_text(region, label_mode=label_mode)
 
+    def _parse_multiplier_text(self, text):
+        """Return (quantity, is_standalone) from OCR text, or (None, False)."""
+        if not text or not text.strip():
+            return None, False
+
+        normalized = _normalize_unicode_punctuation(text.strip())
+        normalized = normalized.replace('*', 'x')
+        compact = re.sub(r'\s+', '', normalized)
+
+        multiplier_pattern = re.compile(r'[xX\u00d7]\s*(\d+)')
+        standalone_pattern = re.compile(r'^[xX\u00d7]\d+$', re.IGNORECASE)
+
+        match = multiplier_pattern.search(compact)
+        if not match:
+            match = multiplier_pattern.search(normalized)
+        if not match:
+            return None, False
+
+        qty = int(match.group(1))
+        if qty <= 1 or qty > 9:
+            return None, False
+
+        is_standalone = bool(standalone_pattern.match(compact))
+        if not is_standalone and len(compact) > 8:
+            return None, False
+
+        return qty, is_standalone
+
     def find_multiplier_near_region(self, image_path, x, y, width, height,
                                     search_distance=None, img=None):
         """Search for multiplier text (x2, x3, etc.) near a rectangular region.
 
+        Uses a narrow search strip so neighboring sign codes do not share one
+        multiplier annotation (common when circles are clustered).
+
         Args:
             image_path: Path to the image file
             x, y, width, height: Region coordinates of the main rectangle
-            search_distance: How far to search (defaults to max(width, height))
+            search_distance: How far to search outward from the shape edge
             img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
             Integer quantity (1 if no multiplier found)
         """
-        import re
-
         if img is None:
             img = cv2.imread(image_path)
             if img is None:
                 return 1
 
+        shape_size = max(width, height, 1)
         if search_distance is None:
-            search_distance = max(width, height)
+            search_distance = max(20, min(int(shape_size * 1.2), 55))
+
+        h_pad = max(15, int(shape_size * 0.65))
+        top_dist = min(max(search_distance, int(shape_size * 1.1)), y)
+        side_dist = max(10, min(search_distance, 35))
 
         search_regions = [
-            {'x': x + width, 'y': y, 'width': search_distance, 'height': height, 'name': 'right'},
-            {'x': max(0, x - search_distance), 'y': y, 'width': min(search_distance, x), 'height': height, 'name': 'left'},
-            {'x': x, 'y': max(0, y - search_distance), 'width': width, 'height': min(search_distance, y), 'name': 'top'},
-            {'x': x, 'y': y + height, 'width': width, 'height': search_distance, 'name': 'bottom'},
+            {
+                'x': x - h_pad,
+                'y': max(0, y - top_dist),
+                'width': width + h_pad * 2,
+                'height': top_dist,
+                'name': 'top',
+                'priority': 0,
+            },
+            {
+                'x': x + width,
+                'y': y,
+                'width': side_dist,
+                'height': height,
+                'name': 'right',
+                'priority': 1,
+            },
+            {
+                'x': max(0, x - side_dist),
+                'y': y,
+                'width': min(side_dist, x),
+                'height': height,
+                'name': 'left',
+                'priority': 2,
+            },
+            {
+                'x': x - h_pad,
+                'y': y + height,
+                'width': width + h_pad * 2,
+                'height': side_dist,
+                'name': 'bottom',
+                'priority': 3,
+            },
         ]
 
-        multiplier_pattern = re.compile(r'[xX\u00d7*]\s*(\d+)')
+        best_qty = None
+        best_score = float('inf')
 
         for region_def in search_regions:
             rx, ry, rw, rh = region_def['x'], region_def['y'], region_def['width'], region_def['height']
@@ -506,15 +598,63 @@ class OCRService:
             if search_img.size == 0:
                 continue
 
-            try:
-                text, confidence = self.extract_text(search_img, preprocess=True, label_mode=False)
-                match = multiplier_pattern.search(text)
-                if match:
-                    return int(match.group(1))
-            except Exception:
-                continue
+            preprocessors = [
+                ('red', self._preprocess_red_multiplier(search_img)),
+                ('plain', self.preprocess_for_ocr(search_img, label_mode=False)),
+            ]
 
-        return 1
+            for _mode, processed in preprocessors:
+                try:
+                    texts, scores = self._run_ocr(processed, fast=True)
+                    if not texts:
+                        continue
+
+                    for idx, line in enumerate(texts):
+                        if not line or not line.strip():
+                            continue
+
+                        qty, is_standalone = self._parse_multiplier_text(line)
+                        if qty is None:
+                            continue
+
+                        line_conf = scores[idx] if idx < len(scores) else 0.0
+                        score = (
+                            region_def['priority']
+                            + (0 if is_standalone else 5)
+                            - min(line_conf, 0.99)
+                        )
+                        if score < best_score:
+                            best_score = score
+                            best_qty = qty
+                except Exception:
+                    continue
+
+        return best_qty if best_qty is not None else 1
+
+    def resolve_quantity(
+        self,
+        cleaned_text,
+        image_path=None,
+        x=None,
+        y=None,
+        width=None,
+        height=None,
+        img=None,
+        **_kwargs,
+    ):
+        """Strip multiplier text from sign code and resolve quantity from text or nearby xN."""
+        text, embedded_qty = self.parse_quantity(cleaned_text or '')
+        text = clean_ocr_text(text.strip()) if text else (cleaned_text or '').strip()
+
+        quantity = max(1, embedded_qty)
+        if quantity <= 1 and image_path is not None and None not in (x, y, width, height):
+            nearby = self.find_multiplier_near_region(
+                image_path, int(x), int(y), int(width), int(height), img=img,
+            )
+            if nearby > 1:
+                quantity = nearby
+
+        return text or (cleaned_text or '').strip(), quantity
 
     def extract_title_from_floorplan(self, image_path, x_start_pct=60, y_start_pct=85,
                                      width_pct=40, height_pct=15):

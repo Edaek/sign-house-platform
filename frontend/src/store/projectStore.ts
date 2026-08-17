@@ -43,6 +43,7 @@ interface ExtractedData {
   display_text: string | null
   detection_method?: 'auto' | 'manual' | 'learned'
   template_id?: string | null
+  marker_color?: 'red' | 'blue' | 'yellow' | string | null
   _template_saved?: boolean
 }
 
@@ -164,7 +165,7 @@ interface ProjectState {
   
   uploadTemplate: (projectId: string, file: File) => Promise<void>
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
-  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate') => Promise<BatchUploadJob>
+  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
   clearBatchJob: () => void
@@ -174,7 +175,12 @@ interface ProjectState {
   deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   splitFloorplan: (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal?: boolean) => Promise<FloorPlan[]>
   
-  detectShapes: (floorplanId: string, shapeType?: string, mode?: 'fast' | 'accurate') => Promise<ExtractedData[]>
+  detectShapes: (
+    floorplanId: string,
+    shapeType?: string,
+    mode?: 'fast' | 'accurate',
+    markerColors?: Array<'red' | 'blue' | 'yellow'>,
+  ) => Promise<ExtractedData[]>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
@@ -184,7 +190,7 @@ interface ProjectState {
   deleteShapeTemplate: (templateId: string) => Promise<void>
   toggleShapeTemplate: (templateId: string, isActive: boolean) => Promise<void>
 
-  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string) => Promise<void>
+  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string, markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<void>
   stopWatcher: (projectId: string) => Promise<void>
   fetchWatcherStatus: (projectId: string) => Promise<void>
   browseFolders: (path?: string) => Promise<{ current_path: string; parent_path: string | null; folders: { name: string; path: string }[] }>
@@ -296,7 +302,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate') => {
+  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     set({ isBatchUploading: true, error: null })
 
     const formData = new FormData()
@@ -304,6 +310,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       formData.append('files', file)
     })
     formData.append('detection_mode', detectionMode)
+    formData.append('marker_colors', JSON.stringify(markerColors))
     
     try {
       const response = await api.post(`/processing/batch-upload/${projectId}`, formData, {
@@ -458,10 +465,26 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  detectShapes: async (floorplanId: string, shapeType: string = 'auto', mode: 'fast' | 'accurate' = 'accurate') => {
+  detectShapes: async (
+    floorplanId: string,
+    shapeType: string = 'auto',
+    mode: 'fast' | 'accurate' = 'accurate',
+    markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'],
+  ) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await api.post(`/processing/detect/${floorplanId}`, { shape_type: shapeType, mode })
+      const payload: {
+        shape_type: string
+        mode: 'fast' | 'accurate'
+        marker_colors?: Array<'red' | 'blue' | 'yellow'>
+      } = {
+        shape_type: shapeType,
+        mode,
+      }
+      if (markerColors.length > 0) {
+        payload.marker_colors = markerColors
+      }
+      const response = await api.post(`/processing/detect/${floorplanId}`, payload)
       const shapes = response.data.shapes
       
       // Update current floorplan with detected shapes
@@ -595,12 +618,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate') => {
+  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     try {
       await api.post('/watcher/start', {
         project_id: projectId,
         watch_folder: watchFolder,
         detection_mode: detectionMode,
+        marker_colors: markerColors,
       })
       const response = await api.get(`/watcher/status/${projectId}`)
       set({ watcherStatus: response.data })
