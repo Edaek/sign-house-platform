@@ -25,6 +25,7 @@ _REJECT_WORDS = frozenset({
     'elevation', 'section', 'detail', 'note', 'ref',
     'ac', 'db', 'dp', 'up', 'dn', 'fl', 'rm',
     'no', 'nr', 'wc', 'tv', 'tel', 'rev',
+    'li', 'jc', 'le', 'hf',
 })
 
 
