@@ -17,6 +17,9 @@ SIGN_CODE_PATTERN = re.compile(
     r'^[A-Z][a-zA-Z]{0,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
 )
 
+# Standalone x2 / ×3 only — do not match the X2 inside sign codes like EX2, EX4.
+MULTIPLIER_PATTERN = re.compile(r'(?<![A-Za-z])[xX\u00d7*]\s*(\d+)')
+
 _REJECT_WORDS = frozenset({
     'flat', 'type', 'room', 'living', 'bedroom', 'kitchen',
     'toilet', 'bath', 'hall', 'lobby', 'corridor', 'stair',
@@ -25,7 +28,10 @@ _REJECT_WORDS = frozenset({
     'elevation', 'section', 'detail', 'note', 'ref',
     'ac', 'db', 'dp', 'up', 'dn', 'fl', 'rm',
     'no', 'nr', 'wc', 'tv', 'tel', 'rev',
-    'li', 'jc', 'le', 'hf',
+    'li', 'jc', 'le', 'hf', 'lf', 'lft',
+    'fo', 'cf', 'ab', '1c', 'in', 'its', 'for', 'at', 'pa', 'ci',
+    'vl', '2n', 'fof', 'jn', 'on', 'un', 'is', 'pl', 'vc', 'or',
+    'poi', '10h',
 })
 
 
@@ -92,6 +98,15 @@ def is_valid_sign_code(text, strict=False):
 
     cleaned = clean_ocr_text(text)
     if not cleaned:
+        return False
+
+    if cleaned.lower() in _REJECT_WORDS:
+        return False
+
+    # Gray lift labels OCR as "NO.1" / "NO-2", which match SIGN_CODE_PATTERN.
+    # Only reject that pattern — do not treat every reject word as a prefix,
+    # or real codes like WC1 / IN2 / FO3 get dropped.
+    if re.fullmatch(r'NO[.\-]?\d+', cleaned, flags=re.IGNORECASE):
         return False
 
     if re.match(r'^[A-Z]{1,4}$', cleaned):
@@ -460,6 +475,155 @@ class OCRService:
 
         return self.extract_text(region, label_mode=label_mode)
 
+    @staticmethod
+    def _multiplier_search_regions(x, y, width, height, d):
+        """Halo first so a clipped diagonal 'x2' is not read as '2', then
+        cardinal strips and four diagonal squares around the sign box."""
+        return [
+            (x - d, y - d, width + 2 * d, height + 2 * d),
+            (x + width, y, d, height),
+            (x - d, y, d, height),
+            (x, y - d, width, d),
+            (x, y + height, width, d),
+            (x + width, y - d, d, d),
+            (x + width, y + height, d, d),
+            (x - d, y - d, d, d),
+            (x - d, y + height, d, d),
+        ]
+
+    @staticmethod
+    def _sign_center(sign):
+        if sign.get('center_x') is not None and sign.get('center_y') is not None:
+            return float(sign['center_x']), float(sign['center_y'])
+        shape_data = sign.get('shape_data') or {}
+        if shape_data.get('center_x') is not None and shape_data.get('center_y') is not None:
+            return float(shape_data['center_x']), float(shape_data['center_y'])
+        return (
+            float(sign['x']) + float(sign['width']) / 2.0,
+            float(sign['y']) + float(sign['height']) / 2.0,
+        )
+
+    @staticmethod
+    def _point_inside_sign(cx, cy, sign, inset=0.15):
+        x, y, w, h = sign['x'], sign['y'], sign['width'], sign['height']
+        pad_x = w * inset
+        pad_y = h * inset
+        return (x + pad_x) <= cx <= (x + w - pad_x) and (y + pad_y) <= cy <= (y + h - pad_y)
+
+    def _multiplier_hits_from_crop(self, crop, origin_x, origin_y, pattern):
+        """OCR a crop and return x2 hits in image coordinates."""
+        hits = []
+        try:
+            texts, _scores, boxes = self._run_ocr_with_boxes(crop)
+        except Exception:
+            texts, boxes = [], []
+
+        for text, box in zip(texts, boxes):
+            match = pattern.search(text or '')
+            if not match:
+                continue
+            hits.append({
+                'cx': origin_x + box['x'] + box['width'] / 2.0,
+                'cy': origin_y + box['y'] + box['height'] / 2.0,
+                'qty': int(match.group(1)),
+            })
+
+        if not hits:
+            try:
+                text, _ = self.extract_text(crop, preprocess=True, label_mode=False)
+                match = pattern.search(text or '')
+                if match:
+                    hits.append({
+                        'cx': origin_x + crop.shape[1] / 2.0,
+                        'cy': origin_y + crop.shape[0] / 2.0,
+                        'qty': int(match.group(1)),
+                    })
+            except Exception:
+                pass
+        return hits
+
+    def _collect_multiplier_hits(self, img, x, y, width, height, pattern):
+        """OCR the 8 neighbor windows and return x2 locations."""
+        d = max(width, height)
+        hits = []
+        for rx, ry, rw, rh in self._multiplier_search_regions(x, y, width, height, d):
+            x1 = max(0, int(rx))
+            y1 = max(0, int(ry))
+            x2 = min(img.shape[1], int(rx + rw))
+            y2 = min(img.shape[0], int(ry + rh))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = img[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            hits.extend(self._multiplier_hits_from_crop(crop, x1, y1, pattern))
+        return hits
+
+    @staticmethod
+    def _cluster_multiplier_hits(hits, merge_dist):
+        clusters = []
+        for hit in hits:
+            placed = False
+            for cluster in clusters:
+                if np.hypot(hit['cx'] - cluster['cx'], hit['cy'] - cluster['cy']) <= merge_dist:
+                    n = cluster['n'] + 1
+                    cluster['cx'] = (cluster['cx'] * cluster['n'] + hit['cx']) / n
+                    cluster['cy'] = (cluster['cy'] * cluster['n'] + hit['cy']) / n
+                    cluster['n'] = n
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({'cx': hit['cx'], 'cy': hit['cy'], 'qty': hit['qty'], 'n': 1})
+        return clusters
+
+    def assign_quantities(self, img, signs):
+        """Assign each detected x2/x3 to only the nearest sign.
+
+        Returns a quantity list aligned with *signs*. Signs with no nearby
+        multiplier stay at 1. Each hit and each sign is used at most once.
+        """
+        if img is None or not signs:
+            return [1] * len(signs or [])
+
+        pattern = MULTIPLIER_PATTERN
+        hits = []
+        for sign in signs:
+            hits.extend(self._collect_multiplier_hits(
+                img, sign['x'], sign['y'], sign['width'], sign['height'], pattern))
+
+        hits = [h for h in hits
+                if not any(self._point_inside_sign(h['cx'], h['cy'], s) for s in signs)]
+
+        if not hits:
+            return [1] * len(signs)
+
+        typical = max(max(s['width'], s['height']) for s in signs)
+        clusters = self._cluster_multiplier_hits(hits, merge_dist=typical * 0.6)
+        centers = [self._sign_center(s) for s in signs]
+
+        pairs = []
+        for ci, cluster in enumerate(clusters):
+            for si, (sx, sy) in enumerate(centers):
+                dist = float(np.hypot(cluster['cx'] - sx, cluster['cy'] - sy))
+                max_reach = 2.0 * max(signs[si]['width'], signs[si]['height'])
+                if dist > max_reach:
+                    continue
+                pairs.append((dist, ci, si, cluster['qty']))
+        pairs.sort()
+
+        quantities = [1] * len(signs)
+        used_clusters = set()
+        used_signs = set()
+        for _dist, ci, si, qty in pairs:
+            if ci in used_clusters or si in used_signs:
+                continue
+            if qty < 1:
+                continue
+            quantities[si] = qty
+            used_clusters.add(ci)
+            used_signs.add(si)
+        return quantities
+
     def find_multiplier_near_region(self, image_path, x, y, width, height,
                                     search_distance=None, img=None):
         """Search for multiplier text (x2, x3, etc.) near a rectangular region.
@@ -473,49 +637,14 @@ class OCRService:
         Returns:
             Integer quantity (1 if no multiplier found)
         """
-        import re
-
         if img is None:
             img = cv2.imread(image_path)
             if img is None:
                 return 1
 
-        if search_distance is None:
-            search_distance = max(width, height)
-
-        search_regions = [
-            {'x': x + width, 'y': y, 'width': search_distance, 'height': height, 'name': 'right'},
-            {'x': max(0, x - search_distance), 'y': y, 'width': min(search_distance, x), 'height': height, 'name': 'left'},
-            {'x': x, 'y': max(0, y - search_distance), 'width': width, 'height': min(search_distance, y), 'name': 'top'},
-            {'x': x, 'y': y + height, 'width': width, 'height': search_distance, 'name': 'bottom'},
-        ]
-
-        multiplier_pattern = re.compile(r'[xX\u00d7*]\s*(\d+)')
-
-        for region_def in search_regions:
-            rx, ry, rw, rh = region_def['x'], region_def['y'], region_def['width'], region_def['height']
-
-            x1 = max(0, rx)
-            y1 = max(0, ry)
-            x2 = min(img.shape[1], rx + rw)
-            y2 = min(img.shape[0], ry + rh)
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            search_img = img[y1:y2, x1:x2]
-            if search_img.size == 0:
-                continue
-
-            try:
-                text, confidence = self.extract_text(search_img, preprocess=True, label_mode=False)
-                match = multiplier_pattern.search(text)
-                if match:
-                    return int(match.group(1))
-            except Exception:
-                continue
-
-        return 1
+        return self.assign_quantities(img, [{
+            'x': x, 'y': y, 'width': width, 'height': height,
+        }])[0]
 
     def extract_title_from_floorplan(self, image_path, x_start_pct=60, y_start_pct=85,
                                      width_pct=40, height_pct=15):
@@ -675,13 +804,13 @@ class OCRService:
         if not text:
             return text, 1
 
-        match = re.search(r'\s*[xX](\d+)\s*$', text)
+        match = re.search(r'(?<![A-Za-z])[xX](\d+)\s*$', text)
         if match:
             quantity = int(match.group(1))
             cleaned_text = text[:match.start()].strip()
             return cleaned_text, quantity
 
-        match = re.search(r'\b[xX](\d+)\b', text)
+        match = re.search(r'(?<![A-Za-z])[xX](\d+)\b', text)
         if match:
             quantity = int(match.group(1))
             cleaned_text = text[:match.start()] + text[match.end():]

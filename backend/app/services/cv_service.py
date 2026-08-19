@@ -17,6 +17,7 @@ class CVService:
     # Accurate mode searches every supported color except the sample color.
     # Fast mode stays sample-color-only. Calibrated on LP-BLK1-GF.pdf (E01 blue).
     SUPPORTED_COLORS = ('blue', 'red', 'yellow')
+    MIN_CIRCULARITY = 0.75
 
     @staticmethod
     def _is_portrait(img):
@@ -58,13 +59,13 @@ class CVService:
             'scale_steps': 10,            # Number of scale variations
             'match_threshold': 0.5,       # Minimum correlation score (lower for edge matching)
             'nms_iou_threshold': 0.3,     # NMS overlap threshold (tighter to avoid duplicates)
-            # Blue HSV calibrated on LP-BLK1-GF.pdf E01 markers:
-            # page H≈95–131 / S≥41 / V≥85; crop H=120, BGR≈(245,89,89).
-            # H lower bound 90 (not 100) so cyan-leaning CAD blues are not dropped.
-            'lower_blue': np.array([90, 40, 80]),
-            'upper_blue': np.array([130, 255, 255]),
+            # Blue HSV calibrated on the saturated E01 marker (H=120, S≈255,
+            # V≈245, BGR≈(245,0,0)). S≥70 / V≥100 drops gray-blue CAD ink;
+            # H 105–135 keeps true blue without cyan-leaning greys.
+            'lower_blue': np.array([105, 70, 100]),
+            'upper_blue': np.array([135, 255, 255]),
             'template_padding': 5,        # Padding around extracted template
-            'min_circularity': 0.6,       # Minimum circularity score for template detection
+            'min_circularity': 0.75,      # Minimum circularity score for template detection
         }
         
         # Red rectangle detection parameters
@@ -564,7 +565,7 @@ class CVService:
                 if perimeter == 0:
                     continue
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
-                if circularity < 0.45:
+                if circularity < self.MIN_CIRCULARITY:
                     continue
                 (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
                 if not (radius_lo <= cradius <= radius_hi):
@@ -841,7 +842,7 @@ class CVService:
         
         radius_lo = min_radius * 0.85
         radius_hi = max_radius * 1.1
-        circ_threshold = 0.6 if sec_color == 'red' else 0.45
+        circ_threshold = self.MIN_CIRCULARITY
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -946,12 +947,14 @@ class CVService:
         filled = np.count_nonzero(region[circle_mask])
         return filled / circle_area
 
-    def _verify_circle_circularity(self, color_mask, cx, cy, radius, min_circularity=0.40):
+    def _verify_circle_circularity(self, color_mask, cx, cy, radius, min_circularity=None):
         """Verify that a detected circle region contains a sufficiently circular contour.
 
         Crops the color mask around the circle, finds contours, and checks
         if the best contour has circularity above the threshold.
         """
+        if min_circularity is None:
+            min_circularity = self.MIN_CIRCULARITY
         h, w = color_mask.shape[:2]
         pad = int(radius * 0.3)
         x1 = max(0, cx - radius - pad)
@@ -1761,9 +1764,9 @@ class CVService:
                 self.template_circle_params['lower_blue'],
                 self.template_circle_params['upper_blue'],
             )
-            bgr_mask = ((b.astype(int) > r.astype(int) + threshold) &
-                        (b.astype(int) > g.astype(int) + threshold) &
-                        (b > 100)).astype(np.uint8) * 255
+            bgr_mask = ((b.astype(int) > r.astype(int) + 45) &
+                        (b.astype(int) > g.astype(int) + 45) &
+                        (b > 140)).astype(np.uint8) * 255
             mask = cv2.bitwise_or(hsv_mask, bgr_mask)
         elif color_type == 'red':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
@@ -1855,7 +1858,7 @@ class CVService:
             color_mask = self._build_color_mask(search_region, color_type)
             contour, circularity, radius = self._find_best_circle_in_mask(color_mask)
             
-            if contour is not None and circularity >= 0.4:
+            if contour is not None and circularity >= self.MIN_CIRCULARITY:
                 candidates.append({
                     'contour': contour,
                     'circularity': circularity,

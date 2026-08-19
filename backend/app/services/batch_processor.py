@@ -208,6 +208,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 
                 if ocr_service:
                     ocr_t0 = _time.time()
+                    kept = []
                     for idx, shape in enumerate(shapes):
                         try:
                             cv_text = shape.get('extracted_text', '')
@@ -236,13 +237,22 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 if not is_valid_sign_code(cleaned):
                                     continue
 
-                            quantity = ocr_service.find_multiplier_near_region(
-                                page_info['image_path'],
-                                shape['x'], shape['y'],
-                                shape['width'], shape['height'],
-                                img=page_img
-                            )
-                            
+                            kept.append((idx, shape, cleaned, confidence))
+                        except Exception as e:
+                            logger.warning(f"OCR failed for shape idx {idx}: {str(e)}")
+
+                    quantities = ocr_service.assign_quantities(
+                        page_img,
+                        [{
+                            'x': shape['x'], 'y': shape['y'],
+                            'width': shape['width'], 'height': shape['height'],
+                            'center_x': shape.get('center_x'),
+                            'center_y': shape.get('center_y'),
+                        } for _idx, shape, _cleaned, _conf in kept]
+                    )
+
+                    for (idx, shape, cleaned, confidence), quantity in zip(kept, quantities):
+                        try:
                             shape_data = None
                             if 'radius' in shape:
                                 shape_data = {
@@ -252,7 +262,7 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                                 }
                                 if 'confidence' in shape:
                                     shape_data['confidence'] = shape['confidence']
-                            
+
                             doc = create_extracted_data_doc(
                                 shape_index=idx,
                                 shape_type=shape_type,
@@ -270,12 +280,12 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                             if shape.get('detection_method') == 'learned':
                                 doc['detection_method'] = 'learned'
                                 doc['template_id'] = shape.get('template_id')
-                            
+
                             result_insert = mongo.db.extracted_data.insert_one(doc)
                             doc['_id'] = result_insert.inserted_id
                             ocr_results.append(doc)
                         except Exception as e:
-                            logger.warning(f"OCR failed for shape idx {idx}: {str(e)}")
+                            logger.warning(f"OCR save failed for shape idx {idx}: {str(e)}")
                     
                     logger.info(f"Page {page_info['page_number']}: OCR processed "
                                 f"{len(shapes)} shapes → {len(ocr_results)} valid in "
