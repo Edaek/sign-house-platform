@@ -109,6 +109,10 @@ def is_valid_sign_code(text, strict=False):
     if re.fullmatch(r'NO[.\-]?\d+', cleaned, flags=re.IGNORECASE):
         return False
 
+    # Quantity marks (x2 / ×2) are not sign codes. The 'x' is often read as Y.
+    if re.fullmatch(r'[xXyY]\d+', cleaned):
+        return False
+
     if re.match(r'^[A-Z]{1,4}$', cleaned):
         if cleaned.lower() not in _REJECT_WORDS:
             if strict or len(cleaned) >= 2:
@@ -492,16 +496,11 @@ class OCRService:
         ]
 
     @staticmethod
-    def _sign_center(sign):
-        if sign.get('center_x') is not None and sign.get('center_y') is not None:
-            return float(sign['center_x']), float(sign['center_y'])
-        shape_data = sign.get('shape_data') or {}
-        if shape_data.get('center_x') is not None and shape_data.get('center_y') is not None:
-            return float(shape_data['center_x']), float(shape_data['center_y'])
-        return (
-            float(sign['x']) + float(sign['width']) / 2.0,
-            float(sign['y']) + float(sign['height']) / 2.0,
-        )
+    def _point_to_sign_box(cx, cy, sign):
+        x, y, w, h = sign['x'], sign['y'], sign['width'], sign['height']
+        nearest_x = min(max(cx, x), x + w)
+        nearest_y = min(max(cy, y), y + h)
+        return float(np.hypot(cx - nearest_x, cy - nearest_y))
 
     @staticmethod
     def _point_inside_sign(cx, cy, sign, inset=0.15):
@@ -542,9 +541,10 @@ class OCRService:
                 pass
         return hits
 
-    def _collect_multiplier_hits(self, img, x, y, width, height, pattern):
+    def _collect_multiplier_hits(self, img, x, y, width, height, pattern,
+                                 search_distance=None):
         """OCR the 8 neighbor windows and return x2 locations."""
-        d = max(width, height)
+        d = max(width, height) if search_distance is None else search_distance
         hits = []
         for rx, ry, rw, rh in self._multiplier_search_regions(x, y, width, height, d):
             x1 = max(0, int(rx))
@@ -570,26 +570,44 @@ class OCRService:
                     cluster['cx'] = (cluster['cx'] * cluster['n'] + hit['cx']) / n
                     cluster['cy'] = (cluster['cy'] * cluster['n'] + hit['cy']) / n
                     cluster['n'] = n
+                    if hit.get('si') is not None:
+                        cluster['sources'].add(hit['si'])
                     placed = True
                     break
             if not placed:
-                clusters.append({'cx': hit['cx'], 'cy': hit['cy'], 'qty': hit['qty'], 'n': 1})
+                sources = set()
+                if hit.get('si') is not None:
+                    sources.add(hit['si'])
+                clusters.append({
+                    'cx': hit['cx'], 'cy': hit['cy'], 'qty': hit['qty'],
+                    'n': 1, 'sources': sources,
+                })
         return clusters
 
     def assign_quantities(self, img, signs):
-        """Assign each detected x2/x3 to only the nearest sign.
+        """Assign multipliers found in each sign's neighbor windows.
 
-        Returns a quantity list aligned with *signs*. Signs with no nearby
-        multiplier stay at 1. Each hit and each sign is used at most once.
+        A sign may only claim an x2 it actually OCR'd. Uncontested hits are
+        assigned first; remaining overlaps use distance to the sign box.
+        Search reach is capped at the page-median sign size so a larger
+        neighbor cannot reach into the next row. Leftovers farther than
+        twice the nearest original claimant are left unassigned.
         """
         if img is None or not signs:
             return [1] * len(signs or [])
 
+        sizes = [max(s['width'], s['height']) for s in signs]
+        median_d = float(np.median(sizes))
+
         pattern = MULTIPLIER_PATTERN
         hits = []
-        for sign in signs:
-            hits.extend(self._collect_multiplier_hits(
-                img, sign['x'], sign['y'], sign['width'], sign['height'], pattern))
+        for si, sign in enumerate(signs):
+            reach = min(float(max(sign['width'], sign['height'])), median_d)
+            for hit in self._collect_multiplier_hits(
+                    img, sign['x'], sign['y'], sign['width'], sign['height'],
+                    pattern, search_distance=reach):
+                hit['si'] = si
+                hits.append(hit)
 
         hits = [h for h in hits
                 if not any(self._point_inside_sign(h['cx'], h['cy'], s) for s in signs)]
@@ -597,27 +615,63 @@ class OCRService:
         if not hits:
             return [1] * len(signs)
 
-        typical = max(max(s['width'], s['height']) for s in signs)
+        typical = max(sizes)
         clusters = self._cluster_multiplier_hits(hits, merge_dist=typical * 0.6)
-        centers = [self._sign_center(s) for s in signs]
 
-        pairs = []
+        claimants = [[] for _ in clusters]
         for ci, cluster in enumerate(clusters):
-            for si, (sx, sy) in enumerate(centers):
-                dist = float(np.hypot(cluster['cx'] - sx, cluster['cy'] - sy))
-                max_reach = 2.0 * max(signs[si]['width'], signs[si]['height'])
-                if dist > max_reach:
-                    continue
-                pairs.append((dist, ci, si, cluster['qty']))
-        pairs.sort()
+            if cluster['qty'] < 1:
+                continue
+            for si in cluster.get('sources') or ():
+                dist = self._point_to_sign_box(
+                    cluster['cx'], cluster['cy'], signs[si])
+                claimants[ci].append((dist, si))
 
         quantities = [1] * len(signs)
         used_clusters = set()
         used_signs = set()
+
+        def remaining(ci):
+            return [(d, si) for d, si in claimants[ci] if si not in used_signs]
+
+        def too_far(ci, dist):
+            nearest = min((d for d, _si in claimants[ci]), default=0.0)
+            return nearest > 0 and dist > 2.0 * nearest
+
+        changed = True
+        while changed:
+            changed = False
+            unique = []
+            for ci, cluster in enumerate(clusters):
+                if ci in used_clusters:
+                    continue
+                cands = remaining(ci)
+                if len(cands) != 1:
+                    continue
+                dist, si = cands[0]
+                if too_far(ci, dist):
+                    continue
+                unique.append((dist, ci, si, cluster['qty']))
+            unique.sort()
+            for _dist, ci, si, qty in unique:
+                if ci in used_clusters or si in used_signs:
+                    continue
+                quantities[si] = qty
+                used_clusters.add(ci)
+                used_signs.add(si)
+                changed = True
+
+        pairs = []
+        for ci, cluster in enumerate(clusters):
+            if ci in used_clusters:
+                continue
+            for dist, si in remaining(ci):
+                if too_far(ci, dist):
+                    continue
+                pairs.append((dist, ci, si, cluster['qty']))
+        pairs.sort()
         for _dist, ci, si, qty in pairs:
             if ci in used_clusters or si in used_signs:
-                continue
-            if qty < 1:
                 continue
             quantities[si] = qty
             used_clusters.add(ci)
