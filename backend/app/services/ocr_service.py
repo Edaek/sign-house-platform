@@ -17,6 +17,9 @@ SIGN_CODE_PATTERN = re.compile(
     r'^[A-Z][a-zA-Z]{0,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
 )
 
+# Standalone x2 / ×3 only — do not match the X2 inside sign codes like EX2, EX4.
+MULTIPLIER_PATTERN = re.compile(r'(?<![A-Za-z])[xX\u00d7*]\s*(\d+)')
+
 _REJECT_WORDS = frozenset({
     'flat', 'type', 'room', 'living', 'bedroom', 'kitchen',
     'toilet', 'bath', 'hall', 'lobby', 'corridor', 'stair',
@@ -24,7 +27,11 @@ _REJECT_WORDS = frozenset({
     'utility', 'master', 'common', 'typical', 'plan',
     'elevation', 'section', 'detail', 'note', 'ref',
     'ac', 'db', 'dp', 'up', 'dn', 'fl', 'rm',
-    'no', 'nr', 'wc', 'tv', 'tel', 'rev', 'x',
+    'no', 'nr', 'wc', 'tv', 'tel', 'rev',
+    'li', 'jc', 'le', 'hf', 'lf', 'lft',
+    'fo', 'cf', 'ab', '1c', 'in', 'its', 'for', 'at', 'pa', 'ci',
+    'vl', '2n', 'fof', 'jn', 'on', 'un', 'is', 'pl', 'vc', 'or',
+    'poi', '10h',
 })
 
 
@@ -76,7 +83,6 @@ def is_valid_sign_code(text, strict=False):
       1. Empty / whitespace-only  -> False  (nothing readable)
       2. Matches SIGN_CODE_PATTERN -> True
       -- strict mode stops here (+ letter+digit heuristic) --
-      2b. 2–4 pure uppercase letters (e.g. WMC, CMC), not in reject list -> True
       3. 3+ words                 -> False
       4. Contains a known non-sign word -> False
       5. 2 words AND >12 chars    -> False
@@ -94,11 +100,23 @@ def is_valid_sign_code(text, strict=False):
     if not cleaned:
         return False
 
+    if cleaned.lower() in _REJECT_WORDS:
+        return False
+
+    # Gray lift labels OCR as "NO.1" / "NO-2", which match SIGN_CODE_PATTERN.
+    # Only reject that pattern — do not treat every reject word as a prefix,
+    # or real codes like WC1 / IN2 / FO3 get dropped.
+    if re.fullmatch(r'NO[.\-]?\d+', cleaned, flags=re.IGNORECASE):
+        return False
+
+    # Quantity marks (x2 / ×2) are not sign codes. The 'x' is often read as Y.
+    if re.fullmatch(r'[xXyY]\d+', cleaned):
+        return False
+
     if re.match(r'^[A-Z]{1,4}$', cleaned):
-        if cleaned.lower() not in _REJECT_WORDS and len(cleaned) >= 2:
-            return True
-        if strict and len(cleaned) == 1:
-            return False
+        if cleaned.lower() not in _REJECT_WORDS:
+            if strict or len(cleaned) >= 2:
+                return True
 
     if strict and len(cleaned) < 2:
         return False
@@ -283,33 +301,6 @@ class OCRService:
 
         return denoised
 
-    def _preprocess_red_multiplier(self, image):
-        """Isolate red multiplier annotations (x2, x3) for OCR."""
-        img = image.copy()
-        h, w = img.shape[:2]
-        if h < 2 or w < 2:
-            return img
-
-        if len(img.shape) == 3:
-            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-            lower_red1 = np.array([0, 50, 50])
-            upper_red1 = np.array([10, 255, 255])
-            lower_red2 = np.array([170, 50, 50])
-            upper_red2 = np.array([180, 255, 255])
-            red_mask = cv2.bitwise_or(
-                cv2.inRange(hsv, lower_red1, upper_red1),
-                cv2.inRange(hsv, lower_red2, upper_red2),
-            )
-            gray = np.full((h, w), 255, dtype=np.uint8)
-            gray[red_mask > 0] = 0
-        else:
-            gray = img.copy()
-
-        scale_factor = max(4, 120 / max(h, 1))
-        scaled = cv2.resize(gray, None, fx=scale_factor, fy=scale_factor,
-                            interpolation=cv2.INTER_CUBIC)
-        return scaled
-
     def _preprocess_label(self, image):
         """Specialized preprocessing for label boxes with red borders."""
         img = image.copy()
@@ -354,7 +345,7 @@ class OCRService:
         h, w = image.shape[:2]
         cx, cy = w // 2, h // 2
 
-        inner_radius = max(5, int(radius * 0.82))
+        inner_radius = max(5, int(radius * 0.98))
         circle_mask = np.zeros((h, w), dtype=np.uint8)
         cv2.circle(circle_mask, (cx, cy), inner_radius, 255, -1)
 
@@ -488,45 +479,213 @@ class OCRService:
 
         return self.extract_text(region, label_mode=label_mode)
 
-    def _parse_multiplier_text(self, text):
-        """Return (quantity, is_standalone) from OCR text, or (None, False)."""
-        if not text or not text.strip():
-            return None, False
+    @staticmethod
+    def _multiplier_search_regions(x, y, width, height, d):
+        """Halo first so a clipped diagonal 'x2' is not read as '2', then
+        cardinal strips and four diagonal squares around the sign box."""
+        return [
+            (x - d, y - d, width + 2 * d, height + 2 * d),
+            (x + width, y, d, height),
+            (x - d, y, d, height),
+            (x, y - d, width, d),
+            (x, y + height, width, d),
+            (x + width, y - d, d, d),
+            (x + width, y + height, d, d),
+            (x - d, y - d, d, d),
+            (x - d, y + height, d, d),
+        ]
 
-        normalized = _normalize_unicode_punctuation(text.strip())
-        normalized = normalized.replace('*', 'x')
-        compact = re.sub(r'\s+', '', normalized)
+    @staticmethod
+    def _point_to_sign_box(cx, cy, sign):
+        x, y, w, h = sign['x'], sign['y'], sign['width'], sign['height']
+        nearest_x = min(max(cx, x), x + w)
+        nearest_y = min(max(cy, y), y + h)
+        return float(np.hypot(cx - nearest_x, cy - nearest_y))
 
-        multiplier_pattern = re.compile(r'[xX\u00d7]\s*(\d+)')
-        standalone_pattern = re.compile(r'^[xX\u00d7]\d+$', re.IGNORECASE)
+    @staticmethod
+    def _point_inside_sign(cx, cy, sign, inset=0.15):
+        x, y, w, h = sign['x'], sign['y'], sign['width'], sign['height']
+        pad_x = w * inset
+        pad_y = h * inset
+        return (x + pad_x) <= cx <= (x + w - pad_x) and (y + pad_y) <= cy <= (y + h - pad_y)
 
-        match = multiplier_pattern.search(compact)
-        if not match:
-            match = multiplier_pattern.search(normalized)
-        if not match:
-            return None, False
+    def _multiplier_hits_from_crop(self, crop, origin_x, origin_y, pattern):
+        """OCR a crop and return x2 hits in image coordinates."""
+        hits = []
+        try:
+            texts, _scores, boxes = self._run_ocr_with_boxes(crop)
+        except Exception:
+            texts, boxes = [], []
 
-        qty = int(match.group(1))
-        if qty <= 1 or qty > 9:
-            return None, False
+        for text, box in zip(texts, boxes):
+            match = pattern.search(text or '')
+            if not match:
+                continue
+            hits.append({
+                'cx': origin_x + box['x'] + box['width'] / 2.0,
+                'cy': origin_y + box['y'] + box['height'] / 2.0,
+                'qty': int(match.group(1)),
+            })
 
-        is_standalone = bool(standalone_pattern.match(compact))
-        if not is_standalone and len(compact) > 8:
-            return None, False
+        if not hits:
+            try:
+                text, _ = self.extract_text(crop, preprocess=True, label_mode=False)
+                match = pattern.search(text or '')
+                if match:
+                    hits.append({
+                        'cx': origin_x + crop.shape[1] / 2.0,
+                        'cy': origin_y + crop.shape[0] / 2.0,
+                        'qty': int(match.group(1)),
+                    })
+            except Exception:
+                pass
+        return hits
 
-        return qty, is_standalone
+    def _collect_multiplier_hits(self, img, x, y, width, height, pattern,
+                                 search_distance=None):
+        """OCR the 8 neighbor windows and return x2 locations."""
+        d = max(width, height) if search_distance is None else search_distance
+        hits = []
+        for rx, ry, rw, rh in self._multiplier_search_regions(x, y, width, height, d):
+            x1 = max(0, int(rx))
+            y1 = max(0, int(ry))
+            x2 = min(img.shape[1], int(rx + rw))
+            y2 = min(img.shape[0], int(ry + rh))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            crop = img[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            hits.extend(self._multiplier_hits_from_crop(crop, x1, y1, pattern))
+        return hits
+
+    @staticmethod
+    def _cluster_multiplier_hits(hits, merge_dist):
+        clusters = []
+        for hit in hits:
+            placed = False
+            for cluster in clusters:
+                if np.hypot(hit['cx'] - cluster['cx'], hit['cy'] - cluster['cy']) <= merge_dist:
+                    n = cluster['n'] + 1
+                    cluster['cx'] = (cluster['cx'] * cluster['n'] + hit['cx']) / n
+                    cluster['cy'] = (cluster['cy'] * cluster['n'] + hit['cy']) / n
+                    cluster['n'] = n
+                    if hit.get('si') is not None:
+                        cluster['sources'].add(hit['si'])
+                    placed = True
+                    break
+            if not placed:
+                sources = set()
+                if hit.get('si') is not None:
+                    sources.add(hit['si'])
+                clusters.append({
+                    'cx': hit['cx'], 'cy': hit['cy'], 'qty': hit['qty'],
+                    'n': 1, 'sources': sources,
+                })
+        return clusters
+
+    def assign_quantities(self, img, signs):
+        """Assign multipliers found in each sign's neighbor windows.
+
+        A sign may only claim an x2 it actually OCR'd. Uncontested hits are
+        assigned first; remaining overlaps use distance to the sign box.
+        Search reach is capped at the page-median sign size so a larger
+        neighbor cannot reach into the next row. Leftovers farther than
+        twice the nearest original claimant are left unassigned.
+        """
+        if img is None or not signs:
+            return [1] * len(signs or [])
+
+        sizes = [max(s['width'], s['height']) for s in signs]
+        median_d = float(np.median(sizes))
+
+        pattern = MULTIPLIER_PATTERN
+        hits = []
+        for si, sign in enumerate(signs):
+            reach = min(float(max(sign['width'], sign['height'])), median_d)
+            for hit in self._collect_multiplier_hits(
+                    img, sign['x'], sign['y'], sign['width'], sign['height'],
+                    pattern, search_distance=reach):
+                hit['si'] = si
+                hits.append(hit)
+
+        hits = [h for h in hits
+                if not any(self._point_inside_sign(h['cx'], h['cy'], s) for s in signs)]
+
+        if not hits:
+            return [1] * len(signs)
+
+        typical = max(sizes)
+        clusters = self._cluster_multiplier_hits(hits, merge_dist=typical * 0.6)
+
+        claimants = [[] for _ in clusters]
+        for ci, cluster in enumerate(clusters):
+            if cluster['qty'] < 1:
+                continue
+            for si in cluster.get('sources') or ():
+                dist = self._point_to_sign_box(
+                    cluster['cx'], cluster['cy'], signs[si])
+                claimants[ci].append((dist, si))
+
+        quantities = [1] * len(signs)
+        used_clusters = set()
+        used_signs = set()
+
+        def remaining(ci):
+            return [(d, si) for d, si in claimants[ci] if si not in used_signs]
+
+        def too_far(ci, dist):
+            nearest = min((d for d, _si in claimants[ci]), default=0.0)
+            return nearest > 0 and dist > 2.0 * nearest
+
+        changed = True
+        while changed:
+            changed = False
+            unique = []
+            for ci, cluster in enumerate(clusters):
+                if ci in used_clusters:
+                    continue
+                cands = remaining(ci)
+                if len(cands) != 1:
+                    continue
+                dist, si = cands[0]
+                if too_far(ci, dist):
+                    continue
+                unique.append((dist, ci, si, cluster['qty']))
+            unique.sort()
+            for _dist, ci, si, qty in unique:
+                if ci in used_clusters or si in used_signs:
+                    continue
+                quantities[si] = qty
+                used_clusters.add(ci)
+                used_signs.add(si)
+                changed = True
+
+        pairs = []
+        for ci, cluster in enumerate(clusters):
+            if ci in used_clusters:
+                continue
+            for dist, si in remaining(ci):
+                if too_far(ci, dist):
+                    continue
+                pairs.append((dist, ci, si, cluster['qty']))
+        pairs.sort()
+        for _dist, ci, si, qty in pairs:
+            if ci in used_clusters or si in used_signs:
+                continue
+            quantities[si] = qty
+            used_clusters.add(ci)
+            used_signs.add(si)
+        return quantities
 
     def find_multiplier_near_region(self, image_path, x, y, width, height,
                                     search_distance=None, img=None):
         """Search for multiplier text (x2, x3, etc.) near a rectangular region.
 
-        Uses a narrow search strip so neighboring sign codes do not share one
-        multiplier annotation (common when circles are clustered).
-
         Args:
             image_path: Path to the image file
             x, y, width, height: Region coordinates of the main rectangle
-            search_distance: How far to search outward from the shape edge
+            search_distance: How far to search (defaults to max(width, height))
             img: Optional pre-loaded BGR image (avoids redundant imread)
 
         Returns:
@@ -537,124 +696,9 @@ class OCRService:
             if img is None:
                 return 1
 
-        shape_size = max(width, height, 1)
-        if search_distance is None:
-            search_distance = max(20, min(int(shape_size * 1.2), 55))
-
-        h_pad = max(15, int(shape_size * 0.65))
-        top_dist = min(max(search_distance, int(shape_size * 1.1)), y)
-        side_dist = max(10, min(search_distance, 35))
-
-        search_regions = [
-            {
-                'x': x - h_pad,
-                'y': max(0, y - top_dist),
-                'width': width + h_pad * 2,
-                'height': top_dist,
-                'name': 'top',
-                'priority': 0,
-            },
-            {
-                'x': x + width,
-                'y': y,
-                'width': side_dist,
-                'height': height,
-                'name': 'right',
-                'priority': 1,
-            },
-            {
-                'x': max(0, x - side_dist),
-                'y': y,
-                'width': min(side_dist, x),
-                'height': height,
-                'name': 'left',
-                'priority': 2,
-            },
-            {
-                'x': x - h_pad,
-                'y': y + height,
-                'width': width + h_pad * 2,
-                'height': side_dist,
-                'name': 'bottom',
-                'priority': 3,
-            },
-        ]
-
-        best_qty = None
-        best_score = float('inf')
-
-        for region_def in search_regions:
-            rx, ry, rw, rh = region_def['x'], region_def['y'], region_def['width'], region_def['height']
-
-            x1 = max(0, rx)
-            y1 = max(0, ry)
-            x2 = min(img.shape[1], rx + rw)
-            y2 = min(img.shape[0], ry + rh)
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            search_img = img[y1:y2, x1:x2]
-            if search_img.size == 0:
-                continue
-
-            preprocessors = [
-                ('red', self._preprocess_red_multiplier(search_img)),
-                ('plain', self.preprocess_for_ocr(search_img, label_mode=False)),
-            ]
-
-            for _mode, processed in preprocessors:
-                try:
-                    texts, scores = self._run_ocr(processed, fast=True)
-                    if not texts:
-                        continue
-
-                    for idx, line in enumerate(texts):
-                        if not line or not line.strip():
-                            continue
-
-                        qty, is_standalone = self._parse_multiplier_text(line)
-                        if qty is None:
-                            continue
-
-                        line_conf = scores[idx] if idx < len(scores) else 0.0
-                        score = (
-                            region_def['priority']
-                            + (0 if is_standalone else 5)
-                            - min(line_conf, 0.99)
-                        )
-                        if score < best_score:
-                            best_score = score
-                            best_qty = qty
-                except Exception:
-                    continue
-
-        return best_qty if best_qty is not None else 1
-
-    def resolve_quantity(
-        self,
-        cleaned_text,
-        image_path=None,
-        x=None,
-        y=None,
-        width=None,
-        height=None,
-        img=None,
-        **_kwargs,
-    ):
-        """Strip multiplier text from sign code and resolve quantity from text or nearby xN."""
-        text, embedded_qty = self.parse_quantity(cleaned_text or '')
-        text = clean_ocr_text(text.strip()) if text else (cleaned_text or '').strip()
-
-        quantity = max(1, embedded_qty)
-        if quantity <= 1 and image_path is not None and None not in (x, y, width, height):
-            nearby = self.find_multiplier_near_region(
-                image_path, int(x), int(y), int(width), int(height), img=img,
-            )
-            if nearby > 1:
-                quantity = nearby
-
-        return text or (cleaned_text or '').strip(), quantity
+        return self.assign_quantities(img, [{
+            'x': x, 'y': y, 'width': width, 'height': height,
+        }])[0]
 
     def extract_title_from_floorplan(self, image_path, x_start_pct=60, y_start_pct=85,
                                      width_pct=40, height_pct=15):
@@ -814,13 +858,13 @@ class OCRService:
         if not text:
             return text, 1
 
-        match = re.search(r'\s*[xX](\d+)\s*$', text)
+        match = re.search(r'(?<![A-Za-z])[xX](\d+)\s*$', text)
         if match:
             quantity = int(match.group(1))
             cleaned_text = text[:match.start()].strip()
             return cleaned_text, quantity
 
-        match = re.search(r'\b[xX](\d+)\b', text)
+        match = re.search(r'(?<![A-Za-z])[xX](\d+)\b', text)
         if match:
             quantity = int(match.group(1))
             cleaned_text = text[:match.start()] + text[match.end():]

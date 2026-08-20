@@ -15,6 +15,10 @@ class CVService:
     FAST_MODE = 'fast'
     ACCURATE_MODE = 'accurate'
     MARKER_COLORS = ('red', 'blue', 'yellow')
+    # Accurate mode searches every supported color except the sample color.
+    # Fast mode stays sample-color-only. Calibrated on LP-BLK1-GF.pdf (E01 blue).
+    SUPPORTED_COLORS = ('blue', 'red', 'yellow')
+    MIN_CIRCULARITY = 0.75
 
     @staticmethod
     def _is_portrait(img):
@@ -56,11 +60,13 @@ class CVService:
             'scale_steps': 10,            # Number of scale variations
             'match_threshold': 0.5,       # Minimum correlation score (lower for edge matching)
             'nms_iou_threshold': 0.3,     # NMS overlap threshold (tighter to avoid duplicates)
-            # Blue color range in HSV (covers typical blue markers)
-            'lower_blue': np.array([100, 50, 50]),
-            'upper_blue': np.array([130, 255, 255]),
+            # Blue HSV calibrated on the saturated E01 marker (H=120, S≈255,
+            # V≈245, BGR≈(245,0,0)). S≥70 / V≥100 drops gray-blue CAD ink;
+            # H 105–135 keeps true blue without cyan-leaning greys.
+            'lower_blue': np.array([105, 70, 100]),
+            'upper_blue': np.array([135, 255, 255]),
             'template_padding': 5,        # Padding around extracted template
-            'min_circularity': 0.6,       # Minimum circularity score for template detection
+            'min_circularity': 0.75,      # Minimum circularity score for template detection
         }
         
         # Red rectangle detection parameters
@@ -188,7 +194,7 @@ class CVService:
         best_contour = None
         best_circularity = 0
         
-        for color_type in ['blue', 'red']:
+        for color_type in self.SUPPORTED_COLORS:
             color_mask = self._build_color_mask(search_region, color_type)
             contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
@@ -607,7 +613,7 @@ class CVService:
                 if perimeter == 0:
                     continue
                 circularity = 4 * np.pi * area / (perimeter * perimeter)
-                if circularity < 0.45:
+                if circularity < self.MIN_CIRCULARITY:
                     continue
                 (ccx, ccy), cradius = cv2.minEnclosingCircle(contour)
                 if not (radius_lo <= cradius <= radius_hi):
@@ -727,15 +733,18 @@ class CVService:
         min_contour_area = 80 if is_thin_blue_ring else 300
         ring_color_ratio = 0.28 if is_thin_blue_ring else 0.5
         
-        # Clean up the mask
         kernel = np.ones((3, 3), np.uint8)
-        color_mask_clean = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
-        color_mask_clean = cv2.morphologyEx(color_mask_clean, cv2.MORPH_OPEN, kernel)
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        if bgr_sample is not None:
+        if sec_color == 'blue' and bgr_sample is None:
+            ellipse = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            color_mask_clean = cv2.dilate(color_mask, ellipse, iterations=2)
+        elif bgr_sample is not None:
+            color_mask_clean = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+            color_mask_clean = cv2.morphologyEx(color_mask_clean, cv2.MORPH_OPEN, kernel)
+            dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             color_mask_clean = cv2.dilate(color_mask_clean, dilate_kernel, iterations=1)
-        elif is_thin_blue_ring:
-            color_mask_clean = cv2.dilate(color_mask_clean, dilate_kernel, iterations=1)
+        else:
+            color_mask_clean = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+            color_mask_clean = cv2.morphologyEx(color_mask_clean, cv2.MORPH_OPEN, kernel)
         
         # --- Step 1: Estimate actual circle radius from contours ---
         radius_source = color_mask if is_thin_blue_ring else color_mask_clean
@@ -777,15 +786,19 @@ class CVService:
                 yellow_target = int(target_radius * 0.95)
                 max_radius = int(target_radius * 1.15)
         
-        # --- Step 2: Hough detection on Canny edges (no blur) ---
-        edges = cv2.Canny(color_mask_clean, 50, 150)
+        # --- Step 2: Hough. Blue uses the dilated mask (same as primary);
+        # filled yellow/red still use Canny on the opened mask. ---
+        if sec_color == 'blue':
+            hough_input = cv2.GaussianBlur(color_mask_clean, (5, 5), 1)
+        else:
+            hough_input = cv2.Canny(color_mask_clean, 50, 150)
         
         # Pre-compute connected component labels for shape validation
         num_labels, labels, cc_stats, _ = cv2.connectedComponentsWithStats(color_mask_clean)
         
         hough_param2 = 14 if sec_color == 'red' else (8 if is_thin_blue_ring else 10)
         circles = cv2.HoughCircles(
-            edges,
+            hough_input,
             cv2.HOUGH_GRADIENT,
             dp=1.0,
             minDist=int(yellow_target * 0.8),
@@ -894,7 +907,7 @@ class CVService:
         
         radius_lo = min_radius * 0.85
         radius_hi = max_radius * 1.1
-        circ_threshold = 0.6 if sec_color == 'red' else 0.45
+        circ_threshold = self.MIN_CIRCULARITY
         
         for contour in contours:
             area = cv2.contourArea(contour)
@@ -1045,12 +1058,14 @@ class CVService:
         filled = np.count_nonzero(region[circle_mask])
         return filled / circle_area
 
-    def _verify_circle_circularity(self, color_mask, cx, cy, radius, min_circularity=0.40):
+    def _verify_circle_circularity(self, color_mask, cx, cy, radius, min_circularity=None):
         """Verify that a detected circle region contains a sufficiently circular contour.
 
         Crops the color mask around the circle, finds contours, and checks
         if the best contour has circularity above the threshold.
         """
+        if min_circularity is None:
+            min_circularity = self.MIN_CIRCULARITY
         h, w = color_mask.shape[:2]
         pad = int(radius * 0.3)
         x1 = max(0, cx - radius - pad)
@@ -1792,6 +1807,12 @@ class CVService:
                 foreign_mask = self._build_color_mask(roi, ft)
                 foreign_mask = cv2.dilate(foreign_mask, np.ones((3, 3), np.uint8), iterations=1)
                 roi[foreign_mask > 0] = (255, 255, 255)
+            # Blue ink is mid-gray in BGR→gray (~107 on LP-BLK1-GF E01) and
+            # OCR misses it. Paint blue pixels black before the gray convert.
+            if color_type == 'blue':
+                blue_ink = self._build_color_mask(roi, 'blue')
+                blue_ink = cv2.dilate(blue_ink, np.ones((2, 2), np.uint8), iterations=1)
+                roi[blue_ink > 0] = (0, 0, 0)
         elif color_type == 'yellow' and len(roi.shape) == 3:
             # For yellow filled circles: neutralize the yellow background to white
             # but keep the dark/red text intact for OCR
@@ -1920,13 +1941,21 @@ class CVService:
         if color_type == 'blue':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
             hsv_mask = cv2.inRange(hsv, np.array([90, 35, 35]), np.array([135, 255, 255]))
+            template_mask = cv2.inRange(
+                hsv,
+                self.template_circle_params['lower_blue'],
+                self.template_circle_params['upper_blue'],
+            )
             ratio_mask = ((b.astype(int) > r.astype(int) + threshold) &
                             (b.astype(int) > g.astype(int) + threshold) &
                             (b > 80)).astype(np.uint8) * 255
             light_blue = ((b.astype(int) > 180) &
                           (b.astype(int) > r.astype(int) + 15) &
                           (b.astype(int) > g.astype(int) + 15)).astype(np.uint8) * 255
-            mask = cv2.bitwise_or(hsv_mask, cv2.bitwise_or(ratio_mask, light_blue))
+            mask = cv2.bitwise_or(
+                hsv_mask,
+                cv2.bitwise_or(template_mask, cv2.bitwise_or(ratio_mask, light_blue)),
+            )
         elif color_type == 'red':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
             h_ch, s_ch, v_ch = cv2.split(hsv)
@@ -2114,11 +2143,11 @@ class CVService:
         
         # Try each color in priority order
         candidates = []
-        for color_type in ['blue', 'red']:
+        for color_type in self.SUPPORTED_COLORS:
             color_mask = self._build_color_mask(search_region, color_type)
             contour, circularity, radius = self._find_best_circle_in_mask(color_mask)
             
-            if contour is not None and circularity >= 0.4:
+            if contour is not None and circularity >= self.MIN_CIRCULARITY:
                 candidates.append({
                     'contour': contour,
                     'circularity': circularity,
@@ -2130,8 +2159,17 @@ class CVService:
         if not candidates:
             return None
         
-        # Pick the best candidate by circularity
-        best = max(candidates, key=lambda c: c['circularity'])
+        # Sample marker lives in the outer corner of the search region.
+        # Prefer that location so a nearby yellow/red sign does not steal
+        # the template (seen on LP-BLK1-GF.pdf).
+        if self._is_portrait(img):
+            corner_local = (search_w, search_h)
+        else:
+            corner_local = (search_w, 0)
+        for cand in candidates:
+            (cx_c, cy_c), _ = cv2.minEnclosingCircle(cand['contour'])
+            cand['corner_dist'] = float(np.hypot(cx_c - corner_local[0], cy_c - corner_local[1]))
+        best = min(candidates, key=lambda c: (c['corner_dist'], -c['circularity']))
         best_contour = best['contour']
         color_mask = best['color_mask']
         
@@ -2295,7 +2333,7 @@ class CVService:
         best_contour = None
         best_circularity = 0
         
-        for color_type in ['blue', 'red']:
+        for color_type in self.SUPPORTED_COLORS:
             color_mask = self._build_color_mask(search_region, color_type)
             contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             

@@ -188,6 +188,7 @@ def detect_shapes(floorplan_id):
         ocr_results = []
         img_for_ocr = cv2.imread(image_path)
 
+        kept = []
         for idx, shape in enumerate(all_shapes):
             cv_text = shape.get('extracted_text', '')
             cv_conf = shape.get('ocr_confidence', 0.0)
@@ -212,20 +213,23 @@ def detect_shapes(floorplan_id):
                 if not confidence:
                     confidence = 0.0
 
-            cleaned, quantity = ocr_service.resolve_quantity(
-                cleaned,
-                image_path=image_path,
-                x=shape['x'],
-                y=shape['y'],
-                width=shape['width'],
-                height=shape['height'],
-                img=img_for_ocr,
-            )
-
             if shape.get('detection_method') != 'learned':
                 if not cleaned or not is_valid_sign_code(cleaned, strict=True):
                     continue
 
+            kept.append((idx, shape, cleaned, confidence))
+
+        quantities = ocr_service.assign_quantities(
+            img_for_ocr,
+            [{
+                'x': shape['x'], 'y': shape['y'],
+                'width': shape['width'], 'height': shape['height'],
+                'center_x': shape.get('center_x'),
+                'center_y': shape.get('center_y'),
+            } for _idx, shape, _cleaned, _conf in kept]
+        ) if img_for_ocr is not None else [1] * len(kept)
+
+        for (idx, shape, cleaned, confidence), quantity in zip(kept, quantities):
             shape_data = None
             if 'radius' in shape:
                 shape_data = {
@@ -349,8 +353,10 @@ def extract_text(floorplan_id):
         
         results = []
         is_circle = floorplan.get('shape_type') == 'circle'
-        
-        for data in extracted_data:
+        img_for_ocr = cv2.imread(floorplan['image_filepath'])
+        quantities = ocr_service.assign_quantities(img_for_ocr, extracted_data)
+
+        for data, quantity in zip(extracted_data, quantities):
             if is_circle and data.get('shape_data'):
                 sd = data['shape_data']
                 text, confidence = ocr_service.extract_text_from_circle(
@@ -368,16 +374,11 @@ def extract_text(floorplan_id):
                     label_mode=True,
                     capture_adjacent=False
                 )
-            
+
             cleaned = clean_ocr_text(text)
-            cleaned, quantity = ocr_service.resolve_quantity(
-                cleaned,
-                image_path=floorplan['image_filepath'],
-                x=data['x'],
-                y=data['y'],
-                width=data['width'],
-                height=data['height'],
-            )
+
+            if quantity > 1:
+                current_app.logger.info(f"Found multiplier x{quantity} near rectangle at ({data['x']}, {data['y']}): '{cleaned}'")
 
             mongo.db.extracted_data.update_one(
                 {'_id': data['_id']},
@@ -388,7 +389,7 @@ def extract_text(floorplan_id):
                     'updated_at': datetime.utcnow()
                 }}
             )
-            
+
             data['extracted_text'] = cleaned
             data['confidence'] = confidence
             data['quantity'] = quantity
