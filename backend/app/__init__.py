@@ -1,14 +1,51 @@
+import json
 import os
+from datetime import datetime
+
 from flask import Flask
 from flask_pymongo import PyMongo
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from flasgger import Swagger
+from bson import ObjectId
 
 from config import config
 
 mongo = PyMongo()
 jwt = JWTManager()
+
+
+def _sync_bundled_shape_templates(app):
+    """Insert git-bundled learned templates that this Mongo DB does not have yet."""
+    folder = app.config['SHAPE_TEMPLATES_FOLDER']
+    seed_path = os.path.join(folder, 'seed.json')
+    if not os.path.isfile(seed_path):
+        return
+    with open(seed_path, encoding='utf-8') as f:
+        items = json.load(f)
+    for item in items:
+        tid = ObjectId(item['_id'])
+        png = os.path.join(folder, f'{item["_id"]}.png')
+        if not os.path.isfile(png):
+            continue
+        existing = mongo.db.shape_templates.find_one({'_id': tid})
+        if existing:
+            if existing.get('image_path') != png:
+                mongo.db.shape_templates.update_one(
+                    {'_id': tid}, {'$set': {'image_path': png}})
+            continue
+        mongo.db.shape_templates.insert_one({
+            '_id': tid,
+            'shape_type': item.get('shape_type', 'circle'),
+            'image_path': png,
+            'width': item.get('width', 0),
+            'height': item.get('height', 0),
+            'color_profile': item.get('color_profile'),
+            'extracted_text': item.get('extracted_text') or '',
+            'is_active': item.get('is_active', True),
+            'match_count': 0,
+            'created_at': datetime.utcnow(),
+        })
 
 
 def create_app(config_name=None):
@@ -109,6 +146,7 @@ def create_app(config_name=None):
         # Shape templates indexes (self-learning)
         mongo.db.shape_templates.create_index('shape_type')
         mongo.db.shape_templates.create_index('is_active')
+        _sync_bundled_shape_templates(app)
 
         # WA collections indexes
         mongo.db.wa_records.create_index('referenceNumber', unique=True)
