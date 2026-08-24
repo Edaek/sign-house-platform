@@ -1,4 +1,5 @@
 """Health check endpoints for monitoring and orchestration."""
+import os
 import subprocess
 from flask import Blueprint, jsonify
 from app import mongo
@@ -7,7 +8,12 @@ health_bp = Blueprint('health', __name__)
 
 
 def _get_git_commit():
-    """Get current git commit hash, or 'unknown' if not in a git repo."""
+    """Return deployment commit from build env, falling back to local git."""
+    for key in ('GIT_COMMIT', 'SOURCE_COMMIT'):
+        commit = (os.environ.get(key) or '').strip()
+        if commit and commit.lower() != 'unknown':
+            return commit[:12]
+
     try:
         result = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
