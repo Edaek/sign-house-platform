@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime
+from typing import Optional
 
 from bson import ObjectId
 
@@ -14,7 +15,7 @@ class JobCancelledError(Exception):
     """Raised when a background job should stop processing."""
 
 
-def make_cancel_checker(job_id: str, file_index: int | None = None, poll_interval: float = 0.2):
+def make_cancel_checker(job_id: str, file_index: Optional[int] = None, poll_interval: float = 0.2):
     """Return a callable suitable for long-running CV loops.
 
     Polls Mongo at most every *poll_interval* seconds. Checks whole-job and
@@ -107,7 +108,7 @@ def request_cancel_file(job_id: str, file_index: int) -> bool:
     return result.modified_count > 0
 
 
-def finalize_cancelled(job_id: str, *, error: str | None = None):
+def finalize_cancelled(job_id: str, *, error: Optional[str] = None):
     updates = {
         'status': 'cancelled',
         'cancel_requested': True,
