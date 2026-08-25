@@ -7,6 +7,7 @@ from bson import ObjectId
 from app import mongo
 from app.services.folder_watcher import watcher_manager
 from app.api.processing import normalize_marker_colors
+from app.services.job_cancel import cancel_active_jobs_for_project
 
 watcher_bp = Blueprint('watcher', __name__)
 
@@ -89,9 +90,11 @@ def stop_watcher():
         return jsonify({'error': 'project_id is required'}), 400
 
     stopped = watcher_manager.stop(project_id)
+    cancelled_jobs = cancel_active_jobs_for_project(project_id)
     return jsonify({
         'message': 'Watcher stopped' if stopped else 'No active watcher',
         'status': 'stopped',
+        'cancelled_jobs': cancelled_jobs,
     }), 200
 
 

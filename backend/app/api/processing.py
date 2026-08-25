@@ -16,13 +16,16 @@ from app.models import (
     create_floorplan_doc,
     create_processing_job_doc,
     create_processing_file_doc,
+    create_detect_job_doc,
     processing_job_to_dict,
     create_shape_template_doc,
     shape_template_to_dict
 )
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
-from app.services.batch_processor import start_batch_processing
+from app.services.batch_processor import start_batch_processing, start_resume_processing, build_resume_queue
+from app.services.detect_job_service import start_detect_job
+from app.services.job_cancel import request_cancel, request_cancel_file
 from app.utils.permissions import require_project_access, require_project_modify, check_project_access
 
 logger = logging.getLogger(__name__)
@@ -61,7 +64,7 @@ def allowed_file(filename, allowed_extensions):
 @processing_bp.route('/detect/<floorplan_id>', methods=['POST'])
 @jwt_required()
 def detect_shapes(floorplan_id):
-    """Detect shapes in a floorplan image."""
+    """Start async shape detection for a floorplan. Returns job_id for polling."""
     user_id = get_jwt_identity()
     
     try:
@@ -78,7 +81,7 @@ def detect_shapes(floorplan_id):
     
     data = request.get_json() or {}
     shape_type = data.get('shape_type', 'auto')
-    detection_mode = data.get('mode', 'accurate')  # 'fast' or 'accurate'
+    detection_mode = data.get('mode', 'accurate')
     marker_colors = data.get('marker_colors')
     color_samples = data.get('color_samples')
 
@@ -116,210 +119,81 @@ def detect_shapes(floorplan_id):
     
     if not os.path.exists(floorplan.get('image_filepath', '')):
         return jsonify({'error': 'Floorplan image not found'}), 404
-    
-    t0 = time.time()
-    stage = 'init'
-    try:
-        cv_service = CVService(mode=detection_mode)
-        ocr_service = OCRService()
-        image_path = floorplan['image_filepath']
 
-        stage = 'auto_detect'
-        if shape_type == 'auto':
-            if cv_service.has_sample_circle(image_path):
-                shape_type = 'circle'
-            else:
-                shape_type = 'rectangle'
-
-        stage = 'shape_detection'
-        if shape_type == 'circle':
-            detect_params = {}
-            if marker_colors is not None:
-                detect_params['marker_colors'] = marker_colors
-            if normalized_samples:
-                detect_params['color_samples'] = normalized_samples
-            shapes = cv_service.detect_circles_by_template(
-                image_path,
-                params=detect_params or None,
-            )
-            detected_type = 'circle'
-        else:
-            shapes = cv_service.detect_red_rectangles(image_path)
-            detected_type = 'rectangle'
-
-        logger.info(f"[detect] floorplan={floorplan_id} type={detected_type} "
-                     f"mode={detection_mode} shapes={len(shapes)} elapsed={time.time()-t0:.1f}s")
-
-        stage = 'learned_templates'
-        learned_shapes = []
-        if detection_mode != 'fast':
-            try:
-                active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
-                if active_templates:
-                    raw_learned = cv_service.detect_from_learned_templates(
-                        image_path, active_templates, shape_type=detected_type
-                    )
-                    learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
-                    if learned_shapes:
-                        logger.info(
-                            f"Learned templates added {len(learned_shapes)} new detections"
-                        )
-            except Exception as tmpl_err:
-                logger.warning(f"Learned template matching failed: {tmpl_err}")
-        else:
-            logger.info(f"[detect] fast mode — skipping learned template matching")
-
-        stage = 'db_update'
-        mongo.db.floorplans.update_one(
-            {'_id': ObjectId(floorplan_id)},
-            {'$set': {
-                'shape_type': detected_type,
-                'status': 'processing',
-                'updated_at': datetime.utcnow()
-            }}
-        )
-
-        mongo.db.extracted_data.delete_many({'floorplan_id': ObjectId(floorplan_id)})
-
-        all_shapes = shapes + learned_shapes
-
-        stage = 'ocr'
-        is_circle = detected_type == 'circle'
-        ocr_results = []
-        img_for_ocr = cv2.imread(image_path)
-
-        kept = []
-        for idx, shape in enumerate(all_shapes):
-            cv_text = shape.get('extracted_text', '')
-            cv_conf = shape.get('ocr_confidence', 0.0)
-
-            if cv_text and is_valid_sign_code(cv_text):
-                cleaned = cv_text
-                confidence = cv_conf
-            else:
-                if is_circle and shape.get('center_x') is not None:
-                    text, confidence = ocr_service.extract_text_from_circle(
-                        image_path,
-                        shape['center_x'], shape['center_y'], shape['radius'],
-                        padding=10
-                    )
-                else:
-                    text, confidence = ocr_service.extract_text_from_region(
-                        image_path,
-                        shape['x'], shape['y'], shape['width'], shape['height'],
-                        padding=0, label_mode=True, capture_adjacent=False
-                    )
-                cleaned = clean_ocr_text(text) if text else ''
-                if not confidence:
-                    confidence = 0.0
-
-            if shape.get('detection_method') != 'learned':
-                if not cleaned or not is_valid_sign_code(cleaned, strict=True):
-                    continue
-
-            kept.append((idx, shape, cleaned, confidence))
-
-        quantities = ocr_service.assign_quantities(
-            img_for_ocr,
-            [{
-                'x': shape['x'], 'y': shape['y'],
-                'width': shape['width'], 'height': shape['height'],
-                'center_x': shape.get('center_x'),
-                'center_y': shape.get('center_y'),
-            } for _idx, shape, _cleaned, _conf in kept]
-        ) if img_for_ocr is not None else [1] * len(kept)
-
-        for (idx, shape, cleaned, confidence), quantity in zip(kept, quantities):
-            shape_data = None
-            if 'radius' in shape:
-                shape_data = {
-                    'radius': shape['radius'],
-                    'center_x': shape['center_x'],
-                    'center_y': shape['center_y'],
-                }
-                if 'confidence' in shape:
-                    shape_data['confidence'] = shape['confidence']
-
-            doc = create_extracted_data_doc(
-                shape_index=idx,
-                shape_type=detected_type,
-                x=shape['x'],
-                y=shape['y'],
-                width=shape['width'],
-                height=shape['height'],
-                floorplan_id=floorplan_id,
-                shape_data=shape_data
-            )
-            doc['extracted_text'] = cleaned or None
-            doc['display_text'] = cleaned or None
-            doc['confidence'] = confidence
-            doc['quantity'] = quantity
-
-            if shape.get('detection_method') == 'learned':
-                doc['detection_method'] = 'learned'
-                doc['template_id'] = shape.get('template_id')
-
-            if shape.get('marker_color'):
-                doc['marker_color'] = shape['marker_color']
-
-            result = mongo.db.extracted_data.insert_one(doc)
-            doc['_id'] = result.inserted_id
-            ocr_results.append(doc)
-
-        matched_template_ids = set()
-        for res in ocr_results:
-            tid = res.get('template_id')
-            if tid and res.get('detection_method') == 'learned':
-                matched_template_ids.add(tid)
-        for tid in matched_template_ids:
-            try:
-                mongo.db.shape_templates.update_one(
-                    {'_id': ObjectId(tid)},
-                    {'$inc': {'match_count': 1}}
-                )
-            except Exception:
-                pass
-
-        mongo.db.floorplans.update_one(
-            {'_id': ObjectId(floorplan_id)},
-            {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}}
-        )
-
-        response_results = [serialize_doc(d) for d in ocr_results]
-        for res in response_results:
-            res['display_text'] = res.get('manual_text') or res.get('extracted_text')
-
-        learned_count = sum(1 for r in ocr_results if r.get('detection_method') == 'learned')
-        elapsed = time.time() - t0
-        message = f'Detected and OCR\'d {len(response_results)} {detected_type}s'
-        if learned_count:
-            message += f' ({learned_count} from learned templates)'
-
-        logger.info(f"[detect] floorplan={floorplan_id} mode={detection_mode} completed in {elapsed:.1f}s — "
-                     f"{len(response_results)} results from {len(all_shapes)} shapes")
-
+    existing = mongo.db.processing_jobs.find_one({
+        'floorplan_id': ObjectId(floorplan_id),
+        'job_type': 'detect',
+        'status': {'$in': ['pending', 'processing']},
+    })
+    if existing:
         return jsonify({
-            'message': message,
-            'shape_type': detected_type,
-            'detection_mode': detection_mode,
-            'shapes': response_results,
-            'detection_info': {
-                'total_detected': len(response_results),
-                'learned_count': learned_count
-            }
-        }), 200
+            'message': 'Detection already in progress',
+            'job': processing_job_to_dict(existing),
+        }), 202
 
-    except Exception as e:
-        elapsed = time.time() - t0
-        logger.error(
-            f"[detect] floorplan={floorplan_id} FAILED at stage='{stage}' "
-            f"after {elapsed:.1f}s: {e}\n{traceback.format_exc()}"
-        )
-        return jsonify({
-            'error': f'Shape detection failed: {str(e)}',
-            'stage': stage,
-            'elapsed': round(elapsed, 1),
-        }), 500
+    params = {
+        'shape_type': shape_type,
+        'mode': detection_mode,
+        'marker_colors': marker_colors,
+        'color_samples': normalized_samples,
+    }
+    job_doc = create_detect_job_doc(
+        str(floorplan['project_id']),
+        user_id,
+        floorplan_id,
+        params=params,
+    )
+    result = mongo.db.processing_jobs.insert_one(job_doc)
+    job_doc['_id'] = result.inserted_id
+
+    start_detect_job(job_doc['job_id'], floorplan_id, params)
+
+    return jsonify({
+        'message': 'Detection started',
+        'job': processing_job_to_dict(job_doc),
+    }), 202
+
+
+@processing_bp.route('/detect/job/<job_id>', methods=['GET'])
+@jwt_required()
+def get_detect_job_status(job_id):
+    """Poll status of an async detect job."""
+    user_id = get_jwt_identity()
+
+    job = mongo.db.processing_jobs.find_one({'job_id': job_id, 'job_type': 'detect'})
+    if not job:
+        return jsonify({'error': 'Detect job not found'}), 404
+
+    has_access, _, _ = check_project_access(user_id, str(job['project_id']))
+    if not has_access:
+        return jsonify({'error': 'Access denied'}), 403
+
+    return jsonify({'job': processing_job_to_dict(job)}), 200
+
+
+@processing_bp.route('/detect/job/<job_id>/cancel', methods=['POST'])
+@jwt_required()
+def cancel_detect_job(job_id):
+    """Request cancellation of an in-progress detect job."""
+    user_id = get_jwt_identity()
+
+    job = mongo.db.processing_jobs.find_one({'job_id': job_id, 'job_type': 'detect'})
+    if not job:
+        return jsonify({'error': 'Detect job not found'}), 404
+
+    has_access, _, _ = check_project_access(user_id, str(job['project_id']))
+    if not has_access:
+        return jsonify({'error': 'Access denied'}), 403
+
+    if job['status'] not in ('pending', 'processing'):
+        return jsonify({'error': 'Job is not active', 'job': processing_job_to_dict(job)}), 400
+
+    request_cancel(job_id)
+    updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
+    return jsonify({
+        'message': 'Cancellation requested',
+        'job': processing_job_to_dict(updated),
+    }), 200
 
 
 @processing_bp.route('/ocr/<floorplan_id>', methods=['POST'])
@@ -1203,3 +1077,135 @@ def get_batch_job_status(project_id, job_id, _user=None, _project=None):
     return jsonify({
         'job': processing_job_to_dict(job)
     }), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/job/<job_id>/cancel', methods=['POST'])
+@jwt_required()
+@require_project_modify
+def cancel_batch_job(project_id, job_id, _user=None, _project=None):
+    """Request cancellation of an in-progress batch upload job."""
+    job = mongo.db.processing_jobs.find_one({
+        'job_id': job_id,
+        'project_id': ObjectId(project_id),
+    })
+
+    if not job:
+        return jsonify({'error': 'Batch upload job not found'}), 404
+
+    if job['status'] not in ('pending', 'processing'):
+        return jsonify({'error': 'Job is not active', 'job': processing_job_to_dict(job)}), 400
+
+    request_cancel(job_id)
+    updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
+    return jsonify({
+        'message': 'Cancellation requested',
+        'job': processing_job_to_dict(updated),
+    }), 200
+
+
+@processing_bp.route(
+    '/batch-upload/<project_id>/job/<job_id>/files/<int:file_index>/cancel',
+    methods=['POST'],
+)
+@jwt_required()
+@require_project_modify
+def cancel_batch_file(project_id, job_id, file_index, _user=None, _project=None):
+    """Request cancellation of a single file within an active batch job."""
+    job = mongo.db.processing_jobs.find_one({
+        'job_id': job_id,
+        'project_id': ObjectId(project_id),
+    })
+
+    if not job:
+        return jsonify({'error': 'Batch upload job not found'}), 404
+
+    if job['status'] not in ('pending', 'processing'):
+        return jsonify({'error': 'Job is not active', 'job': processing_job_to_dict(job)}), 400
+
+    files = job.get('files') or []
+    if file_index < 0 or file_index >= len(files):
+        return jsonify({'error': 'Invalid file index'}), 400
+
+    if not request_cancel_file(job_id, file_index):
+        updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
+        return jsonify({
+            'error': 'File cannot be cancelled',
+            'job': processing_job_to_dict(updated),
+        }), 400
+
+    updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
+    return jsonify({
+        'message': 'File cancellation requested',
+        'job': processing_job_to_dict(updated),
+    }), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/resume', methods=['POST'])
+@jwt_required()
+@require_project_modify
+def resume_batch_processing(project_id, _user=None, _project=None):
+    """Resume detection for pending floorplans (after a cancelled batch job)."""
+    user_id = get_jwt_identity()
+
+    active = mongo.db.processing_jobs.find_one({
+        'project_id': ObjectId(project_id),
+        'status': {'$in': ['pending', 'processing']},
+    })
+    if active:
+        return jsonify({
+            'error': 'A processing job is already running',
+            'job': processing_job_to_dict(active),
+        }), 409
+
+    data = request.get_json() or {}
+    detection_mode = data.get('detection_mode', 'accurate')
+    try:
+        marker_colors = normalize_marker_colors(data.get('marker_colors'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    pending = list(mongo.db.floorplans.find({
+        'project_id': ObjectId(project_id),
+        'status': 'pending',
+    }).sort('floor_number', 1))
+
+    pending = [
+        fp for fp in pending
+        if fp.get('image_filepath') and os.path.exists(fp['image_filepath'])
+    ]
+
+    if not pending:
+        return jsonify({'error': 'No pending floor plans to process'}), 400
+
+    job_files, page_queue = build_resume_queue(pending)
+    job_doc = create_processing_job_doc(
+        project_id, user_id, job_files, job_type='batch_resume',
+    )
+    job_doc['detection_mode'] = detection_mode
+    result = mongo.db.processing_jobs.insert_one(job_doc)
+    job_doc['_id'] = result.inserted_id
+
+    config = {
+        'detection_method': data.get('detection_method', 'auto'),
+        'marker_colors': marker_colors,
+    }
+
+    files_info = [
+        {'index': i, 'filename': f['filename']}
+        for i, f in enumerate(job_files)
+    ]
+
+    start_resume_processing(
+        job_id=job_doc['job_id'],
+        page_queue=page_queue,
+        files_info=files_info,
+        project_id=project_id,
+        config=config,
+        detection_mode=detection_mode,
+    )
+
+    return jsonify({
+        'message': f'Resumed processing for {len(pending)} pending floor plan(s)',
+        'job': processing_job_to_dict(job_doc),
+        'pending_count': len(pending),
+    }), 202

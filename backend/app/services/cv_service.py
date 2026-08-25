@@ -5,6 +5,7 @@ import numpy as np
 import logging
 
 from app.services.ocr_service import clean_ocr_text, is_valid_sign_code
+from app.services.job_cancel import JobCancelledError, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ class CVService:
             'white_threshold': 200,  # Stricter white threshold
             'white_ratio_min': 0.55  # At least 55% of interior must be white/light
         }
+
+    @staticmethod
+    def _pop_should_cancel(params):
+        if not params:
+            return None
+        return params.pop('should_cancel', None)
     
     def load_image(self, image_path):
         """Load an image from file.
@@ -398,6 +405,7 @@ class CVService:
             List of detected circles with bounding box info
         """
         params = dict(params or {})
+        should_cancel = self._pop_should_cancel(params)
         marker_colors = params.pop('marker_colors', None)
         color_samples = params.pop('color_samples', None) or []
         normalized_samples = []
@@ -417,6 +425,8 @@ class CVService:
 
         if not marker_colors and not normalized_samples:
             marker_colors = ['red']
+
+        raise_if_cancelled(should_cancel)
 
         if params:
             self.template_circle_params.update(params)
@@ -438,18 +448,19 @@ class CVService:
         sample_color = sample_info.get('color_type', 'red')
         if not marker_colors and normalized_samples:
             detected = []
-            for sample in normalized_samples:
+            for sample_idx, sample in enumerate(normalized_samples):
+                raise_if_cancelled(should_cancel, sample_idx, every=1)
                 bgr = (sample['b'], sample['g'], sample['r'])
                 preset = self._match_bgr_to_preset(*bgr)
                 label = sample.get('label') or (preset or self._bgr_to_hex(*bgr))
                 if preset:
                     batch = self._detect_secondary_color_circles(
                         img, gray, target_radius, preset, detected, sample_location,
-                        marker_color_label=label)
+                        marker_color_label=label, should_cancel=should_cancel)
                 else:
                     batch = self._detect_secondary_color_circles(
                         img, gray, target_radius, 'red', detected, sample_location,
-                        bgr_sample=bgr, marker_color_label=label)
+                        bgr_sample=bgr, marker_color_label=label, should_cancel=should_cancel)
                 detected.extend(batch)
                 detected = self._remove_duplicate_circles(
                     detected, min_distance=int(target_radius * 0.8))
@@ -461,7 +472,8 @@ class CVService:
 
         if len(marker_colors) == 1 and marker_colors[0] != sample_color and not normalized_samples:
             detected = self._detect_secondary_color_circles(
-                img, gray, target_radius, marker_colors[0], [], sample_location)
+                img, gray, target_radius, marker_colors[0], [], sample_location,
+                should_cancel=should_cancel)
             return self._finalize_detected_circles(detected, img, legend_bbox)
         
         # Build color mask using detected color type (HSV-based)
@@ -503,7 +515,8 @@ class CVService:
         if circles is not None:
             circles = np.round(circles[0, :]).astype("int")
             
-            for (cx, cy, radius) in circles:
+            for hough_idx, (cx, cy, radius) in enumerate(circles):
+                raise_if_cancelled(should_cancel, hough_idx, every=1)
                 if sample_location:
                     sample_cx, sample_cy = sample_location
                     dist_to_sample = np.sqrt((cx - sample_cx) ** 2 + (cy - sample_cy) ** 2)
@@ -584,7 +597,8 @@ class CVService:
                     'marker_color': color_type,
                 }
                 
-                keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
+                keep, text, conf = self._verify_shape_content(
+                    img, candidate, color_type=color_type, should_cancel=should_cancel)
                 if not keep:
                     continue
                 
@@ -605,7 +619,8 @@ class CVService:
             radius_lo = target_radius * 0.55
             radius_hi = target_radius * 1.45
 
-            for contour in contours:
+            for contour_idx, contour in enumerate(contours):
+                raise_if_cancelled(should_cancel, contour_idx, every=4)
                 area = cv2.contourArea(contour)
                 if area < 200:
                     continue
@@ -667,7 +682,8 @@ class CVService:
                     'marker_color': color_type,
                 }
 
-                keep, text, conf = self._verify_shape_content(img, candidate, color_type=color_type)
+                keep, text, conf = self._verify_shape_content(
+                    img, candidate, color_type=color_type, should_cancel=should_cancel)
                 if not keep:
                     continue
                 if text:
@@ -677,24 +693,27 @@ class CVService:
 
         detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
         
-        for sec_color_name in secondary_colors:
+        for sec_idx, sec_color_name in enumerate(secondary_colors):
+            raise_if_cancelled(should_cancel, sec_idx, every=1)
             sec_detected = self._detect_secondary_color_circles(
-                img, gray, target_radius, sec_color_name, detected, sample_location)
+                img, gray, target_radius, sec_color_name, detected, sample_location,
+                should_cancel=should_cancel)
             detected.extend(sec_detected)
             detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
 
-        for sample in normalized_samples:
+        for sample_idx, sample in enumerate(normalized_samples):
+            raise_if_cancelled(should_cancel, sample_idx, every=1)
             bgr = (sample['b'], sample['g'], sample['r'])
             preset = self._match_bgr_to_preset(*bgr)
             label = sample.get('label') or (preset or self._bgr_to_hex(*bgr))
             if preset:
                 custom_detected = self._detect_secondary_color_circles(
                     img, gray, target_radius, preset, detected, sample_location,
-                    marker_color_label=label)
+                    marker_color_label=label, should_cancel=should_cancel)
             else:
                 custom_detected = self._detect_secondary_color_circles(
                     img, gray, target_radius, 'red', detected, sample_location,
-                    bgr_sample=bgr, marker_color_label=label)
+                    bgr_sample=bgr, marker_color_label=label, should_cancel=should_cancel)
             detected.extend(custom_detected)
             detected = self._remove_duplicate_circles(
                 detected, min_distance=int(target_radius * 0.8))
@@ -713,7 +732,7 @@ class CVService:
     
     def _detect_secondary_color_circles(
         self, img, gray, target_radius, sec_color, existing, sample_location,
-        bgr_sample=None, marker_color_label=None,
+        bgr_sample=None, marker_color_label=None, should_cancel=None,
     ):
         """Run a secondary detection pass for circles of a different color.
         
@@ -813,7 +832,8 @@ class CVService:
         if circles is not None:
             circles = np.round(circles[0, :]).astype("int")
             
-            for (cx, cy, radius) in circles:
+            for sec_hough_idx, (cx, cy, radius) in enumerate(circles):
+                raise_if_cancelled(should_cancel, sec_hough_idx, every=1)
                 if sample_location:
                     dist_to_sample = np.sqrt(
                         (cx - sample_location[0]) ** 2 + (cy - sample_location[1]) ** 2)
@@ -887,7 +907,9 @@ class CVService:
                 }
                 
                 keep, text, conf = self._verify_shape_content(
-                    img, candidate, color_type=None if sec_color == 'red' else sec_color)
+                    img, candidate,
+                    color_type=None if sec_color == 'red' else sec_color,
+                    should_cancel=should_cancel)
                 if is_thin_blue_ring:
                     if keep and text:
                         candidate['extracted_text'] = text
@@ -909,7 +931,8 @@ class CVService:
         radius_hi = max_radius * 1.1
         circ_threshold = self.MIN_CIRCULARITY
         
-        for contour in contours:
+        for sec_contour_idx, contour in enumerate(contours):
+            raise_if_cancelled(should_cancel, sec_contour_idx, every=4)
             area = cv2.contourArea(contour)
             if area < min_contour_area:
                 continue
@@ -982,7 +1005,9 @@ class CVService:
             }
             
             keep, text, conf = self._verify_shape_content(
-                img, candidate, color_type=None if sec_color == 'red' else sec_color)
+                img, candidate,
+                color_type=None if sec_color == 'red' else sec_color,
+                should_cancel=should_cancel)
             if is_thin_blue_ring:
                 if keep and text:
                     candidate['extracted_text'] = text
@@ -1710,7 +1735,7 @@ class CVService:
             )
         return self._ocr_engine
 
-    def _verify_shape_content(self, img, shape, color_type=None):
+    def _verify_shape_content(self, img, shape, color_type=None, should_cancel=None):
         """Validate a detected shape by running OCR and checking if the text
         matches a sign code pattern.
 
@@ -1722,10 +1747,12 @@ class CVService:
                    Circles also need 'center_x', 'center_y', 'radius'.
             color_type: 'blue' or 'red' — the circle outline color, used to
                         filter out foreign-colored text from the crop.
+            should_cancel: Optional callable returning True when job is cancelled.
 
         Returns:
             Tuple of (keep: bool, text: str, confidence: float)
         """
+        raise_if_cancelled(should_cancel)
         if self.mode == self.FAST_MODE:
             return (True, '', 0.0)
         is_circle = shape.get('type') == 'circle'
@@ -2446,7 +2473,11 @@ class CVService:
             List of detected rectangles with bounding box info
         """
         if params:
+            params = dict(params)
+            should_cancel = self._pop_should_cancel(params)
             self.red_rect_params.update(params)
+        else:
+            should_cancel = None
         
         img, gray = self.load_image(image_path)
         
@@ -2516,7 +2547,8 @@ class CVService:
         # Process all sets of contours
         all_contours = list(contours1) + list(contours2) + list(contours3)
         
-        for contour in all_contours:
+        for contour_idx, contour in enumerate(all_contours):
+            raise_if_cancelled(should_cancel, contour_idx, every=1)
             # Get bounding rectangle
             x, y, w, h = cv2.boundingRect(contour)
             bounding_area = w * h
@@ -2567,7 +2599,8 @@ class CVService:
                     'height': int(h),
                 }
 
-                keep, text, conf = self._verify_shape_content(img, candidate)
+                keep, text, conf = self._verify_shape_content(
+                    img, candidate, should_cancel=should_cancel)
                 if not keep:
                     continue
 
@@ -3055,7 +3088,8 @@ class CVService:
 
         return cv2.inRange(hsv, np.array([h_lo, s_lo, 50]), np.array([h_hi, s_hi, 255]))
 
-    def detect_from_learned_templates(self, image_path, templates, shape_type=None, img=None):
+    def detect_from_learned_templates(self, image_path, templates, shape_type=None, img=None,
+                                    should_cancel=None):
         """Run learned templates against an image using multiple matching strategies.
 
         Strategies:
@@ -3177,7 +3211,8 @@ class CVService:
             f"(skipping {total_loadable - total_reps} duplicates)"
         )
 
-        for rep_idx, grp_size in zip(representative_indices, group_sizes):
+        for rep_loop_idx, (rep_idx, grp_size) in enumerate(zip(representative_indices, group_sizes)):
+            raise_if_cancelled(should_cancel, rep_loop_idx, every=1)
             tmpl_info, template_img, _, _, _, _ = loadable[rep_idx]
 
             _t0 = _time.time()
@@ -3286,7 +3321,8 @@ class CVService:
             rect_red_mask = cv2.bitwise_or(mask_low, mask_high)
 
         verified = []
-        for s in all_matches:
+        for verify_idx, s in enumerate(all_matches):
+            raise_if_cancelled(should_cancel, verify_idx, every=8)
             if s['type'] == 'circle' and circle_color_mask is not None:
                 cx = s.get('center_x', s['x'] + s['width'] // 2)
                 cy = s.get('center_y', s['y'] + s['height'] // 2)

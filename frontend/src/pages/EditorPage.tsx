@@ -57,7 +57,9 @@ export default function EditorPage() {
     currentFloorplan, 
     fetchProject,
     fetchFloorplan, 
-    detectShapes, 
+    detectShapes,
+    cancelDetectJob,
+    currentDetectJobId,
     runOCR,
     ocrRegion,
     updateExtractedData,
@@ -561,12 +563,26 @@ export default function EditorPage() {
       const count = useProjectStore.getState().currentFloorplan?.extracted_data?.length ?? 0
       toast.success(`检测完成，共 ${count} 个标识`)
     } catch (err: any) {
-      const detail = err?.response?.data?.error || 'Shape detection failed'
+      if (err?.cancelled) {
+        toast('Detection stopped', { icon: '⏹️' })
+        return
+      }
+      const detail = err?.response?.data?.error || err?.message || 'Shape detection failed'
       const stage = err?.response?.data?.stage
       const msg = stage ? `${detail} (stage: ${stage})` : detail
       toast.error(msg)
     } finally {
       setIsDetectingShapes(false)
+    }
+  }
+
+  const handleCancelDetect = async () => {
+    if (!currentDetectJobId) return
+    try {
+      await cancelDetectJob(currentDetectJobId)
+      toast.success('Stop requested')
+    } catch {
+      toast.error('Failed to stop')
     }
   }
   
@@ -1205,23 +1221,32 @@ export default function EditorPage() {
             </div>
             
             <div className="flex gap-2">
-              <button
-                onClick={handleDetectShapes}
-                disabled={isDetectingShapes || isRunningOCR}
-                className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2"
-              >
-                {isDetectingShapes ? (
-                  <>
+              {isDetectingShapes ? (
+                <>
+                  <div className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2 opacity-80 cursor-default">
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Detecting...
-                  </>
-                ) : (
-                  <>
-                    <Scan className="w-4 h-4" />
-                    Detect Shapes
-                  </>
-                )}
-              </button>
+                  </div>
+                  {currentDetectJobId && (
+                    <button
+                      onClick={handleCancelDetect}
+                      className="btn flex-1 text-sm flex items-center justify-center gap-2 border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+                    >
+                      <X className="w-4 h-4" />
+                      Stop
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={handleDetectShapes}
+                  disabled={isRunningOCR}
+                  className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2"
+                >
+                  <Scan className="w-4 h-4" />
+                  Detect Shapes
+                </button>
+              )}
               
               <button
                 onClick={handleRunOCR}

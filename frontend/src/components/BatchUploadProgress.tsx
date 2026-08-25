@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   X, 
@@ -9,16 +9,18 @@ import {
   Upload,
   Scan,
   Type,
-  ImageIcon
+  ImageIcon,
+  Octagon
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getProcessingStepColor } from '../lib/theme'
 
 interface ProcessingFile {
   filename: string
-  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error'
+  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error' | 'cancelled'
   progress: number
   error: string | null
+  cancel_requested?: boolean
   floorplan_ids: string[]
   pages_total: number
   pages_processed: number
@@ -31,7 +33,9 @@ interface BatchUploadJob {
   id: string
   job_id: string
   project_id: string
-  status: 'pending' | 'processing' | 'completed' | 'error'
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
+  cancel_requested?: boolean
+  job_type?: string
   total_files: number
   processed_files: number
   files: ProcessingFile[]
@@ -45,7 +49,12 @@ interface BatchUploadProgressProps {
   isOpen: boolean
   onClose: () => void
   onPoll: () => void
+  onCancel?: () => void | Promise<void>
+  onCancelFile?: (fileIndex: number) => void | Promise<void>
 }
+
+const isFileCancellable = (status: ProcessingFile['status']) =>
+  !['completed', 'error', 'cancelled'].includes(status)
 
 const getStatusIcon = (status: ProcessingFile['status']) => {
   const { icon } = getProcessingStepColor(status)
@@ -65,6 +74,8 @@ const getStatusIcon = (status: ProcessingFile['status']) => {
       return <CheckCircle className={className} />
     case 'error':
       return <AlertCircle className={className} />
+    case 'cancelled':
+      return <Octagon className={className} />
   }
 }
 
@@ -84,11 +95,15 @@ const getStatusText = (status: ProcessingFile['status']) => {
       return 'Completed'
     case 'error':
       return 'Failed'
+    case 'cancelled':
+      return 'Cancelled'
   }
 }
 
-export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: BatchUploadProgressProps) {
+export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCancel, onCancelFile }: BatchUploadProgressProps) {
   const pollIntervalRef = useRef<number | null>(null)
+  const [isCancelling, setIsCancelling] = useState(false)
+  const [cancellingFiles, setCancellingFiles] = useState<Set<number>>(new Set())
   
   useEffect(() => {
     if (isOpen && job && (job.status === 'pending' || job.status === 'processing')) {
@@ -112,7 +127,34 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
   
   const completedCount = job.files.filter(f => f.status === 'completed').length
   const errorCount = job.files.filter(f => f.status === 'error').length
-  const isComplete = job.status === 'completed' || job.status === 'error'
+  const cancelledCount = job.files.filter(f => f.status === 'cancelled').length
+  const isActive = job.status === 'pending' || job.status === 'processing'
+  const isComplete = !isActive
+  const isResume = job.job_type === 'batch_resume'
+  
+  const handleCancel = async () => {
+    if (!onCancel || isCancelling) return
+    setIsCancelling(true)
+    try {
+      await onCancel()
+    } finally {
+      setIsCancelling(false)
+    }
+  }
+
+  const handleCancelFile = async (fileIndex: number) => {
+    if (!onCancelFile || cancellingFiles.has(fileIndex)) return
+    setCancellingFiles(prev => new Set(prev).add(fileIndex))
+    try {
+      await onCancelFile(fileIndex)
+    } finally {
+      setCancellingFiles(prev => {
+        const next = new Set(prev)
+        next.delete(fileIndex)
+        return next
+      })
+    }
+  }
   
   return (
     <AnimatePresence>
@@ -126,7 +168,11 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
           <div className="p-4 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
             <div className="flex items-center gap-3">
               {isComplete ? (
-                errorCount > 0 ? (
+                job.status === 'cancelled' ? (
+                  <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                    <Octagon className="w-5 h-5 text-amber-500" />
+                  </div>
+                ) : errorCount > 0 ? (
                   <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center">
                     <AlertCircle className="w-5 h-5 text-red-400" />
                   </div>
@@ -143,13 +189,18 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-white">
                   {isComplete 
-                    ? (errorCount > 0 ? 'Upload Completed with Errors' : 'Upload Complete!')
-                    : 'Processing Floor Plans'
+                    ? (job.status === 'cancelled'
+                        ? 'Processing Cancelled'
+                        : errorCount > 0 ? 'Upload Completed with Errors' : 'Upload Complete!')
+                    : isResume
+                      ? 'Resuming Floor Plans'
+                      : 'Processing Floor Plans'
                   }
                 </h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {completedCount} of {job.total_files} files processed
                   {errorCount > 0 && ` (${errorCount} failed)`}
+                  {cancelledCount > 0 && ` (${cancelledCount} cancelled)`}
                 </p>
               </div>
             </div>
@@ -191,9 +242,11 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
                   className={clsx(
-                    'p-3 rounded-lg border transition-colors',
+                    'group p-3 rounded-lg border transition-colors',
                     file.status === 'error'
                       ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800'
+                      : file.status === 'cancelled'
+                        ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800'
                       : file.status === 'completed'
                         ? 'bg-sign-500/5 dark:bg-sign-500/10 border-sign-200 dark:border-sign-800/40'
                         : 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700'
@@ -206,17 +259,39 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                         {file.filename}
                       </span>
                     </div>
-                    <span className={clsx(
-                      'text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0',
-                      file.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-                      file.status === 'completed' && 'bg-sign-100 text-sign-700 dark:bg-sign-900/40 dark:text-sign-300',
-                      file.status !== 'completed' && file.status !== 'error' && 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                    )}>
-                      {getStatusText(file.status)}
-                    </span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {isActive && onCancelFile && isFileCancellable(file.status) && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelFile(index)}
+                          disabled={file.cancel_requested || cancellingFiles.has(index)}
+                          className={clsx(
+                            'text-xs px-2 py-0.5 rounded-md font-medium transition-opacity',
+                            'border border-amber-300 text-amber-700 hover:bg-amber-50',
+                            'dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30',
+                            'disabled:opacity-50',
+                            file.cancel_requested || cancellingFiles.has(index)
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-100',
+                          )}
+                          title="Stop this file"
+                        >
+                          {file.cancel_requested || cancellingFiles.has(index) ? 'Stopping...' : 'Stop'}
+                        </button>
+                      )}
+                      <span className={clsx(
+                        'text-xs px-2 py-0.5 rounded-full font-medium',
+                        file.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+                        file.status === 'cancelled' && 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+                        file.status === 'completed' && 'bg-sign-100 text-sign-700 dark:bg-sign-900/40 dark:text-sign-300',
+                        !['completed', 'error', 'cancelled'].includes(file.status) && 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                      )}>
+                        {getStatusText(file.status)}
+                      </span>
+                    </div>
                   </div>
                   
-                  {file.status !== 'pending' && file.status !== 'error' && (
+                  {file.status !== 'pending' && file.status !== 'error' && file.status !== 'cancelled' && (
                     <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                       <motion.div
                         className={clsx('h-full rounded-full', getProcessingStepColor(file.status).bar)}
@@ -241,16 +316,32 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
             </div>
           </div>
           
-          {isComplete && (
-            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2">
+            {isActive && onCancel && (
+              <button
+                onClick={handleCancel}
+                disabled={isCancelling || job.cancel_requested}
+                className="flex-1 btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
+              >
+                {isCancelling || job.cancel_requested ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
+                    Stopping...
+                  </>
+                ) : (
+                  'Stop Processing'
+                )}
+              </button>
+            )}
+            {isComplete && (
               <button
                 onClick={onClose}
-                className="w-full btn btn-primary"
+                className="flex-1 btn btn-primary"
               >
                 Done
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </motion.div>
       </div>
     </AnimatePresence>
