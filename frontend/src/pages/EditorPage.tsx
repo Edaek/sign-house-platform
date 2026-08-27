@@ -222,7 +222,7 @@ export default function EditorPage() {
         const isFlashing = flashingShapeId === shape.id
         const isLearned = shape.detection_method === 'learned'
         const isMultiple = (shape.quantity || 1) > 1
-        
+
         const defaultStroke = isMultiple ? '#10b981' : (isLearned ? '#f59e0b' : '#3b9df6')
         const defaultFill = isMultiple
           ? 'rgba(16, 185, 129, 0.1)'
@@ -776,8 +776,8 @@ export default function EditorPage() {
   return (
     <div className="h-[calc(100vh-64px)] flex flex-col">
       {/* Top Bar */}
-      <div className="h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between px-4 sticky top-0 z-40">
-        <div className="flex items-center gap-4">
+      <div className="min-h-14 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 sm:px-4 py-2 sticky top-0 z-40">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0 flex-1">
           <Link 
             to={`/project/${projectId}`}
             className="flex items-center gap-1 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition-colors"
@@ -818,8 +818,11 @@ export default function EditorPage() {
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 group">
-              <h2 className="font-medium text-slate-900 dark:text-white">
+            <div className="flex items-center gap-2 group min-w-0">
+              <span className="md:hidden shrink-0 text-xs tabular-nums text-slate-500 dark:text-slate-400">
+                {(currentIndex ?? 0) + 1}/{currentProject?.floorplans?.length || 0}
+              </span>
+              <h2 className="font-medium text-slate-900 dark:text-white truncate max-w-[34vw] sm:max-w-xs lg:max-w-md">
                 {currentFloorplan?.floor_name}
               </h2>
               <button
@@ -844,7 +847,7 @@ export default function EditorPage() {
         </div>
         
         {/* Floor Navigation */}
-        <div className="flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-2 lg:gap-3 shrink-0">
           <Link
             to={`/project/${projectId}/floor/${prevFloor?.id || ''}`}
             className={clsx(
@@ -858,7 +861,7 @@ export default function EditorPage() {
             <ChevronLeft className="w-5 h-5" />
           </Link>
           
-          <div className="flex items-center gap-2 min-w-[120px] justify-center">
+          <div className="flex items-center gap-2 min-w-[88px] lg:min-w-[120px] justify-center">
             <span className="text-slate-900 dark:text-white font-medium text-sm">
               {(currentIndex ?? 0) + 1}
             </span>
@@ -881,7 +884,7 @@ export default function EditorPage() {
           </Link>
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
           <MarkerColorMenu colors={markerColors} onChange={setMarkerColors} />
           <button
             onClick={() => setRightPanelOpen((open) => !open)}
@@ -892,15 +895,16 @@ export default function EditorPage() {
           </button>
           <button
             onClick={handleMarkComplete}
-            className="btn btn-primary text-sm"
+            className="btn btn-primary text-sm whitespace-nowrap"
           >
             <Check className="w-4 h-4 mr-1" />
-            Mark Complete
+            <span className="hidden sm:inline">Mark Complete</span>
+            <span className="sm:hidden">Done</span>
           </button>
         </div>
       </div>
       
-      <div className="flex-1 flex overflow-hidden min-w-0">
+      <div className="flex-1 flex overflow-hidden min-w-0 relative">
         {/* Toolbar */}
         <div className="w-14 shrink-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-700 flex flex-col items-center py-4 gap-2">
           <button
@@ -999,8 +1003,8 @@ export default function EditorPage() {
           
           {/* Processing Overlay */}
           {(isDetectingShapes || isRunningOCR || isSplitting) && (
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
-              <div className="bg-slate-800 rounded-lg shadow-xl p-6 flex flex-col items-center gap-4 border border-slate-700">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10 p-4">
+              <div className="bg-slate-800 rounded-lg shadow-xl p-5 sm:p-6 flex flex-col items-center gap-4 border border-slate-700 w-full max-w-sm">
                 <Loader2 className={clsx(
                   "w-10 h-10 animate-spin",
                   isSplitting ? "text-sign-500" : "text-sign-500"
@@ -1024,7 +1028,14 @@ export default function EditorPage() {
         
         {/* Right Panel */}
         {rightPanelOpen && (
-        <div className="w-80 shrink-0 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col min-h-0 overflow-hidden">
+        <>
+          <button
+            type="button"
+            aria-label="Close detection panel"
+            className="lg:hidden absolute inset-0 z-20 bg-black/40"
+            onClick={() => setRightPanelOpen(false)}
+          />
+        <div className="absolute inset-y-0 right-0 z-30 w-[min(100%,20rem)] sm:w-80 shrink-0 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 flex flex-col min-h-0 min-w-0 overflow-hidden shadow-xl lg:static lg:z-auto lg:shadow-none">
           {/* Crop Mode Panel */}
           {(tool === 'crop' || cropRegions.length > 0) && (
             <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-sign-50 dark:bg-sign-950/30">
@@ -1160,14 +1171,14 @@ export default function EditorPage() {
           )}
           
           {/* Actions */}
-          <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+          <div className="shrink-0 min-w-0 p-4 border-b border-slate-200 dark:border-slate-700 overflow-hidden">
             <h3 className="font-medium text-slate-900 dark:text-white mb-3">Detection</h3>
             
-            <div className="flex gap-2 mb-3">
+            <div className="grid grid-cols-3 gap-2 mb-3 min-w-0">
               <button
                 onClick={() => setShapeType('auto')}
                 className={clsx(
-                  'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                  'min-w-0 px-2 sm:px-3 py-2 rounded-lg text-sm font-medium transition-colors',
                   shapeType === 'auto' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
@@ -1176,7 +1187,7 @@ export default function EditorPage() {
               <button
                 onClick={() => setShapeType('circle')}
                 className={clsx(
-                  'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
+                  'min-w-0 px-2 sm:px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
                   shapeType === 'circle' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
@@ -1185,7 +1196,7 @@ export default function EditorPage() {
               <button
                 onClick={() => setShapeType('rectangle')}
                 className={clsx(
-                  'flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
+                  'min-w-0 px-2 sm:px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-1',
                   shapeType === 'rectangle' ? 'bg-sign-500 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700'
                 )}
               >
@@ -1193,7 +1204,7 @@ export default function EditorPage() {
               </button>
             </div>
 
-            <div className="flex gap-2 mb-3">
+            <div className="grid grid-cols-2 gap-2 mb-3 min-w-0">
               <button
                 onClick={() => setDetectionMode('fast')}
                 className={clsx(
@@ -1220,47 +1231,50 @@ export default function EditorPage() {
               </button>
             </div>
             
-            <div className="flex gap-2">
+            <div className="space-y-2 min-w-0">
               {isDetectingShapes ? (
-                <>
-                  <div className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2 opacity-80 cursor-default">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Detecting...
+                <div className={clsx(
+                  'grid gap-2 min-w-0',
+                  currentDetectJobId ? 'grid-cols-2' : 'grid-cols-1',
+                )}>
+                  <div className="btn btn-secondary w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5 opacity-80 cursor-default">
+                    <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                    <span className="truncate">Detecting...</span>
                   </div>
                   {currentDetectJobId && (
                     <button
                       onClick={handleCancelDetect}
-                      className="btn flex-1 text-sm flex items-center justify-center gap-2 border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
+                      className="btn w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5 border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
                     >
-                      <X className="w-4 h-4" />
+                      <X className="w-4 h-4 shrink-0" />
                       Stop
                     </button>
                   )}
-                </>
+                </div>
               ) : (
                 <button
                   onClick={handleDetectShapes}
                   disabled={isRunningOCR}
-                  className="btn btn-secondary flex-1 text-sm flex items-center justify-center gap-2"
+                  className="btn btn-secondary w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5"
                 >
-                  <Scan className="w-4 h-4" />
+                  <Scan className="w-4 h-4 shrink-0" />
                   Detect Shapes
                 </button>
               )}
-              
+
               <button
                 onClick={handleRunOCR}
                 disabled={isDetectingShapes || isRunningOCR || !currentFloorplan?.extracted_data?.length}
-                className="btn btn-primary flex-1 text-sm flex items-center justify-center gap-2"
+                className="btn btn-primary w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5"
               >
                 {isRunningOCR ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Processing...
+                    <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
+                    <span className="truncate">Processing...</span>
                   </>
                 ) : (
                   <>
-                    <Type className="w-4 h-4" />
+                    <Type className="w-4 h-4 shrink-0" />
                     Run OCR
                   </>
                 )}
@@ -1273,7 +1287,7 @@ export default function EditorPage() {
           
           {/* Selected Shape Info */}
           {selectedData && (
-            <div className="p-4 border-b border-slate-200 dark:border-slate-700">
+            <div className="shrink-0 min-w-0 p-4 border-b border-slate-200 dark:border-slate-700 overflow-hidden">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-medium text-slate-900 dark:text-white">Selected Shape</h3>
                 <button
@@ -1411,8 +1425,8 @@ export default function EditorPage() {
           )}
           
           {/* Extracted Data List */}
-          <div className="flex-1 overflow-auto">
-            <div className="p-4">
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            <div className="p-4 pb-6 min-w-0">
               <h3 className="font-medium text-slate-900 dark:text-white mb-3">
                 Extracted Data ({currentFloorplan?.extracted_data?.length || 0})
               </h3>
@@ -1437,11 +1451,11 @@ export default function EditorPage() {
                           : 'bg-slate-100 dark:bg-slate-800 border border-transparent hover:border-slate-300 dark:hover:border-slate-600'
                       )}
                     >
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="w-6 h-6 bg-blueprint-100 dark:bg-blueprint-900 rounded text-blueprint-700 dark:text-blueprint-400 text-xs font-bold flex items-center justify-center">
+                      <div className="flex items-center gap-2 mb-1 min-w-0">
+                        <span className="w-6 h-6 bg-blueprint-100 dark:bg-blueprint-900 rounded text-blueprint-700 dark:text-blueprint-400 text-xs font-bold flex items-center justify-center shrink-0">
                           {index + 1}
                         </span>
-                        <span className="text-xs text-slate-600 dark:text-slate-400 capitalize">{data.shape_type}</span>
+                        <span className="text-xs text-slate-600 dark:text-slate-400 capitalize truncate">{data.shape_type}</span>
                         {data.is_manual && (
                           <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded">
                             manual
@@ -1453,7 +1467,7 @@ export default function EditorPage() {
                           </span>
                         )}
                         {(data.quantity || 1) > 1 && (
-                          <span className="text-xs px-1.5 py-0.5 bg-sign-500/20 text-sign-400 rounded font-semibold">
+                          <span className="text-xs px-1.5 py-0.5 bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 rounded font-semibold">
                             ×{data.quantity}
                           </span>
                         )}
@@ -1468,6 +1482,7 @@ export default function EditorPage() {
             </div>
           </div>
         </div>
+        </>
         )}
       </div>
       

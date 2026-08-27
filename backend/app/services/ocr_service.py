@@ -113,13 +113,12 @@ def is_valid_sign_code(text, strict=False):
     if re.fullmatch(r'[xXyY]\d+', cleaned):
         return False
 
-    if re.match(r'^[A-Z]{1,4}$', cleaned):
-        if cleaned.lower() not in _REJECT_WORDS:
-            if strict or len(cleaned) >= 2:
-                return True
-
     if strict and len(cleaned) < 2:
         return False
+
+    if not strict and re.match(r'^[A-Z]{1,4}$', cleaned):
+        if cleaned.lower() not in _REJECT_WORDS and len(cleaned) >= 2:
+            return True
 
     if SIGN_CODE_PATTERN.match(cleaned):
         return True

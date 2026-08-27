@@ -10,6 +10,20 @@ export const MARKER_COLOR_DOT: Record<MarkerColor, string> = {
   yellow: 'bg-yellow-500',
 }
 
+export const MARKER_COLOR_CANVAS: Record<
+  MarkerColor,
+  { stroke: string; fill: string }
+> = {
+  red: { stroke: '#ef4444', fill: 'rgba(239, 68, 68, 0.12)' },
+  blue: { stroke: '#3b82f6', fill: 'rgba(59, 130, 246, 0.12)' },
+  yellow: { stroke: '#eab308', fill: 'rgba(234, 179, 8, 0.16)' },
+}
+
+export function resolveMarkerColor(value?: string | null): MarkerColor | null {
+  if (value === 'red' || value === 'blue' || value === 'yellow') return value
+  return null
+}
+
 export const MARKER_COLOR_STYLES: Record<
   MarkerColor,
   { selected: string; unselected: string }

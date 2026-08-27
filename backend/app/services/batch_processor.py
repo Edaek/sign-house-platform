@@ -233,43 +233,46 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
 
     try:
         if detection_method == 'auto':
-            if cv_service.has_sample_circle(page_info['image_path']):
+            if cv_service.has_sample_circle(page_info['image_path'], img=page_img):
                 detection_method = 'circle'
             else:
                 detection_method = 'rectangle'
 
         detect_t0 = _time.time()
-        if detection_method == 'circle':
-            marker_colors = config.get('marker_colors') or list(CVService.MARKER_COLORS)
-            shapes = cv_service.detect_circles_by_template(
-                page_info['image_path'],
-                params={'marker_colors': marker_colors, 'should_cancel': should_cancel},
-            )
-            shape_type = 'circle'
-        else:
-            shapes = cv_service.detect_red_rectangles(
-                page_info['image_path'],
-                params={'should_cancel': should_cancel},
-            )
-            shape_type = 'rectangle'
+        with cv_service.defer_shape_ocr():
+            if detection_method == 'circle':
+                marker_colors = config.get('marker_colors') or list(CVService.MARKER_COLORS)
+                shapes = cv_service.detect_circles_by_template(
+                    page_info['image_path'],
+                    params={'marker_colors': marker_colors, 'should_cancel': should_cancel},
+                    img=page_img,
+                )
+                shape_type = 'circle'
+            else:
+                shapes = cv_service.detect_red_rectangles(
+                    page_info['image_path'],
+                    params={'should_cancel': should_cancel},
+                    img=page_img,
+                )
+                shape_type = 'rectangle'
+
+            if detection_mode != 'fast' and active_templates:
+                try:
+                    raw_learned = cv_service.detect_from_learned_templates(
+                        page_info['image_path'], active_templates,
+                        shape_type=shape_type, img=page_img,
+                        should_cancel=should_cancel,
+                    )
+                    learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                    if learned_unique:
+                        shapes = shapes + learned_unique
+                except Exception as tmpl_err:
+                    logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
 
         logger.info(
             f"Page {page_info['page_number']}: primary detection ({shape_type}) "
             f"found {len(shapes)} shapes in {_time.time() - detect_t0:.2f}s"
         )
-
-        if detection_mode != 'fast' and active_templates:
-            try:
-                raw_learned = cv_service.detect_from_learned_templates(
-                    page_info['image_path'], active_templates,
-                    shape_type=shape_type, img=page_img,
-                    should_cancel=should_cancel,
-                )
-                learned_unique = cv_service.deduplicate_with_existing(raw_learned, shapes)
-                if learned_unique:
-                    shapes = shapes + learned_unique
-            except Exception as tmpl_err:
-                logger.warning(f"Batch: learned template matching failed: {tmpl_err}")
 
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
@@ -291,39 +294,29 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
         is_circle = shape_type == 'circle'
         if ocr_service and shapes:
             kept = []
+            ocr_t0 = _time.time()
             for idx, shape in enumerate(shapes):
                 if idx % 10 == 0 and (is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index)):
                     return _cancel_result(shapes_detected)
                 try:
-                    cv_text = shape.get('extracted_text', '')
-                    cv_conf = shape.get('ocr_confidence', 0.0)
-
-                    if cv_text and is_valid_sign_code(cv_text):
-                        cleaned = cv_text
-                        confidence = cv_conf
+                    if shape.get('detection_method') == 'learned' and shape.get('extracted_text'):
+                        cleaned = shape['extracted_text']
+                        confidence = shape.get('ocr_confidence', 0.0)
+                        if not is_valid_sign_code(cleaned, strict=True):
+                            continue
                     else:
-                        if is_circle and shape.get('center_x') is not None:
-                            text, confidence = ocr_service.extract_text_from_circle(
-                                page_info['image_path'],
-                                shape['center_x'], shape['center_y'],
-                                shape['radius'], padding=10,
-                                img=page_img,
-                            )
-                        else:
-                            text, confidence = ocr_service.extract_text_from_region(
-                                page_info['image_path'],
-                                shape['x'], shape['y'],
-                                shape['width'], shape['height'],
-                                padding=0, label_mode=True, capture_adjacent=False,
-                                img=page_img,
-                            )
-                        cleaned = clean_ocr_text(text)
-                        if not is_valid_sign_code(cleaned):
+                        keep, cleaned, confidence = cv_service.run_shape_ocr(page_img, shape)
+                        if not keep:
                             continue
 
                     kept.append((idx, shape, cleaned, confidence))
                 except Exception as e:
                     logger.warning(f"OCR failed for shape idx {idx}: {e}")
+
+            logger.info(
+                f"Page {page_info['page_number']}: OCR phase kept {len(kept)}/{len(shapes)} "
+                f"shapes in {_time.time() - ocr_t0:.2f}s"
+            )
 
             if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
                 return _cancel_result(shapes_detected)
@@ -368,15 +361,22 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
                 if shape.get('detection_method') == 'learned':
                     doc['detection_method'] = 'learned'
                     doc['template_id'] = shape.get('template_id')
+                if shape.get('marker_color'):
+                    doc['marker_color'] = shape['marker_color']
                 mongo.db.extracted_data.insert_one(doc)
 
+        elapsed_seconds = round(_time.time() - page_t0, 1)
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
-            {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}},
+            {'$set': {
+                'status': 'completed',
+                'processing_time_seconds': elapsed_seconds,
+                'updated_at': datetime.utcnow(),
+            }},
         )
 
         logger.info(
-            f"Page {page_info['page_number']}: total page time {_time.time() - page_t0:.2f}s"
+            f"Page {page_info['page_number']}: total page time {elapsed_seconds:.1f}s"
         )
         return 'ok', shapes_detected
 
@@ -449,6 +449,11 @@ def _run_detection_phase(job_id, page_queue, files_info, project_id, config, det
             ocr_service = OCRService()
         except Exception as e:
             logger.warning(f"Failed to initialize OCR service: {e}")
+
+    try:
+        OCRService._get_shared_ocr()
+    except Exception as e:
+        logger.warning(f"Failed to warm shared OCR engine: {e}")
 
     cv_service = CVService(mode=detection_mode)
     active_templates = []

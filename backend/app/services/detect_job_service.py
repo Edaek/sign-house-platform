@@ -62,6 +62,9 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
         cv_service = CVService(mode=detection_mode)
         ocr_service = OCRService()
         image_path = floorplan['image_filepath']
+        page_img = cv2.imread(image_path)
+        if page_img is None:
+            raise FileNotFoundError(f"Could not load image: {image_path}")
 
         stage = 'auto_detect'
         _set_stage(job_id, stage, 15)
@@ -69,7 +72,7 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
             return
 
         if shape_type == 'auto':
-            if cv_service.has_sample_circle(image_path):
+            if cv_service.has_sample_circle(image_path, img=page_img):
                 shape_type = 'circle'
             else:
                 shape_type = 'rectangle'
@@ -79,41 +82,39 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
         if _check_cancel():
             return
 
-        if shape_type == 'circle':
-            detect_params = {'should_cancel': should_cancel}
-            if marker_colors is not None:
-                detect_params['marker_colors'] = marker_colors
-            if normalized_samples:
-                detect_params['color_samples'] = normalized_samples
-            shapes = cv_service.detect_circles_by_template(
-                image_path,
-                params=detect_params,
-            )
-            detected_type = 'circle'
-        else:
-            shapes = cv_service.detect_red_rectangles(
-                image_path,
-                params={'should_cancel': should_cancel},
-            )
-            detected_type = 'rectangle'
-
-        if _check_cancel():
-            return
-
-        stage = 'learned_templates'
-        _set_stage(job_id, stage, 55)
         learned_shapes = []
-        if detection_mode != 'fast':
-            try:
-                active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
-                if active_templates:
-                    raw_learned = cv_service.detect_from_learned_templates(
-                        image_path, active_templates, shape_type=detected_type,
-                        should_cancel=should_cancel,
-                    )
-                    learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
-            except Exception as tmpl_err:
-                logger.warning(f"Learned template matching failed: {tmpl_err}")
+        with cv_service.defer_shape_ocr():
+            if shape_type == 'circle':
+                detect_params = {'should_cancel': should_cancel}
+                if marker_colors is not None:
+                    detect_params['marker_colors'] = marker_colors
+                if normalized_samples:
+                    detect_params['color_samples'] = normalized_samples
+                shapes = cv_service.detect_circles_by_template(
+                    image_path,
+                    params=detect_params,
+                    img=page_img,
+                )
+                detected_type = 'circle'
+            else:
+                shapes = cv_service.detect_red_rectangles(
+                    image_path,
+                    params={'should_cancel': should_cancel},
+                    img=page_img,
+                )
+                detected_type = 'rectangle'
+
+            if detection_mode != 'fast':
+                try:
+                    active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
+                    if active_templates:
+                        raw_learned = cv_service.detect_from_learned_templates(
+                            image_path, active_templates, shape_type=detected_type,
+                            img=page_img, should_cancel=should_cancel,
+                        )
+                        learned_shapes = cv_service.deduplicate_with_existing(raw_learned, shapes)
+                except Exception as tmpl_err:
+                    logger.warning(f"Learned template matching failed: {tmpl_err}")
 
         if _check_cancel():
             return
@@ -136,38 +137,21 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
         _set_stage(job_id, stage, 70)
         is_circle = detected_type == 'circle'
         ocr_results = []
-        img_for_ocr = cv2.imread(image_path)
+        img_for_ocr = page_img
 
         kept = []
         for idx, shape in enumerate(all_shapes):
             if idx % 10 == 0 and _check_cancel():
                 return
 
-            cv_text = shape.get('extracted_text', '')
-            cv_conf = shape.get('ocr_confidence', 0.0)
-
-            if cv_text and is_valid_sign_code(cv_text):
-                cleaned = cv_text
-                confidence = cv_conf
+            if shape.get('detection_method') == 'learned' and shape.get('extracted_text'):
+                cleaned = shape['extracted_text']
+                confidence = shape.get('ocr_confidence', 0.0)
+                if not is_valid_sign_code(cleaned, strict=True):
+                    continue
             else:
-                if is_circle and shape.get('center_x') is not None:
-                    text, confidence = ocr_service.extract_text_from_circle(
-                        image_path,
-                        shape['center_x'], shape['center_y'], shape['radius'],
-                        padding=10,
-                    )
-                else:
-                    text, confidence = ocr_service.extract_text_from_region(
-                        image_path,
-                        shape['x'], shape['y'], shape['width'], shape['height'],
-                        padding=0, label_mode=True, capture_adjacent=False,
-                    )
-                cleaned = clean_ocr_text(text) if text else ''
-                if not confidence:
-                    confidence = 0.0
-
-            if shape.get('detection_method') != 'learned':
-                if not cleaned or not is_valid_sign_code(cleaned, strict=True):
+                keep, cleaned, confidence = cv_service.run_shape_ocr(page_img, shape)
+                if not keep:
                     continue
 
             kept.append((idx, shape, cleaned, confidence))
@@ -241,9 +225,14 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
             except Exception:
                 pass
 
+        elapsed = round(time.time() - t0, 1)
         mongo.db.floorplans.update_one(
             {'_id': ObjectId(floorplan_id)},
-            {'$set': {'status': 'completed', 'updated_at': datetime.utcnow()}},
+            {'$set': {
+                'status': 'completed',
+                'processing_time_seconds': elapsed,
+                'updated_at': datetime.utcnow(),
+            }},
         )
 
         response_results = [serialize_doc(d) for d in ocr_results]
@@ -251,7 +240,6 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
             res['display_text'] = res.get('manual_text') or res.get('extracted_text')
 
         learned_count = sum(1 for r in ocr_results if r.get('detection_method') == 'learned')
-        elapsed = time.time() - t0
         message = f"Detected and OCR'd {len(response_results)} {detected_type}s"
         if learned_count:
             message += f' ({learned_count} from learned templates)'
@@ -270,7 +258,7 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
                     'total_detected': len(response_results),
                     'learned_count': learned_count,
                 },
-                'elapsed': round(elapsed, 1),
+                'elapsed': elapsed,
             },
         })
 

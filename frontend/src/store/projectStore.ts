@@ -71,6 +71,7 @@ interface FloorPlan {
   shape_type: string | null
   status: string
   data_count: number
+  processing_time_seconds?: number | null
   extracted_data?: ExtractedData[]
 }
 

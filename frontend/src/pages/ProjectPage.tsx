@@ -339,6 +339,13 @@ export default function ProjectPage() {
         return 'Pending'
     }
   }
+
+  const formatProcessingTime = (seconds: number) => {
+    if (seconds < 60) return `${seconds.toFixed(1)}s`
+    const minutes = Math.floor(seconds / 60)
+    const remaining = Math.round(seconds % 60)
+    return `${minutes}m ${remaining}s`
+  }
   
   if (isLoading && !currentProject) {
     return (
@@ -950,6 +957,14 @@ export default function ProjectPage() {
                   
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
+                      {floorplan.status === 'completed' && floorplan.processing_time_seconds != null && (
+                        <span
+                          className="text-xs font-mono text-slate-500 dark:text-slate-400"
+                          title="Recognition time"
+                        >
+                          {formatProcessingTime(floorplan.processing_time_seconds)}
+                        </span>
+                      )}
                       {getStatusIcon(floorplan.status)}
                       <span className="text-sm text-slate-700 dark:text-slate-300">
                         {getStatusText(floorplan.status)}
