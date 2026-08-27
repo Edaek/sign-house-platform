@@ -5,6 +5,7 @@ import numpy as np
 import logging
 
 from app.services.ocr_service import clean_ocr_text, is_valid_sign_code
+from app.services.job_cancel import JobCancelledError, raise_if_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,13 @@ class CVService:
     def _is_portrait(img):
         h, w = img.shape[:2]
         return h > w
+
+    @staticmethod
+    def _pop_should_cancel(params):
+        """Extract and remove should_cancel from params dict."""
+        if params and 'should_cancel' in params:
+            return params.pop('should_cancel')
+        return None
     
     def __init__(self, mode='accurate'):
         """Initialize CV service with default parameters.
@@ -399,7 +407,12 @@ class CVService:
             List of detected circles with bounding box info
         """
         if params:
+            should_cancel = self._pop_should_cancel(params)
             self.template_circle_params.update(params)
+        else:
+            should_cancel = None
+
+        self._should_cancel = should_cancel
         
         img, gray = self.load_image(image_path)
         h, w = img.shape[:2]
@@ -457,6 +470,8 @@ class CVService:
             circles = np.round(circles[0, :]).astype("int")
             
             for (cx, cy, radius) in circles:
+                raise_if_cancelled(should_cancel)
+
                 if sample_location:
                     sample_cx, sample_cy = sample_location
                     dist_to_sample = np.sqrt((cx - sample_cx) ** 2 + (cy - sample_cy) ** 2)
@@ -557,7 +572,9 @@ class CVService:
             radius_lo = target_radius * 0.55
             radius_hi = target_radius * 1.45
 
-            for contour in contours:
+            for cnt_idx, contour in enumerate(contours):
+                raise_if_cancelled(should_cancel, step=cnt_idx, every=4)
+
                 area = cv2.contourArea(contour)
                 if area < 200:
                     continue
@@ -632,8 +649,11 @@ class CVService:
         if self.mode != self.FAST_MODE:
             secondary_colors = [c for c in self.SUPPORTED_COLORS if c != color_type]
             for sec_color_name in secondary_colors:
+                raise_if_cancelled(should_cancel)
+
                 sec_detected = self._detect_secondary_color_circles(
-                    img, gray, target_radius, sec_color_name, detected, sample_location)
+                    img, gray, target_radius, sec_color_name, detected, sample_location,
+                    should_cancel=should_cancel)
                 detected.extend(sec_detected)
                 detected = self._remove_duplicate_circles(detected, min_distance=int(target_radius * 0.8))
         
@@ -664,7 +684,7 @@ class CVService:
         
         return detected
     
-    def _detect_secondary_color_circles(self, img, gray, target_radius, sec_color, existing, sample_location):
+    def _detect_secondary_color_circles(self, img, gray, target_radius, sec_color, existing, sample_location, should_cancel=None):
         """Run a secondary detection pass for circles of a different color.
         
         For filled circles (like yellow), independently estimates the actual
@@ -743,6 +763,8 @@ class CVService:
             circles = np.round(circles[0, :]).astype("int")
             
             for (cx, cy, radius) in circles:
+                raise_if_cancelled(should_cancel)
+
                 if sample_location:
                     dist_to_sample = np.sqrt(
                         (cx - sample_location[0]) ** 2 + (cy - sample_location[1]) ** 2)
@@ -844,7 +866,9 @@ class CVService:
         radius_hi = max_radius * 1.1
         circ_threshold = self.MIN_CIRCULARITY
         
-        for contour in contours:
+        for cnt_idx, contour in enumerate(contours):
+            raise_if_cancelled(should_cancel, step=cnt_idx, every=4)
+
             area = cv2.contourArea(contour)
             if area < 300:
                 continue
@@ -1631,6 +1655,8 @@ class CVService:
 
         if cropped_bgr is None or cropped_bgr.size == 0:
             return (False, '', 0.0)
+
+        raise_if_cancelled(getattr(self, '_should_cancel', None))
 
         try:
             ocr = self._get_ocr_engine()

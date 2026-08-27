@@ -22,6 +22,7 @@ from app.models import (
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 from app.services.batch_processor import start_batch_processing
+from app.services.job_cancel import request_cancel, request_cancel_file
 from app.utils.permissions import require_project_access, require_project_modify, check_project_access
 
 logger = logging.getLogger(__name__)
@@ -1121,3 +1122,25 @@ def get_batch_job_status(project_id, job_id, _user=None, _project=None):
     return jsonify({
         'job': processing_job_to_dict(job)
     }), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/job/<job_id>/cancel', methods=['POST'])
+@jwt_required()
+@require_project_access
+def cancel_batch_job(project_id, job_id, _user=None, _project=None):
+    """Request cancellation for an active batch job."""
+    success = request_cancel(job_id)
+    if not success:
+        return jsonify({'error': 'Job not found or already completed'}), 404
+    return jsonify({'message': 'Cancellation requested', 'job_id': job_id}), 200
+
+
+@processing_bp.route('/batch-upload/<project_id>/job/<job_id>/files/<int:file_index>/cancel', methods=['POST'])
+@jwt_required()
+@require_project_access
+def cancel_batch_file(project_id, job_id, file_index, _user=None, _project=None):
+    """Request cancellation for a single file within an active batch job."""
+    success = request_cancel_file(job_id, file_index)
+    if not success:
+        return jsonify({'error': 'File not found or already completed'}), 404
+    return jsonify({'message': 'File cancellation requested', 'job_id': job_id, 'file_index': file_index}), 200

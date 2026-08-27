@@ -40,6 +40,8 @@ export default function ProjectPage() {
     currentBatchJob,
     isBatchUploading,
     clearBatchJob,
+    cancelBatchJob,
+    cancelBatchFile,
     isLoading,
     watcherStatus,
     startWatcher,
@@ -929,6 +931,16 @@ export default function ProjectPage() {
         isOpen={showBatchProgress}
         onClose={handleCloseBatchProgress}
         onPoll={handlePollStatus}
+        onCancel={() => {
+          if (currentBatchJob && projectId) {
+            cancelBatchJob(projectId, currentBatchJob.job_id)
+          }
+        }}
+        onCancelFile={(fileIndex) => {
+          if (currentBatchJob && projectId) {
+            cancelBatchFile(projectId, currentBatchJob.job_id, fileIndex)
+          }
+        }}
       />
       
       {/* Floating Processing Indicator - shows when dialog is closed but job is running */}

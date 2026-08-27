@@ -95,7 +95,7 @@ interface CropRegion {
 
 interface ProcessingFile {
   filename: string
-  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error'
+  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error' | 'cancelled'
   progress: number
   error: string | null
   floorplan_ids: string[]
@@ -104,6 +104,7 @@ interface ProcessingFile {
   shapes_detected: number
   started_at: string | null
   completed_at: string | null
+  cancel_requested?: boolean
 }
 
 interface BatchUploadJob {
@@ -111,13 +112,14 @@ interface BatchUploadJob {
   job_id: string
   project_id: string
   user_id: string
-  status: 'pending' | 'processing' | 'completed' | 'error'
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
   total_files: number
   processed_files: number
   files: ProcessingFile[]
   created_at: string
   updated_at: string
   completed_at: string | null
+  cancel_requested?: boolean
 }
 
 interface WatcherFileStatus {
@@ -167,6 +169,8 @@ interface ProjectState {
   uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate') => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
+  cancelBatchJob: (projectId: string, jobId: string) => Promise<void>
+  cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<void>
   clearBatchJob: () => void
   
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
@@ -327,8 +331,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       const job = response.data.job as BatchUploadJob
       set({ currentBatchJob: job })
       
-      // If job is completed or errored, stop uploading state and refresh project
-      if (job.status === 'completed' || job.status === 'error') {
+      if (job.status === 'completed' || job.status === 'error' || job.status === 'cancelled') {
         set({ isBatchUploading: false })
         await get().fetchProject(projectId)
       }
@@ -342,6 +345,24 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   
   clearBatchJob: () => {
     set({ currentBatchJob: null, isBatchUploading: false })
+  },
+
+  cancelBatchJob: async (projectId: string, jobId: string) => {
+    try {
+      await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/cancel`)
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to cancel job' })
+      throw error
+    }
+  },
+
+  cancelBatchFile: async (projectId: string, jobId: string, fileIndex: number) => {
+    try {
+      await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/files/${fileIndex}/cancel`)
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to cancel file' })
+      throw error
+    }
   },
   
   fetchActiveBatchJob: async (projectId: string) => {

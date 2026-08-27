@@ -354,7 +354,7 @@ def processing_job_to_dict(job_doc):
     """Convert processing job document to dict for JSON response."""
     if not job_doc:
         return None
-    
+
     return {
         'id': str(job_doc['_id']),
         'job_id': job_doc['job_id'],
@@ -364,6 +364,7 @@ def processing_job_to_dict(job_doc):
         'total_files': job_doc['total_files'],
         'processed_files': job_doc['processed_files'],
         'files': job_doc.get('files', []),
+        'cancel_requested': job_doc.get('cancel_requested', False),
         'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
         'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
         'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None

@@ -68,6 +68,7 @@ export const processingSteps: Record<string, { icon: string; bar: string }> = {
   ocr: { icon: 'text-sign-600 animate-pulse', bar: 'bg-sign-600' },
   completed: { icon: 'text-sign-500', bar: 'bg-sign-500' },
   error: { icon: 'text-red-400', bar: 'bg-red-500' },
+  cancelled: { icon: 'text-amber-500', bar: 'bg-amber-400' },
 }
 
 export function getProcessingStepColor(status: string): { icon: string; bar: string } {

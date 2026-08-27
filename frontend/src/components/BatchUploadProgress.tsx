@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   X, 
@@ -9,14 +9,16 @@ import {
   Upload,
   Scan,
   Type,
-  ImageIcon
+  ImageIcon,
+  XCircle,
+  Ban
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getProcessingStepColor } from '../lib/theme'
 
 interface ProcessingFile {
   filename: string
-  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error'
+  status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error' | 'cancelled'
   progress: number
   error: string | null
   floorplan_ids: string[]
@@ -25,19 +27,21 @@ interface ProcessingFile {
   shapes_detected: number
   started_at: string | null
   completed_at: string | null
+  cancel_requested?: boolean
 }
 
 interface BatchUploadJob {
   id: string
   job_id: string
   project_id: string
-  status: 'pending' | 'processing' | 'completed' | 'error'
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
   total_files: number
   processed_files: number
   files: ProcessingFile[]
   created_at: string
   updated_at: string
   completed_at: string | null
+  cancel_requested?: boolean
 }
 
 interface BatchUploadProgressProps {
@@ -45,6 +49,8 @@ interface BatchUploadProgressProps {
   isOpen: boolean
   onClose: () => void
   onPoll: () => void
+  onCancel?: () => void
+  onCancelFile?: (fileIndex: number) => void
 }
 
 const getStatusIcon = (status: ProcessingFile['status']) => {
@@ -65,10 +71,15 @@ const getStatusIcon = (status: ProcessingFile['status']) => {
       return <CheckCircle className={className} />
     case 'error':
       return <AlertCircle className={className} />
+    case 'cancelled':
+      return <Ban className="w-4 h-4 text-amber-500" />
   }
 }
 
-const getStatusText = (status: ProcessingFile['status']) => {
+const getStatusText = (status: ProcessingFile['status'], cancelRequested?: boolean) => {
+  if (cancelRequested && status !== 'cancelled' && status !== 'completed' && status !== 'error') {
+    return 'Stopping...'
+  }
   switch (status) {
     case 'pending':
       return 'Waiting...'
@@ -84,11 +95,14 @@ const getStatusText = (status: ProcessingFile['status']) => {
       return 'Completed'
     case 'error':
       return 'Failed'
+    case 'cancelled':
+      return 'Cancelled'
   }
 }
 
-export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: BatchUploadProgressProps) {
+export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCancel, onCancelFile }: BatchUploadProgressProps) {
   const pollIntervalRef = useRef<number | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState<'job' | number | null>(null)
   
   useEffect(() => {
     if (isOpen && job && (job.status === 'pending' || job.status === 'processing')) {
@@ -112,7 +126,10 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
   
   const completedCount = job.files.filter(f => f.status === 'completed').length
   const errorCount = job.files.filter(f => f.status === 'error').length
-  const isComplete = job.status === 'completed' || job.status === 'error'
+  const cancelledCount = job.files.filter(f => f.status === 'cancelled').length
+  const isComplete = job.status === 'completed' || job.status === 'error' || job.status === 'cancelled'
+  const isActive = job.status === 'pending' || job.status === 'processing'
+  const isStopping = job.cancel_requested && isActive
   
   return (
     <AnimatePresence>
@@ -143,13 +160,18 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
               <div>
                 <h3 className="font-semibold text-slate-900 dark:text-white">
                   {isComplete 
-                    ? (errorCount > 0 ? 'Upload Completed with Errors' : 'Upload Complete!')
-                    : 'Processing Floor Plans'
+                    ? (job.status === 'cancelled'
+                      ? 'Processing Cancelled'
+                      : errorCount > 0 ? 'Upload Completed with Errors' : 'Upload Complete!')
+                    : isStopping
+                      ? 'Stopping...'
+                      : 'Processing Floor Plans'
                   }
                 </h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {completedCount} of {job.total_files} files processed
                   {errorCount > 0 && ` (${errorCount} failed)`}
+                  {cancelledCount > 0 && ` (${cancelledCount} cancelled)`}
                 </p>
               </div>
             </div>
@@ -191,12 +213,14 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
                   className={clsx(
-                    'p-3 rounded-lg border transition-colors',
+                    'p-3 rounded-lg border transition-colors group',
                     file.status === 'error'
                       ? 'bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800'
-                      : file.status === 'completed'
-                        ? 'bg-sign-500/5 dark:bg-sign-500/10 border-sign-200 dark:border-sign-800/40'
-                        : 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700'
+                      : file.status === 'cancelled'
+                        ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+                        : file.status === 'completed'
+                          ? 'bg-sign-500/5 dark:bg-sign-500/10 border-sign-200 dark:border-sign-800/40'
+                          : 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700'
                   )}
                 >
                   <div className="flex items-center justify-between mb-2">
@@ -206,17 +230,29 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
                         {file.filename}
                       </span>
                     </div>
-                    <span className={clsx(
-                      'text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0',
-                      file.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-                      file.status === 'completed' && 'bg-sign-100 text-sign-700 dark:bg-sign-900/40 dark:text-sign-300',
-                      file.status !== 'completed' && file.status !== 'error' && 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                    )}>
-                      {getStatusText(file.status)}
-                    </span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {onCancelFile && !file.cancel_requested && file.status !== 'completed' && file.status !== 'error' && file.status !== 'cancelled' && (
+                        <button
+                          onClick={() => setConfirmCancel(index)}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-500 rounded transition-all"
+                          title="Stop this file"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <span className={clsx(
+                        'text-xs px-2 py-0.5 rounded-full font-medium',
+                        file.status === 'error' && 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+                        file.status === 'cancelled' && 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+                        file.status === 'completed' && 'bg-sign-100 text-sign-700 dark:bg-sign-900/40 dark:text-sign-300',
+                        file.status !== 'completed' && file.status !== 'error' && file.status !== 'cancelled' && 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                      )}>
+                        {getStatusText(file.status, file.cancel_requested)}
+                      </span>
+                    </div>
                   </div>
                   
-                  {file.status !== 'pending' && file.status !== 'error' && (
+                  {file.status !== 'pending' && file.status !== 'error' && file.status !== 'cancelled' && (
                     <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                       <motion.div
                         className={clsx('h-full rounded-full', getProcessingStepColor(file.status).bar)}
@@ -241,6 +277,24 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
             </div>
           </div>
           
+          {isActive && onCancel && (
+            <div className="p-4 border-t border-slate-200 dark:border-slate-700">
+              <button
+                onClick={() => setConfirmCancel('job')}
+                disabled={isStopping}
+                className={clsx(
+                  'w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors',
+                  isStopping
+                    ? 'bg-slate-100 text-slate-400 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed'
+                    : 'bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-950/50'
+                )}
+              >
+                <XCircle className="w-4 h-4" />
+                {isStopping ? 'Stopping...' : 'Stop Processing'}
+              </button>
+            </div>
+          )}
+
           {isComplete && (
             <div className="p-4 border-t border-slate-200 dark:border-slate-700">
               <button
@@ -253,6 +307,51 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll }: Ba
           )}
         </motion.div>
       </div>
+
+      {confirmCancel !== null && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700 p-6"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/40 flex items-center justify-center">
+                <XCircle className="w-5 h-5 text-red-500" />
+              </div>
+              <h4 className="font-semibold text-slate-900 dark:text-white">
+                {confirmCancel === 'job' ? 'Stop All Processing?' : 'Stop This File?'}
+              </h4>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+              {confirmCancel === 'job'
+                ? 'Are you sure you want to stop processing all files? Files already completed will be kept.'
+                : 'Are you sure you want to stop processing this file?'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmCancel(null)}
+                className="flex-1 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (confirmCancel === 'job') {
+                    onCancel?.()
+                  } else {
+                    onCancelFile?.(confirmCancel as number)
+                  }
+                  setConfirmCancel(null)
+                }}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors"
+              >
+                Confirm
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </AnimatePresence>
   )
 }

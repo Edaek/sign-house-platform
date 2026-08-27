@@ -14,6 +14,14 @@ from app.models import create_floorplan_doc, create_extracted_data_doc, serializ
 from app.services.pdf_service import PDFService
 from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
+from app.services.job_cancel import (
+    is_cancel_requested,
+    is_file_cancel_requested,
+    cancel_remaining_batch_files,
+    finalize_cancelled,
+    make_cancel_checker,
+    JobCancelledError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +61,11 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         config: App config dict with title extraction settings
         detection_mode: 'fast' or 'accurate'
     """
+    should_cancel = make_cancel_checker(job_id, file_index)
+
+    def _check_cancelled():
+        return is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index)
+
     try:
         # Update status to converting
         update_file_status(job_id, file_index, {
@@ -96,6 +109,9 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         
         # Process each page
         for page_idx, page_info in enumerate(pages):
+            if _check_cancelled():
+                raise JobCancelledError()
+
             page_progress = 20 + (page_idx / len(pages)) * 60  # Progress from 20% to 80%
             page_t0 = _time.time()
             
@@ -156,7 +172,9 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                 
                 detect_t0 = _time.time()
                 if detection_method == 'circle':
-                    shapes = cv_service.detect_circles_by_template(page_info['image_path'])
+                    shapes = cv_service.detect_circles_by_template(
+                        page_info['image_path'],
+                        params={'should_cancel': should_cancel})
                     shape_type = 'circle'
                 else:
                     shapes = cv_service.detect_red_rectangles(page_info['image_path'])
@@ -210,6 +228,8 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
                     ocr_t0 = _time.time()
                     kept = []
                     for idx, shape in enumerate(shapes):
+                        if idx % 10 == 0 and _check_cancelled():
+                            raise JobCancelledError()
                         try:
                             cv_text = shape.get('extracted_text', '')
                             cv_conf = shape.get('ocr_confidence', 0.0)
@@ -317,6 +337,15 @@ def process_single_pdf(job_id, file_index, file_path, filename, project_id, uplo
         
         return True
         
+    except JobCancelledError:
+        logger.info(f"Processing cancelled for {filename} (file_index={file_index})")
+        update_file_status(job_id, file_index, {
+            'status': 'cancelled',
+            'error': 'Cancelled by user',
+            'completed_at': datetime.utcnow().isoformat()
+        })
+        return False
+
     except Exception as e:
         logger.error(f"Failed to process PDF {filename}: {str(e)}")
         update_file_status(job_id, file_index, {
@@ -345,6 +374,12 @@ def process_batch_job(job_id, files_info, project_id, upload_folder, config, det
         error_count = 0
         
         for file_info in files_info:
+            if is_cancel_requested(job_id):
+                cancel_remaining_batch_files(job_id, file_info['index'])
+                finalize_cancelled(job_id)
+                logger.info(f"Batch job {job_id} cancelled at file index {file_info['index']}")
+                return
+
             success = process_single_pdf(
                 job_id=job_id,
                 file_index=file_info['index'],
