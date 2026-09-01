@@ -853,17 +853,17 @@ class CVService:
         
         if radii:
             yellow_target = int(np.median(radii))
-            yellow_target = max(int(target_radius * 0.5), min(yellow_target, int(target_radius * 3.0)))
+            yellow_target = max(int(target_radius * 0.5), min(yellow_target, int(target_radius * 1.8)))
             min_radius = max(5, int(min(radii) * 0.7))
             max_radius = int(max(radii) * 1.3)
-            max_radius = min(max_radius, int(target_radius * 4.0))
+            max_radius = min(max_radius, int(target_radius * 2.0))
             if is_thin_blue_ring:
                 yellow_target = min(yellow_target, int(target_radius * 1.05))
                 max_radius = min(max_radius, int(target_radius * 1.2))
         else:
             yellow_target = target_radius
             min_radius = max(5, int(target_radius * 0.5))
-            max_radius = int(target_radius * 3.5)
+            max_radius = int(target_radius * 1.8)
             if is_thin_blue_ring:
                 yellow_target = int(target_radius * 0.95)
                 max_radius = int(target_radius * 1.15)
@@ -1828,7 +1828,7 @@ class CVService:
             Tuple of (keep: bool, text: str, confidence: float)
         """
         raise_if_cancelled(should_cancel)
-        if self.mode == self.FAST_MODE or getattr(self, '_defer_shape_ocr', False):
+        if getattr(self, '_defer_shape_ocr', False):
             return (True, '', 0.0)
         is_circle = shape.get('type') == 'circle'
 
