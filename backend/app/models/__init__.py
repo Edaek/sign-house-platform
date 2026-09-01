@@ -322,31 +322,65 @@ def create_processing_file_doc(filename, status='pending'):
         'pages_total': 0,
         'pages_processed': 0,
         'shapes_detected': 0,
+        'cancel_requested': False,
         'started_at': None,
         'completed_at': None
     }
 
 
-def create_processing_job_doc(project_id, user_id, files):
+def create_processing_job_doc(project_id, user_id, files, job_type='batch_upload', floorplan_id=None):
     """Create a processing job document for batch PDF upload.
     
     Args:
         project_id: The project ID this job belongs to
         user_id: User who initiated the upload
         files: List of file info dicts created by create_processing_file_doc()
+        job_type: 'batch_upload' or 'detect'
+        floorplan_id: Optional floorplan ObjectId for single-page detect jobs
     """
     import uuid
-    return {
+    doc = {
         'job_id': str(uuid.uuid4()),
+        'job_type': job_type,
         'project_id': ObjectId(project_id),
         'user_id': ObjectId(user_id),
-        'status': 'pending',  # pending, processing, completed, error
+        'status': 'pending',  # pending, processing, completed, error, cancelled
+        'cancel_requested': False,
         'total_files': len(files),
         'processed_files': 0,
         'files': files,
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow(),
-        'completed_at': None
+        'completed_at': None,
+    }
+    if floorplan_id is not None:
+        doc['floorplan_id'] = ObjectId(floorplan_id)
+    return doc
+
+
+def create_detect_job_doc(project_id, user_id, floorplan_id, params=None):
+    """Create a processing job for async single-floorplan detect."""
+    import uuid
+    now = datetime.utcnow()
+    return {
+        'job_id': str(uuid.uuid4()),
+        'job_type': 'detect',
+        'project_id': ObjectId(project_id),
+        'user_id': ObjectId(user_id),
+        'floorplan_id': ObjectId(floorplan_id),
+        'status': 'pending',
+        'cancel_requested': False,
+        'stage': 'pending',
+        'progress': 0,
+        'params': params or {},
+        'result': None,
+        'error': None,
+        'total_files': 0,
+        'processed_files': 0,
+        'files': [],
+        'created_at': now,
+        'updated_at': now,
+        'completed_at': None,
     }
 
 
@@ -358,13 +392,19 @@ def processing_job_to_dict(job_doc):
     return {
         'id': str(job_doc['_id']),
         'job_id': job_doc['job_id'],
+        'job_type': job_doc.get('job_type', 'batch_upload'),
         'project_id': str(job_doc['project_id']),
         'user_id': str(job_doc['user_id']),
         'status': job_doc['status'],
-        'total_files': job_doc['total_files'],
-        'processed_files': job_doc['processed_files'],
-        'files': job_doc.get('files', []),
         'cancel_requested': job_doc.get('cancel_requested', False),
+        'total_files': job_doc.get('total_files', 0),
+        'processed_files': job_doc.get('processed_files', 0),
+        'files': job_doc.get('files', []),
+        'floorplan_id': str(job_doc['floorplan_id']) if job_doc.get('floorplan_id') else None,
+        'stage': job_doc.get('stage'),
+        'progress': job_doc.get('progress'),
+        'result': job_doc.get('result'),
+        'error': job_doc.get('error'),
         'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
         'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
         'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None

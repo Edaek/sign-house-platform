@@ -2,6 +2,8 @@ import os
 import gc
 import fitz  # PyMuPDF
 
+from app.services.job_cancel import JobCancelledError, raise_if_cancelled
+
 
 class PDFService:
     """Service for PDF processing and conversion."""
@@ -29,7 +31,8 @@ class PDFService:
         doc.close()
         return count
     
-    def convert_to_images(self, pdf_path, output_dir, format='png', preview_dpi=None):
+    def convert_to_images(self, pdf_path, output_dir, format='png', preview_dpi=None,
+                          should_cancel=None):
         """Convert PDF pages to images.
         
         Args:
@@ -58,6 +61,7 @@ class PDFService:
         preview_mat = fitz.Matrix(preview_dpi / 72, preview_dpi / 72) if preview_dpi else None
         
         for page_num in range(len(doc)):
+            raise_if_cancelled(should_cancel, page_num, every=1)
             page = doc.load_page(page_num)
             
             pix = page.get_pixmap(matrix=mat)

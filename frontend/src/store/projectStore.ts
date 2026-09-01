@@ -43,6 +43,7 @@ interface ExtractedData {
   display_text: string | null
   detection_method?: 'auto' | 'manual' | 'learned'
   template_id?: string | null
+  marker_color?: 'red' | 'blue' | 'yellow' | string | null
   _template_saved?: boolean
 }
 
@@ -70,6 +71,7 @@ interface FloorPlan {
   shape_type: string | null
   status: string
   data_count: number
+  processing_time_seconds?: number | null
   extracted_data?: ExtractedData[]
 }
 
@@ -98,6 +100,7 @@ interface ProcessingFile {
   status: 'pending' | 'uploading' | 'converting' | 'detecting' | 'ocr' | 'completed' | 'error' | 'cancelled'
   progress: number
   error: string | null
+  cancel_requested?: boolean
   floorplan_ids: string[]
   pages_total: number
   pages_processed: number
@@ -107,12 +110,32 @@ interface ProcessingFile {
   cancel_requested?: boolean
 }
 
+interface DetectJob {
+  id: string
+  job_id: string
+  project_id: string
+  floorplan_id: string | null
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
+  cancel_requested?: boolean
+  stage?: string | null
+  progress?: number | null
+  result?: {
+    message?: string
+    shape_type?: string
+    shapes?: ExtractedData[]
+    detection_info?: { total_detected?: number; learned_count?: number }
+  } | null
+  error?: string | null
+}
+
 interface BatchUploadJob {
   id: string
   job_id: string
   project_id: string
   user_id: string
+  job_type?: string
   status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
+  cancel_requested?: boolean
   total_files: number
   processed_files: number
   files: ProcessingFile[]
@@ -151,6 +174,7 @@ interface ProjectState {
   // Batch upload state
   currentBatchJob: BatchUploadJob | null
   isBatchUploading: boolean
+  currentDetectJobId: string | null
 
   // Shape templates (self-learning)
   shapeTemplates: ShapeTemplate[]
@@ -166,8 +190,11 @@ interface ProjectState {
   
   uploadTemplate: (projectId: string, file: File) => Promise<void>
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
-  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate') => Promise<BatchUploadJob>
+  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
+  resumeBatchProcessing: (projectId: string, detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
+  cancelBatchJob: (projectId: string, jobId: string) => Promise<BatchUploadJob>
+  cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
   cancelBatchJob: (projectId: string, jobId: string) => Promise<void>
   cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<void>
@@ -178,7 +205,13 @@ interface ProjectState {
   deleteFloorplan: (projectId: string, floorplanId: string) => Promise<void>
   splitFloorplan: (projectId: string, floorplanId: string, regions: CropRegion[], deleteOriginal?: boolean) => Promise<FloorPlan[]>
   
-  detectShapes: (floorplanId: string, shapeType?: string, mode?: 'fast' | 'accurate') => Promise<ExtractedData[]>
+  detectShapes: (
+    floorplanId: string,
+    shapeType?: string,
+    mode?: 'fast' | 'accurate',
+    markerColors?: Array<'red' | 'blue' | 'yellow'>,
+  ) => Promise<ExtractedData[]>
+  cancelDetectJob: (jobId: string) => Promise<void>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
@@ -188,7 +221,7 @@ interface ProjectState {
   deleteShapeTemplate: (templateId: string) => Promise<void>
   toggleShapeTemplate: (templateId: string, isActive: boolean) => Promise<void>
 
-  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string) => Promise<void>
+  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string, markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<void>
   stopWatcher: (projectId: string) => Promise<void>
   fetchWatcherStatus: (projectId: string) => Promise<void>
   browseFolders: (path?: string) => Promise<{ current_path: string; parent_path: string | null; folders: { name: string; path: string }[] }>
@@ -204,6 +237,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   error: null,
   currentBatchJob: null,
   isBatchUploading: false,
+  currentDetectJobId: null,
   shapeTemplates: [],
   watcherStatus: null,
   
@@ -300,7 +334,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate') => {
+  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     set({ isBatchUploading: true, error: null })
 
     const formData = new FormData()
@@ -308,6 +342,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       formData.append('files', file)
     })
     formData.append('detection_mode', detectionMode)
+    formData.append('marker_colors', JSON.stringify(markerColors))
     
     try {
       const response = await api.post(`/processing/batch-upload/${projectId}`, formData, {
@@ -324,13 +359,37 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       throw error
     }
   },
-  
+
+  resumeBatchProcessing: async (
+    projectId: string,
+    detectionMode: 'fast' | 'accurate' = 'accurate',
+    markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'],
+  ) => {
+    set({ isBatchUploading: true, error: null })
+    try {
+      const response = await api.post(`/processing/batch-upload/${projectId}/resume`, {
+        detection_mode: detectionMode,
+        marker_colors: markerColors,
+      })
+      const job = response.data.job as BatchUploadJob
+      set({ currentBatchJob: job })
+      return job
+    } catch (error: any) {
+      set({
+        error: error.response?.data?.error || 'Failed to resume processing',
+        isBatchUploading: false,
+      })
+      throw error
+    }
+  },
+
   pollBatchStatus: async (projectId: string, jobId: string) => {
     try {
       const response = await api.get(`/processing/batch-upload/${projectId}/job/${jobId}`)
       const job = response.data.job as BatchUploadJob
       set({ currentBatchJob: job })
       
+      // If job is completed, errored, or cancelled, stop uploading state and refresh project
       if (job.status === 'completed' || job.status === 'error' || job.status === 'cancelled') {
         set({ isBatchUploading: false })
         await get().fetchProject(projectId)
@@ -343,6 +402,36 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
+  cancelBatchJob: async (projectId: string, jobId: string) => {
+    try {
+      const response = await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/cancel`)
+      const job = response.data.job as BatchUploadJob
+      set({ currentBatchJob: job })
+      await get().fetchProject(projectId)
+      if (job.status === 'cancelled') {
+        set({ isBatchUploading: false })
+      }
+      return job
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to cancel batch job' })
+      throw error
+    }
+  },
+
+  cancelBatchFile: async (projectId: string, jobId: string, fileIndex: number) => {
+    try {
+      const response = await api.post(
+        `/processing/batch-upload/${projectId}/job/${jobId}/files/${fileIndex}/cancel`,
+      )
+      const job = response.data.job as BatchUploadJob
+      set({ currentBatchJob: job })
+      return job
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to cancel file' })
+      throw error
+    }
+  },
+
   clearBatchJob: () => {
     set({ currentBatchJob: null, isBatchUploading: false })
   },
@@ -479,25 +568,79 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  detectShapes: async (floorplanId: string, shapeType: string = 'auto', mode: 'fast' | 'accurate' = 'accurate') => {
-    set({ isLoading: true, error: null })
+  detectShapes: async (
+    floorplanId: string,
+    shapeType: string = 'auto',
+    mode: 'fast' | 'accurate' = 'accurate',
+    markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'],
+  ) => {
+    set({ isLoading: true, error: null, currentDetectJobId: null })
     try {
-      const response = await api.post(`/processing/detect/${floorplanId}`, { shape_type: shapeType, mode })
-      const shapes = response.data.shapes
-      
-      // Update current floorplan with detected shapes
-      set((state) => ({
-        isLoading: false,
-        currentFloorplan: state.currentFloorplan ? {
-          ...state.currentFloorplan,
-          shape_type: response.data.shape_type,
-          extracted_data: shapes
-        } : null
-      }))
-      
-      return shapes
+      const payload: {
+        shape_type: string
+        mode: 'fast' | 'accurate'
+        marker_colors?: Array<'red' | 'blue' | 'yellow'>
+      } = {
+        shape_type: shapeType,
+        mode,
+      }
+      if (markerColors.length > 0) {
+        payload.marker_colors = markerColors
+      }
+      const response = await api.post(`/processing/detect/${floorplanId}`, payload)
+      const job = response.data.job as DetectJob
+      set({ currentDetectJobId: job.job_id })
+
+      const poll = async (): Promise<ExtractedData[]> => {
+        const statusRes = await api.get(`/processing/detect/job/${job.job_id}`)
+        const updatedJob = statusRes.data.job as DetectJob
+
+        if (updatedJob.status === 'completed' && updatedJob.result?.shapes) {
+          const shapes = updatedJob.result.shapes
+          set((state) => ({
+            isLoading: false,
+            currentDetectJobId: null,
+            currentFloorplan: state.currentFloorplan ? {
+              ...state.currentFloorplan,
+              shape_type: updatedJob.result?.shape_type ?? state.currentFloorplan.shape_type,
+              extracted_data: shapes,
+            } : null,
+          }))
+          return shapes
+        }
+
+        if (updatedJob.status === 'cancelled') {
+          set({ isLoading: false, currentDetectJobId: null })
+          const err = new Error('Detection cancelled') as Error & { cancelled?: boolean }
+          err.cancelled = true
+          throw err
+        }
+
+        if (updatedJob.status === 'error') {
+          set({ isLoading: false, currentDetectJobId: null })
+          throw new Error(updatedJob.error || 'Shape detection failed')
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        return poll()
+      }
+
+      return await poll()
     } catch (error: any) {
-      set({ error: error.response?.data?.error || 'Shape detection failed', isLoading: false })
+      set({
+        error: error.response?.data?.error || error.message || 'Shape detection failed',
+        isLoading: false,
+        currentDetectJobId: null,
+      })
+      throw error
+    }
+  },
+
+  cancelDetectJob: async (jobId: string) => {
+    try {
+      await api.post(`/processing/detect/job/${jobId}/cancel`)
+    } catch (error: any) {
+      set({ error: error.response?.data?.error || 'Failed to cancel detection' })
       throw error
     }
   },
@@ -616,12 +759,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate') => {
+  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     try {
       await api.post('/watcher/start', {
         project_id: projectId,
         watch_folder: watchFolder,
         detection_mode: detectionMode,
+        marker_colors: markerColors,
       })
       const response = await api.get(`/watcher/status/${projectId}`)
       set({ watcherStatus: response.data })

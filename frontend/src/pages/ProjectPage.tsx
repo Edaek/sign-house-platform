@@ -13,6 +13,7 @@ import {
   Download,
   ChevronLeft,
   Users,
+  Play,
   FileText,
   X,
   Pencil,
@@ -24,9 +25,11 @@ import {
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
 import BatchUploadProgress from '../components/BatchUploadProgress'
+import MarkerColorMenu from '../components/MarkerColorMenu'
 import api from '../lib/api'
 import toast from 'react-hot-toast'
 import clsx from 'clsx'
+import { DEFAULT_MARKER_COLORS, type MarkerColor } from '../lib/markerColors'
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>()
@@ -36,6 +39,9 @@ export default function ProjectPage() {
     updateProject,
     uploadFloorplans,
     pollBatchStatus,
+    cancelBatchJob,
+    cancelBatchFile,
+    resumeBatchProcessing,
     fetchActiveBatchJob,
     currentBatchJob,
     isBatchUploading,
@@ -58,6 +64,7 @@ export default function ProjectPage() {
   
   const [isReExtractingTitles, setIsReExtractingTitles] = useState(false)
   const [detectionMode, setDetectionMode] = useState<'fast' | 'accurate'>('accurate')
+  const [markerColors, setMarkerColors] = useState<MarkerColor[]>(DEFAULT_MARKER_COLORS)
 
   // Import tab & folder watcher state
   const [importTab, setImportTab] = useState<'manual' | 'watcher'>('manual')
@@ -171,7 +178,7 @@ export default function ProjectPage() {
     }
     
     try {
-      const job = await uploadFloorplans(projectId, selectedFiles, detectionMode)
+      const job = await uploadFloorplans(projectId, selectedFiles, detectionMode, markerColors)
       setSelectedFiles([])
       setShowBatchProgress(true)
       toast.success(`Started processing ${job.total_files} PDF files`)
@@ -190,6 +197,41 @@ export default function ProjectPage() {
       // Silently handle poll errors
     }
   }, [projectId, currentBatchJob, pollBatchStatus])
+
+  const handleCancelBatch = useCallback(async () => {
+    if (!projectId || !currentBatchJob) return
+    try {
+      await cancelBatchJob(projectId, currentBatchJob.job_id)
+      toast.success('Stop requested')
+    } catch {
+      toast.error('Failed to stop')
+    }
+  }, [projectId, currentBatchJob, cancelBatchJob])
+
+  const handleCancelBatchFile = useCallback(async (fileIndex: number) => {
+    if (!projectId || !currentBatchJob) return
+    try {
+      await cancelBatchFile(projectId, currentBatchJob.job_id, fileIndex)
+      toast.success('Stop requested for file')
+    } catch {
+      toast.error('Failed to stop file')
+    }
+  }, [projectId, currentBatchJob, cancelBatchFile])
+
+  const pendingFloorplanCount = currentProject?.floorplans?.filter(
+    fp => fp.status === 'pending'
+  ).length ?? 0
+
+  const handleResumeProcessing = async () => {
+    if (!projectId || pendingFloorplanCount === 0 || isBatchUploading) return
+    try {
+      const job = await resumeBatchProcessing(projectId, detectionMode, markerColors)
+      setShowBatchProgress(true)
+      toast.success(`Resumed processing for ${job.total_files} file(s)`)
+    } catch {
+      toast.error('Failed to resume processing')
+    }
+  }
   
   // Continue polling even when dialog is closed but job is still running
   useEffect(() => {
@@ -217,6 +259,9 @@ export default function ProjectPage() {
       } else if (curr === 'error') {
         toast.error('Batch processing finished with errors')
         if (projectId) fetchProject(projectId)
+      } else if (curr === 'cancelled') {
+        toast('Processing stopped — imported floor plans remain in the list', { icon: '⏹️' })
+        if (projectId) fetchProject(projectId)
       }
     }
   }, [currentBatchJob?.status, currentBatchJob?.total_files, projectId, fetchProject])
@@ -226,7 +271,7 @@ export default function ProjectPage() {
     setShowBatchProgress(false)
     // Only clear the job if it's completed or errored
     // Keep it in state if still processing so the indicator can show
-    if (currentBatchJob?.status === 'completed' || currentBatchJob?.status === 'error') {
+    if (currentBatchJob?.status === 'completed' || currentBatchJob?.status === 'error' || currentBatchJob?.status === 'cancelled') {
       clearBatchJob()
     }
   }
@@ -296,6 +341,13 @@ export default function ProjectPage() {
         return 'Pending'
     }
   }
+
+  const formatProcessingTime = (seconds: number) => {
+    if (seconds < 60) return `${seconds.toFixed(1)}s`
+    const minutes = Math.floor(seconds / 60)
+    const remaining = Math.round(seconds % 60)
+    return `${minutes}m ${remaining}s`
+  }
   
   if (isLoading && !currentProject) {
     return (
@@ -363,6 +415,11 @@ export default function ProjectPage() {
           </div>
           
           <div className="flex items-center gap-3">
+            <MarkerColorMenu
+              colors={markerColors}
+              onChange={setMarkerColors}
+              variant="toolbar"
+            />
             <button
               onClick={() => setShowMembersModal(true)}
               className="flex items-center gap-2 px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition-colors"
@@ -433,7 +490,7 @@ export default function ProjectPage() {
               </button>
             </div>
           </div>
-          
+
           {/* Import Mode Tabs */}
           <div className="flex border-b border-slate-200 dark:border-slate-700">
             <button
@@ -746,7 +803,7 @@ export default function ProjectPage() {
                         return
                       }
                       try {
-                        await startWatcher(projectId, watcherFolder.trim(), watcherMode)
+                        await startWatcher(projectId, watcherFolder.trim(), watcherMode, markerColors)
                         toast.success('Folder watcher started')
                       } catch {
                         toast.error('Failed to start watcher')
@@ -825,7 +882,17 @@ export default function ProjectPage() {
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white">
               Floor Plans ({currentProject.floorplans.length})
             </h2>
-            <button
+            <div className="flex items-center gap-2">
+              {pendingFloorplanCount > 0 && !isBatchUploading && !hasActiveBackgroundJob && (
+                <button
+                  onClick={handleResumeProcessing}
+                  className="btn btn-primary text-xs flex items-center gap-1.5"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                  Resume Processing ({pendingFloorplanCount})
+                </button>
+              )}
+              <button
               onClick={async () => {
                 if (!projectId) return
                 setIsReExtractingTitles(true)
@@ -854,6 +921,7 @@ export default function ProjectPage() {
               )}
               Re-extract Titles
             </button>
+            </div>
           </div>
           
           <div className="space-y-3">
@@ -874,6 +942,11 @@ export default function ProjectPage() {
                     <div>
                       <h3 className="font-medium text-slate-900 dark:text-white">{floorplan.floor_name}</h3>
                       <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-slate-400 mt-0.5">
+                        {floorplan.pdf_filename && (
+                          <span className="truncate max-w-[240px]" title={floorplan.pdf_filename}>
+                            {floorplan.pdf_filename}
+                          </span>
+                        )}
                         <span>{floorplan.data_count} items extracted</span>
                         {floorplan.shape_type && (
                           <span className="px-2 py-0.5 bg-slate-200 dark:bg-slate-700 rounded text-slate-700 dark:text-slate-300 text-xs">
@@ -886,6 +959,14 @@ export default function ProjectPage() {
                   
                   <div className="flex items-center gap-4">
                     <div className="flex items-center gap-2">
+                      {floorplan.status === 'completed' && floorplan.processing_time_seconds != null && (
+                        <span
+                          className="text-xs font-mono text-slate-500 dark:text-slate-400"
+                          title="Recognition time"
+                        >
+                          {formatProcessingTime(floorplan.processing_time_seconds)}
+                        </span>
+                      )}
                       {getStatusIcon(floorplan.status)}
                       <span className="text-sm text-slate-700 dark:text-slate-300">
                         {getStatusText(floorplan.status)}
@@ -931,16 +1012,8 @@ export default function ProjectPage() {
         isOpen={showBatchProgress}
         onClose={handleCloseBatchProgress}
         onPoll={handlePollStatus}
-        onCancel={() => {
-          if (currentBatchJob && projectId) {
-            cancelBatchJob(projectId, currentBatchJob.job_id)
-          }
-        }}
-        onCancelFile={(fileIndex) => {
-          if (currentBatchJob && projectId) {
-            cancelBatchFile(projectId, currentBatchJob.job_id, fileIndex)
-          }
-        }}
+        onCancel={handleCancelBatch}
+        onCancelFile={handleCancelBatchFile}
       />
       
       {/* Floating Processing Indicator - shows when dialog is closed but job is running */}

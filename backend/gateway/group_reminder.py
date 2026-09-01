@@ -5,11 +5,11 @@ import time
 import base64
 import logging
 import threading
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import quote as url_quote
 
 import requests
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,9 @@ REMINDER_INTERVAL = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000)) / 1
 REMINDER_COOLDOWN = 50   # 50s between reminders per sender
 FAILED_COOLDOWN = 50     # 50s after send failure
 BATCH_GRACE = 5         # seconds
+MAX_SEND_BYTES = 512 * 1024   # cap reminder attachment size for Wakka/WhatsApp
+THUMB_SIZE = 400
+SINGLE_THUMB_MAX = 800
 
 
 class GroupReminderScheduler:
@@ -159,79 +162,41 @@ class GroupReminderScheduler:
         finally:
             self._running = False
 
-    def _send_to_group(self, group_id: str, message: str, media_data_uri: Optional[str] = None) -> Optional[dict]:
+    def _send_to_group(
+        self,
+        group_id: str,
+        message: str,
+        media_data_uri: Optional[str] = None,
+        *,
+        _retry_without_media: bool = False,
+    ) -> Optional[dict]:
         try:
             group_url = f'{self.wakka_url}/api/v1/groups/{url_quote(group_id, safe="")}'
-
+            body = {'message': message}
             if media_data_uri:
-                b64 = media_data_uri.split(',')[1] if ',' in media_data_uri else media_data_uri
-                mime_match = media_data_uri.split(';')[0].split(':')[1] if ':' in media_data_uri else 'image/jpeg'
-                ext = mime_match.split('/')[1] if '/' in mime_match else 'jpg'
-                buf = base64.b64decode(b64)
+                body['mediaUrl'] = media_data_uri
 
-                files = {'file': (f'image.{ext}', io.BytesIO(buf), mime_match)}
-                data = {'caption': message}
-                resp = requests.post(
-                    f'{group_url}/send-media-upload',
-                    headers={'x-api-key': self.wakka_key},
-                    files=files, data=data, timeout=30,
-                )
-            else:
-                resp = requests.post(
-                    f'{group_url}/send',
-                    headers={'Content-Type': 'application/json', 'x-api-key': self.wakka_key},
-                    json={'message': message},
-                    timeout=15,
-                )
+            resp = requests.post(
+                f'{group_url}/send',
+                headers={'Content-Type': 'application/json', 'x-api-key': self.wakka_key},
+                json=body,
+                timeout=30,
+            )
 
             if not resp.ok:
                 logger.error('[GroupReminder] Wakka send failed (%d): %s', resp.status_code, resp.text[:200])
+                if media_data_uri and not _retry_without_media:
+                    logger.info('[GroupReminder] Retrying without media attachment')
+                    return self._send_to_group(
+                        group_id, message, media_data_uri=None, _retry_without_media=True,
+                    )
                 return None
             return resp.json()
         except Exception as e:
             logger.error('[GroupReminder] Network error: %s', e)
             return None
 
-    def _build_composite(self, images: list) -> Optional[str]:
-        """Build a composite thumbnail from up to 9 images using Pillow."""
-        data_uris = []
-        for img in images:
-            uri = self._image_to_data_uri(img.get('imagePath'))
-            if uri:
-                data_uris.append(uri)
-
-        if not data_uris:
-            return None
-        if len(data_uris) == 1:
-            return data_uris[0]
-
-        try:
-            THUMB = 400
-            thumbs = []
-            for uri in data_uris:
-                b64 = uri.split(',')[1] if ',' in uri else uri
-                pil = Image.open(io.BytesIO(base64.b64decode(b64)))
-                pil = pil.convert('RGB')
-                pil.thumbnail((THUMB, THUMB))
-                canvas = Image.new('RGB', (THUMB, THUMB), (255, 255, 255))
-                offset = ((THUMB - pil.width) // 2, (THUMB - pil.height) // 2)
-                canvas.paste(pil, offset)
-                thumbs.append(canvas)
-
-            cols = min(len(thumbs), 3)
-            rows = (len(thumbs) + cols - 1) // cols
-            composite = Image.new('RGB', (cols * THUMB, rows * THUMB), (255, 255, 255))
-            for i, thumb in enumerate(thumbs):
-                composite.paste(thumb, ((i % cols) * THUMB, (i // cols) * THUMB))
-
-            buf = io.BytesIO()
-            composite.save(buf, format='JPEG', quality=85)
-            return f'data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}'
-        except Exception as e:
-            logger.error('[GroupReminder] Composite error: %s', e)
-            return data_uris[0] if data_uris else None
-
-    def _image_to_data_uri(self, image_path: Optional[str]) -> Optional[str]:
+    def _resolve_image_path(self, image_path: Optional[str]) -> Optional[str]:
         if not image_path:
             return None
         uploads_root = os.path.dirname(self.media_dir)
@@ -240,10 +205,63 @@ class GroupReminderScheduler:
             local = local[len('uploads/'):]
         fpath = os.path.join(uploads_root, local)
         if not os.path.isfile(fpath):
+            logger.warning('[GroupReminder] Image file missing: %s', fpath)
             return None
-        with open(fpath, 'rb') as f:
-            data = f.read()
-        ext = os.path.splitext(fpath)[1].lower()
-        mime_map = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp'}
-        mime = mime_map.get(ext, 'image/jpeg')
-        return f'data:{mime};base64,{base64.b64encode(data).decode()}'
+        return fpath
+
+    def _pil_from_path(self, image_path: Optional[str]) -> Optional[Image.Image]:
+        fpath = self._resolve_image_path(image_path)
+        if not fpath:
+            return None
+        try:
+            with Image.open(fpath) as pil:
+                return pil.convert('RGB')
+        except (UnidentifiedImageError, OSError, ValueError) as e:
+            logger.warning('[GroupReminder] Invalid image %s: %s', fpath, e)
+            return None
+
+    @staticmethod
+    def _encode_jpeg_data_uri(pil: Image.Image, max_side: int, quality: int = 85) -> str:
+        img = pil.copy()
+        img.thumbnail((max_side, max_side))
+        quality = 85
+        while quality >= 50:
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=quality, optimize=True)
+            raw = buf.getvalue()
+            if len(raw) <= MAX_SEND_BYTES:
+                return f'data:image/jpeg;base64,{base64.b64encode(raw).decode()}'
+            quality -= 10
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=50, optimize=True)
+        return f'data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}'
+
+    def _build_composite(self, images: list) -> Optional[str]:
+        """Build a composite thumbnail from up to 9 images using Pillow."""
+        thumbs: List[Image.Image] = []
+        for img in images:
+            pil = self._pil_from_path(img.get('imagePath'))
+            if pil is None:
+                continue
+            pil.thumbnail((THUMB_SIZE, THUMB_SIZE))
+            canvas = Image.new('RGB', (THUMB_SIZE, THUMB_SIZE), (255, 255, 255))
+            offset = ((THUMB_SIZE - pil.width) // 2, (THUMB_SIZE - pil.height) // 2)
+            canvas.paste(pil, offset)
+            thumbs.append(canvas)
+
+        if not thumbs:
+            return None
+        if len(thumbs) == 1:
+            return self._encode_jpeg_data_uri(thumbs[0], SINGLE_THUMB_MAX)
+
+        try:
+            cols = min(len(thumbs), 3)
+            rows = (len(thumbs) + cols - 1) // cols
+            composite = Image.new('RGB', (cols * THUMB_SIZE, rows * THUMB_SIZE), (255, 255, 255))
+            for i, thumb in enumerate(thumbs):
+                composite.paste(thumb, ((i % cols) * THUMB_SIZE, (i // cols) * THUMB_SIZE))
+
+            return self._encode_jpeg_data_uri(composite, cols * THUMB_SIZE)
+        except Exception as e:
+            logger.error('[GroupReminder] Composite error: %s', e)
+            return self._encode_jpeg_data_uri(thumbs[0], SINGLE_THUMB_MAX)

@@ -205,6 +205,22 @@ Coolify watches your GitHub repository:
 2. Commit and push to your branch
 3. Coolify automatically rebuilds and redeploys
 
+**Verify deployment version** — after redeploy, check:
+
+```bash
+curl -s https://YOUR-BACKEND/api/diagnostics | python -m json.tool
+```
+
+Expected fields:
+- `"commit"`: short git hash (e.g. `eee19d0`), **not** `unknown`
+- `"numpy"`: `1.26.2` (matches `requirements.txt`)
+
+Coolify sets `SOURCE_COMMIT` at build time; the Dockerfile passes it through to `/api/diagnostics`. If commit still shows `unknown`, trigger **Force rebuild** in Coolify and confirm the deployment log shows the correct commit hash.
+
+**Manual redeploy when auto-deploy missed a push:**
+1. Coolify → Application → Deployments → **Redeploy** / **Force rebuild**
+2. Confirm branch is `main` and commit matches GitHub (`git log -1 --oneline origin/main`)
+
 ### Frontend (Automatic via GitHub Actions)
 The workflow triggers automatically:
 1. Make changes to frontend code

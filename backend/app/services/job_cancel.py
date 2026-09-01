@@ -15,7 +15,7 @@ class JobCancelledError(Exception):
     """Raised when a background job should stop processing."""
 
 
-def make_cancel_checker(job_id: str, file_index: Optional[int] = None, poll_interval: float = 2.0):
+def make_cancel_checker(job_id: str, file_index: Optional[int] = None, poll_interval: float = 0.2):
     """Return a callable suitable for long-running CV loops.
 
     Polls Mongo at most every *poll_interval* seconds. Checks whole-job and

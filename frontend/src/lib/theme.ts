@@ -48,15 +48,40 @@ export function formatStatusLabel(status: string): string {
 /** Audit log action badge colors */
 export function getActionColor(action: string): string {
   if (action.includes('deleted') || action.includes('deactivated')) {
-    return 'bg-red-500/15 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+    return 'bg-red-500/15 text-red-700 border-red-500/25 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30'
   }
   if (action.includes('login') || action.includes('registered') || action.includes('created')) {
-    return 'bg-sign-500/15 text-sign-700 dark:bg-sign-500/20 dark:text-sign-400'
+    return 'bg-sign-500/15 text-sign-700 border-sign-500/25 dark:bg-sign-500/20 dark:text-sign-400 dark:border-sign-500/30'
   }
   if (action.includes('updated') || action.includes('changed')) {
-    return 'bg-sign-300/25 text-sign-800 dark:bg-sign-500/10 dark:text-sign-300'
+    return 'bg-sign-300/25 text-sign-800 border-sign-400/25 dark:bg-sign-500/10 dark:text-sign-300 dark:border-sign-500/20'
   }
   return defaultStatusStyle
+}
+
+const auditTimestampFormatter = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+})
+
+export function formatAuditTimestamp(iso: string): string {
+  return auditTimestampFormatter.format(new Date(iso))
+}
+
+export function formatResourceType(type: string): string {
+  return formatStatusLabel(type)
+}
+
+export function formatAuditDetailValue(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  return String(value)
 }
 
 /** Processing pipeline step colors (progress bars / icons) */
@@ -68,7 +93,7 @@ export const processingSteps: Record<string, { icon: string; bar: string }> = {
   ocr: { icon: 'text-sign-600 animate-pulse', bar: 'bg-sign-600' },
   completed: { icon: 'text-sign-500', bar: 'bg-sign-500' },
   error: { icon: 'text-red-400', bar: 'bg-red-500' },
-  cancelled: { icon: 'text-amber-500', bar: 'bg-amber-400' },
+  cancelled: { icon: 'text-amber-500', bar: 'bg-amber-500' },
 }
 
 export function getProcessingStepColor(status: string): { icon: string; bar: string } {

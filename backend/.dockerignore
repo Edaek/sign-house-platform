@@ -25,12 +25,15 @@ ENV/
 *.swo
 *~
 
-# Uploads (will be in persistent volume)
+# Uploads (will be in persistent volume) — except git-bundled shape templates
 uploads/
+!uploads/shape_templates/
+!uploads/shape_templates/**
 *.pdf
 *.xlsx
 *.xls
 *.png
+!uploads/shape_templates/*.png
 *.jpg
 *.jpeg
 

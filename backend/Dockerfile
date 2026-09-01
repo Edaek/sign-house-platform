@@ -1,5 +1,11 @@
 FROM python:3.11-slim
 
+# Injected at build time by Coolify / CI (SOURCE_COMMIT is set by Coolify automatically)
+ARG GIT_COMMIT=unknown
+ARG SOURCE_COMMIT=unknown
+ENV GIT_COMMIT=${GIT_COMMIT}
+ENV SOURCE_COMMIT=${SOURCE_COMMIT}
+
 # Install system dependencies (tesseract removed – now using PaddleOCR)
 RUN apt-get update && apt-get install -y \
     libgl1 \

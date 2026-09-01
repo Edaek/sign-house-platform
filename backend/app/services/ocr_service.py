@@ -113,13 +113,12 @@ def is_valid_sign_code(text, strict=False):
     if re.fullmatch(r'[xXyY]\d+', cleaned):
         return False
 
-    if re.match(r'^[A-Z]{1,4}$', cleaned):
-        if cleaned.lower() not in _REJECT_WORDS:
-            if strict or len(cleaned) >= 2:
-                return True
-
     if strict and len(cleaned) < 2:
         return False
+
+    if not strict and re.match(r'^[A-Z]{1,4}$', cleaned):
+        if cleaned.lower() not in _REJECT_WORDS and len(cleaned) >= 2:
+            return True
 
     if SIGN_CODE_PATTERN.match(cleaned):
         return True
@@ -871,6 +870,17 @@ class OCRService:
             return cleaned_text.strip(), quantity
 
         return text.strip(), 1
+
+    def resolve_quantity(self, cleaned_text, **_kwargs):
+        """Derive quantity from sign text only (e.g. embedded 'S1 x2').
+
+        Does not scan adjacent regions — avoids matching unrelated x2 marks
+        drawn near clustered sign circles on key plans.
+        """
+        text, embedded_qty = self.parse_quantity(cleaned_text or '')
+        text = clean_ocr_text(text.strip()) if text else (cleaned_text or '').strip()
+        quantity = max(1, embedded_qty)
+        return text or (cleaned_text or '').strip(), quantity
 
     def _clean_title_text(self, text):
         """Clean extracted title text."""
