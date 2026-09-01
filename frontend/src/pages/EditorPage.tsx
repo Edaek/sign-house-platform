@@ -518,14 +518,14 @@ export default function EditorPage() {
               shape_type: 'circle',
               shape_data: { center_x, center_y, radius }
             })
-            if (result?._template_saved) {
-              toast.success('Text extracted! Shape saved as template for future detection.')
-              fetchShapeTemplates()
-            } else {
+            if (result?.extracted_text || result?.display_text) {
               toast.success('Text extracted!')
+            } else {
+              toast.success('Circle added — edit text in the panel if needed')
             }
+            if (result?._template_saved) fetchShapeTemplates()
           } catch {
-            toast.error('Failed to extract text')
+            toast.error('Failed to save circle — try again')
           }
         } else {
           try {

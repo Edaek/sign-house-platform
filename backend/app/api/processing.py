@@ -331,24 +331,37 @@ def ocr_manual_region(floorplan_id):
     
     try:
         ocr_service = OCRService()
-        # Use label_mode for better accuracy on red-bordered labels
-        text, confidence = ocr_service.extract_text_from_region(
-            floorplan['image_filepath'],
-            int(x), int(y), int(width), int(height),
-            padding=0,
-            label_mode=True,
-            capture_adjacent=False
-        )
-        
+        img_for_ocr = cv2.imread(floorplan['image_filepath'])
+        text = ''
+        confidence = 0.0
+
+        try:
+            if shape_type == 'circle' and shape_data:
+                center_x = shape_data.get('center_x', int(x) + int(width) // 2)
+                center_y = shape_data.get('center_y', int(y) + int(height) // 2)
+                radius = shape_data.get('radius', int(min(width, height) // 2))
+                text, confidence = ocr_service.extract_text_from_circle(
+                    floorplan['image_filepath'],
+                    int(center_x), int(center_y), int(radius),
+                    padding=5,
+                    img=img_for_ocr,
+                )
+            else:
+                text, confidence = ocr_service.extract_text_from_region(
+                    floorplan['image_filepath'],
+                    int(x), int(y), int(width), int(height),
+                    padding=0,
+                    label_mode=True,
+                    capture_adjacent=False,
+                    img=img_for_ocr,
+                )
+        except Exception as ocr_err:
+            current_app.logger.warning(
+                f"Manual OCR read failed for ({x},{y}): {ocr_err}"
+            )
+
         cleaned = clean_ocr_text(text)
-        cleaned, quantity = ocr_service.resolve_quantity(
-            cleaned,
-            image_path=floorplan['image_filepath'],
-            x=int(x),
-            y=int(y),
-            width=int(width),
-            height=int(height),
-        )
+        cleaned, quantity = ocr_service.resolve_quantity(cleaned)
         current_app.logger.info(f"Manual OCR - Text: '{cleaned}' | Quantity: {quantity}")
         
         # Get next shape index
@@ -382,8 +395,7 @@ def ocr_manual_region(floorplan_id):
         # Auto-save as shape template for self-learning
         template_id = None
         try:
-            import cv2
-            img = cv2.imread(floorplan['image_filepath'])
+            img = img_for_ocr if img_for_ocr is not None else cv2.imread(floorplan['image_filepath'])
             if img is not None:
                 ix, iy = int(x), int(y)
                 iw, ih = int(width), int(height)

@@ -871,6 +871,17 @@ class OCRService:
 
         return text.strip(), 1
 
+    def resolve_quantity(self, cleaned_text, **_kwargs):
+        """Derive quantity from sign text only (e.g. embedded 'S1 x2').
+
+        Does not scan adjacent regions — avoids matching unrelated x2 marks
+        drawn near clustered sign circles on key plans.
+        """
+        text, embedded_qty = self.parse_quantity(cleaned_text or '')
+        text = clean_ocr_text(text.strip()) if text else (cleaned_text or '').strip()
+        quantity = max(1, embedded_qty)
+        return text or (cleaned_text or '').strip(), quantity
+
     def _clean_title_text(self, text):
         """Clean extracted title text."""
         import re
