@@ -10,7 +10,8 @@ import {
   Scan,
   Type,
   ImageIcon,
-  Octagon
+  Octagon,
+  XCircle
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getProcessingStepColor } from '../lib/theme'
@@ -104,6 +105,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
   const pollIntervalRef = useRef<number | null>(null)
   const [isCancelling, setIsCancelling] = useState(false)
   const [cancellingFiles, setCancellingFiles] = useState<Set<number>>(new Set())
+  const [confirmCancel, setConfirmCancel] = useState<'job' | number | null>(null)
   
   useEffect(() => {
     if (isOpen && job && (job.status === 'pending' || job.status === 'processing')) {
@@ -263,7 +265,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
                       {isActive && onCancelFile && isFileCancellable(file.status) && (
                         <button
                           type="button"
-                          onClick={() => handleCancelFile(index)}
+                          onClick={() => setConfirmCancel(index)}
                           disabled={file.cancel_requested || cancellingFiles.has(index)}
                           className={clsx(
                             'text-xs px-2 py-0.5 rounded-md font-medium transition-opacity',
@@ -316,12 +318,12 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
             </div>
           </div>
           
-          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2">
+          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
             {isActive && onCancel && (
               <button
-                onClick={handleCancel}
+                onClick={() => setConfirmCancel('job')}
                 disabled={isCancelling || job.cancel_requested}
-                className="flex-1 btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
+                className="btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
               >
                 {isCancelling || job.cancel_requested ? (
                   <>
@@ -344,6 +346,51 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
           </div>
         </motion.div>
       </div>
+
+      {confirmCancel !== null && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700 p-6"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-950/40 flex items-center justify-center">
+                <XCircle className="w-5 h-5 text-red-500" />
+              </div>
+              <h4 className="font-semibold text-slate-900 dark:text-white">
+                {confirmCancel === 'job' ? 'Stop All Processing?' : 'Stop This File?'}
+              </h4>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+              {confirmCancel === 'job'
+                ? 'Are you sure you want to stop processing all files? Files already completed will be kept.'
+                : 'Are you sure you want to stop processing this file?'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmCancel(null)}
+                className="flex-1 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (confirmCancel === 'job') {
+                    handleCancel()
+                  } else {
+                    handleCancelFile(confirmCancel as number)
+                  }
+                  setConfirmCancel(null)
+                }}
+                className="flex-1 px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white text-sm font-medium transition-colors"
+              >
+                Confirm
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </AnimatePresence>
   )
 }

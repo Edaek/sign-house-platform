@@ -839,19 +839,23 @@ class CVService:
                     continue
                 radii.append(r)
         
+        # Size caps: tighter bounds to reduce false positives and speed up detection.
+        _size_cap = 2.0
+        _target_cap = 1.8
+
         if radii:
             yellow_target = int(np.median(radii))
-            yellow_target = max(int(target_radius * 0.5), min(yellow_target, int(target_radius * 3.0)))
+            yellow_target = max(int(target_radius * 0.5), min(yellow_target, int(target_radius * _target_cap)))
             min_radius = max(5, int(min(radii) * 0.7))
             max_radius = int(max(radii) * 1.3)
-            max_radius = min(max_radius, int(target_radius * 4.0))
+            max_radius = min(max_radius, int(target_radius * _size_cap))
             if is_thin_blue_ring:
                 yellow_target = min(yellow_target, int(target_radius * 1.05))
                 max_radius = min(max_radius, int(target_radius * 1.2))
         else:
             yellow_target = target_radius
             min_radius = max(5, int(target_radius * 0.5))
-            max_radius = int(target_radius * 3.5)
+            max_radius = int(target_radius * _size_cap)
             if is_thin_blue_ring:
                 yellow_target = int(target_radius * 0.95)
                 max_radius = int(target_radius * 1.15)
@@ -1816,7 +1820,7 @@ class CVService:
             Tuple of (keep: bool, text: str, confidence: float)
         """
         raise_if_cancelled(should_cancel)
-        if self.mode == self.FAST_MODE or getattr(self, '_defer_shape_ocr', False):
+        if getattr(self, '_defer_shape_ocr', False):
             return (True, '', 0.0)
         is_circle = shape.get('type') == 'circle'
 
@@ -2027,7 +2031,7 @@ class CVService:
         
         if color_type == 'blue':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
-            hsv_mask = cv2.inRange(hsv, np.array([90, 35, 35]), np.array([135, 255, 255]))
+            hsv_mask = cv2.inRange(hsv, np.array([90, 50, 35]), np.array([135, 255, 255]))
             template_mask = cv2.inRange(
                 hsv,
                 self.template_circle_params['lower_blue'],
@@ -2036,12 +2040,9 @@ class CVService:
             ratio_mask = ((b.astype(int) > r.astype(int) + threshold) &
                             (b.astype(int) > g.astype(int) + threshold) &
                             (b > 80)).astype(np.uint8) * 255
-            light_blue = ((b.astype(int) > 180) &
-                          (b.astype(int) > r.astype(int) + 15) &
-                          (b.astype(int) > g.astype(int) + 15)).astype(np.uint8) * 255
             mask = cv2.bitwise_or(
                 hsv_mask,
-                cv2.bitwise_or(template_mask, cv2.bitwise_or(ratio_mask, light_blue)),
+                cv2.bitwise_or(template_mask, ratio_mask),
             )
         elif color_type == 'red':
             hsv = cv2.cvtColor(img_region, cv2.COLOR_BGR2HSV)
@@ -2063,9 +2064,13 @@ class CVService:
     
     def _search_ring_on_mask(self, roi, local_cx, local_cy, radius, shift, rad_span, step=1):
         """Grid-search the best (cx, cy, r) ring alignment on a local ROI."""
+        should_cancel = getattr(self, '_should_cancel', None)
         best = (local_cx, local_cy, float(radius))
         best_score = -1.0
         for dx in range(-shift, shift + 1, step):
+            if should_cancel and should_cancel():
+                from app.services.job_cancel import JobCancelledError
+                raise JobCancelledError()
             for dy in range(-shift, shift + 1, step):
                 for dr in range(-rad_span, rad_span + 1, step):
                     trial_r = radius + dr
@@ -2080,6 +2085,11 @@ class CVService:
 
     def _refine_circle_from_ring_mask(self, color_mask, cx, cy, radius, is_thin_ring=False):
         """Refine circle center and radius using ring pixels on an undilated mask."""
+        should_cancel = getattr(self, '_should_cancel', None)
+        if should_cancel and should_cancel():
+            from app.services.job_cancel import JobCancelledError
+            raise JobCancelledError()
+
         h, w = color_mask.shape[:2]
         search_pad = max(int(radius * 1.8), 14)
         y1 = max(0, cy - search_pad)

@@ -388,7 +388,7 @@ def processing_job_to_dict(job_doc):
     """Convert processing job document to dict for JSON response."""
     if not job_doc:
         return None
-    
+
     return {
         'id': str(job_doc['_id']),
         'job_id': job_doc['job_id'],
