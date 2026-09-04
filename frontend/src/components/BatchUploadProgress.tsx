@@ -10,7 +10,8 @@ import {
   Scan,
   Type,
   ImageIcon,
-  Octagon
+  Octagon,
+  XCircle
 } from 'lucide-react'
 import clsx from 'clsx'
 import { getProcessingStepColor } from '../lib/theme'
@@ -27,7 +28,6 @@ interface ProcessingFile {
   shapes_detected: number
   started_at: string | null
   completed_at: string | null
-  cancel_requested?: boolean
 }
 
 interface BatchUploadJob {
@@ -43,7 +43,6 @@ interface BatchUploadJob {
   created_at: string
   updated_at: string
   completed_at: string | null
-  cancel_requested?: boolean
 }
 
 interface BatchUploadProgressProps {
@@ -81,10 +80,7 @@ const getStatusIcon = (status: ProcessingFile['status']) => {
   }
 }
 
-const getStatusText = (status: ProcessingFile['status'], cancelRequested?: boolean) => {
-  if (cancelRequested && status !== 'cancelled' && status !== 'completed' && status !== 'error') {
-    return 'Stopping...'
-  }
+const getStatusText = (status: ProcessingFile['status']) => {
   switch (status) {
     case 'pending':
       return 'Waiting...'
@@ -109,6 +105,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
   const pollIntervalRef = useRef<number | null>(null)
   const [isCancelling, setIsCancelling] = useState(false)
   const [cancellingFiles, setCancellingFiles] = useState<Set<number>>(new Set())
+  const [confirmCancel, setConfirmCancel] = useState<'job' | number | null>(null)
   
   useEffect(() => {
     if (isOpen && job && (job.status === 'pending' || job.status === 'processing')) {
@@ -268,7 +265,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
                       {isActive && onCancelFile && isFileCancellable(file.status) && (
                         <button
                           type="button"
-                          onClick={() => handleCancelFile(index)}
+                          onClick={() => setConfirmCancel(index)}
                           disabled={file.cancel_requested || cancellingFiles.has(index)}
                           className={clsx(
                             'text-xs px-2 py-0.5 rounded-md font-medium transition-opacity',
@@ -321,12 +318,12 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
             </div>
           </div>
           
-          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2">
+          <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
             {isActive && onCancel && (
               <button
-                onClick={handleCancel}
+                onClick={() => setConfirmCancel('job')}
                 disabled={isCancelling || job.cancel_requested}
-                className="flex-1 btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
+                className="btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
               >
                 {isCancelling || job.cancel_requested ? (
                   <>
@@ -380,9 +377,9 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
               <button
                 onClick={() => {
                   if (confirmCancel === 'job') {
-                    onCancel?.()
+                    handleCancel()
                   } else {
-                    onCancelFile?.(confirmCancel as number)
+                    handleCancelFile(confirmCancel as number)
                   }
                   setConfirmCancel(null)
                 }}

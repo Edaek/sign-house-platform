@@ -46,8 +46,6 @@ export default function ProjectPage() {
     currentBatchJob,
     isBatchUploading,
     clearBatchJob,
-    cancelBatchJob,
-    cancelBatchFile,
     isLoading,
     watcherStatus,
     startWatcher,

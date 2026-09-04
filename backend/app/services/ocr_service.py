@@ -17,6 +17,10 @@ SIGN_CODE_PATTERN = re.compile(
     r'^[A-Z][a-zA-Z]{0,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
 )
 
+# Pure-letter sign codes that bypass the normal digit requirement.
+# Add entries in UPPER CASE exactly as they appear on drawings.
+LETTER_ONLY_SIGN_CODES = frozenset({'D', 'CS'})
+
 # Standalone x2 / ×3 only — do not match the X2 inside sign codes like EX2, EX4.
 MULTIPLIER_PATTERN = re.compile(r'(?<![A-Za-z])[xX\u00d7*]\s*(\d+)')
 
@@ -112,6 +116,10 @@ def is_valid_sign_code(text, strict=False):
     # Quantity marks (x2 / ×2) are not sign codes. The 'x' is often read as Y.
     if re.fullmatch(r'[xXyY]\d+', cleaned):
         return False
+
+    # Whitelist: pure-letter sign codes that have no digits (e.g. "D", "CS").
+    if cleaned in LETTER_ONLY_SIGN_CODES:
+        return True
 
     if strict and len(cleaned) < 2:
         return False

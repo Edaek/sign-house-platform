@@ -107,7 +107,6 @@ interface ProcessingFile {
   shapes_detected: number
   started_at: string | null
   completed_at: string | null
-  cancel_requested?: boolean
 }
 
 interface DetectJob {
@@ -142,7 +141,6 @@ interface BatchUploadJob {
   created_at: string
   updated_at: string
   completed_at: string | null
-  cancel_requested?: boolean
 }
 
 interface WatcherFileStatus {
@@ -196,8 +194,6 @@ interface ProjectState {
   cancelBatchJob: (projectId: string, jobId: string) => Promise<BatchUploadJob>
   cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
-  cancelBatchJob: (projectId: string, jobId: string) => Promise<void>
-  cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<void>
   clearBatchJob: () => void
   
   fetchFloorplan: (projectId: string, floorplanId: string) => Promise<void>
@@ -434,24 +430,6 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
 
   clearBatchJob: () => {
     set({ currentBatchJob: null, isBatchUploading: false })
-  },
-
-  cancelBatchJob: async (projectId: string, jobId: string) => {
-    try {
-      await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/cancel`)
-    } catch (error: any) {
-      set({ error: error.response?.data?.error || 'Failed to cancel job' })
-      throw error
-    }
-  },
-
-  cancelBatchFile: async (projectId: string, jobId: string, fileIndex: number) => {
-    try {
-      await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/files/${fileIndex}/cancel`)
-    } catch (error: any) {
-      set({ error: error.response?.data?.error || 'Failed to cancel file' })
-      throw error
-    }
   },
   
   fetchActiveBatchJob: async (projectId: string) => {
