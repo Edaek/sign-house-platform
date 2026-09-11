@@ -4,7 +4,7 @@ import os
 import logging
 import time as _time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from bson import ObjectId
 
 import cv2
@@ -70,6 +70,45 @@ def _finalize_batch_cancel(job_id, from_file_index):
     finalize_cancelled(job_id)
 
 
+def _page_processing_timeout_seconds():
+    try:
+        from flask import current_app
+        minutes = current_app.config.get('JOB_STALE_MINUTES', 30)
+    except RuntimeError:
+        minutes = 30
+    return max(5, minutes) * 60
+
+
+def _detect_page_with_timeout(job_id, item, project_id, config, detection_mode,
+                              cv_service, ocr_service, active_templates, should_cancel):
+    """Run page detection with a timeout; skip stuck pages and continue the batch."""
+    floorplan_id = item['floorplan_id']
+    timeout = _page_processing_timeout_seconds()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            detect_floorplan_page,
+            job_id, item, project_id, config, detection_mode,
+            cv_service, ocr_service, active_templates, should_cancel,
+        )
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeout:
+            logger.error(
+                'Page detection timed out after %ds (floorplan %s, file %s)',
+                timeout, floorplan_id, item.get('filename'),
+            )
+            mongo.db.floorplans.update_one(
+                {'_id': ObjectId(floorplan_id)},
+                {'$set': {
+                    'status': 'error',
+                    'processing_error': 'Skipped: page processing timed out',
+                    'updated_at': datetime.utcnow(),
+                }},
+            )
+            return 'error', 0
+
+
 def ingest_pdf_pages(job_id, file_index, file_path, filename, project_id, upload_folder,
                      config, ocr_service=None):
     """Phase 1: convert PDF to images and create pending floorplan records for every page."""
@@ -117,6 +156,18 @@ def ingest_pdf_pages(job_id, file_index, file_path, filename, project_id, upload
                 return page_items, 'cancelled'
 
             if is_file_cancel_requested(job_id, file_index):
+                update_file_status(job_id, file_index, {
+                    'status': 'cancelled',
+                    'cancel_requested': True,
+                    'error': 'Cancelled by user',
+                    'pages_total': len(pages),
+                    'pages_processed': page_idx,
+                    'floorplan_ids': floorplan_ids,
+                    'completed_at': datetime.utcnow().isoformat(),
+                })
+                return page_items, 'file_cancelled'
+
+            if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
                 update_file_status(job_id, file_index, {
                     'status': 'cancelled',
                     'cancel_requested': True,
@@ -232,6 +283,9 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
     shapes_detected = 0
 
     try:
+        if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
+            return _cancel_result(shapes_detected)
+
         if detection_method == 'auto':
             if cv_service.has_sample_circle(page_info['image_path'], img=page_img):
                 detection_method = 'circle'
@@ -305,7 +359,9 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
                         if not is_valid_sign_code(cleaned, strict=True):
                             continue
                     else:
-                        keep, cleaned, confidence = cv_service.run_shape_ocr(page_img, shape)
+                        keep, cleaned, confidence = cv_service.run_shape_ocr(
+                            page_img, shape, should_cancel=should_cancel,
+                        )
                         if not keep:
                             continue
 
@@ -498,7 +554,7 @@ def _run_detection_phase(job_id, page_queue, files_info, project_id, config, det
             continue
 
         file_should_cancel = make_cancel_checker(job_id, file_index)
-        result, shapes_count = detect_floorplan_page(
+        result, shapes_count = _detect_page_with_timeout(
             job_id, item, project_id, config, detection_mode,
             cv_service, ocr_service, active_templates, file_should_cancel,
         )

@@ -50,8 +50,8 @@ interface BatchUploadProgressProps {
   isOpen: boolean
   onClose: () => void
   onPoll: () => void
-  onCancel?: () => void | Promise<void>
-  onCancelFile?: (fileIndex: number) => void | Promise<void>
+  onCancel?: (force?: boolean) => void | Promise<void>
+  onCancelFile?: (fileIndex: number, force?: boolean) => void | Promise<void>
 }
 
 const isFileCancellable = (status: ProcessingFile['status']) =>
@@ -134,11 +134,11 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
   const isComplete = !isActive
   const isResume = job.job_type === 'batch_resume'
   
-  const handleCancel = async () => {
+  const handleCancel = async (force = false) => {
     if (!onCancel || isCancelling) return
     setIsCancelling(true)
     try {
-      await onCancel()
+      await onCancel(force || job?.cancel_requested)
     } finally {
       setIsCancelling(false)
     }
@@ -321,14 +321,14 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
           <div className="p-4 border-t border-slate-200 dark:border-slate-700 flex gap-2 justify-end">
             {isActive && onCancel && (
               <button
-                onClick={() => setConfirmCancel('job')}
-                disabled={isCancelling || job.cancel_requested}
+                onClick={() => (job.cancel_requested ? handleCancel(true) : setConfirmCancel('job'))}
+                disabled={isCancelling}
                 className="btn border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30 disabled:opacity-50"
               >
                 {isCancelling || job.cancel_requested ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin inline mr-2" />
-                    Stopping...
+                    Force Stop
                   </>
                 ) : (
                   'Stop Processing'

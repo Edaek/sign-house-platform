@@ -141,7 +141,13 @@ interface BatchUploadJob {
   created_at: string
   updated_at: string
   completed_at: string | null
+  error?: string | null
+  recovered_stale?: boolean
 }
+
+const batchCancelRequestedAt = new Map<string, number>()
+const detectCancelRequestedAt = new Map<string, number>()
+const FORCE_CANCEL_MS = 30_000
 
 interface WatcherFileStatus {
   filename: string
@@ -191,8 +197,8 @@ interface ProjectState {
   uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
   resumeBatchProcessing: (projectId: string, detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
-  cancelBatchJob: (projectId: string, jobId: string) => Promise<BatchUploadJob>
-  cancelBatchFile: (projectId: string, jobId: string, fileIndex: number) => Promise<BatchUploadJob>
+  cancelBatchJob: (projectId: string, jobId: string, force?: boolean) => Promise<BatchUploadJob>
+  cancelBatchFile: (projectId: string, jobId: string, fileIndex: number, force?: boolean) => Promise<BatchUploadJob>
   fetchActiveBatchJob: (projectId: string) => Promise<BatchUploadJob | null>
   clearBatchJob: () => void
   
@@ -207,7 +213,7 @@ interface ProjectState {
     mode?: 'fast' | 'accurate',
     markerColors?: Array<'red' | 'blue' | 'yellow'>,
   ) => Promise<ExtractedData[]>
-  cancelDetectJob: (jobId: string) => Promise<void>
+  cancelDetectJob: (jobId: string, force?: boolean) => Promise<void>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
   ocrRegion: (floorplanId: string, region: { x: number; y: number; width: number; height: number; shape_type?: string; shape_data?: { center_x: number; center_y: number; radius: number } }) => Promise<ExtractedData>
   updateExtractedData: (dataId: string, manualText?: string, quantity?: number) => Promise<void>
@@ -382,7 +388,22 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   pollBatchStatus: async (projectId: string, jobId: string) => {
     try {
       const response = await api.get(`/processing/batch-upload/${projectId}/job/${jobId}`)
-      const job = response.data.job as BatchUploadJob
+      let job = response.data.job as BatchUploadJob
+
+      if (
+        job.cancel_requested &&
+        (job.status === 'pending' || job.status === 'processing')
+      ) {
+        const started = batchCancelRequestedAt.get(jobId) ?? Date.now()
+        batchCancelRequestedAt.set(jobId, started)
+        if (Date.now() - started > FORCE_CANCEL_MS) {
+          batchCancelRequestedAt.delete(jobId)
+          job = await get().cancelBatchJob(projectId, jobId, true)
+        }
+      } else {
+        batchCancelRequestedAt.delete(jobId)
+      }
+
       set({ currentBatchJob: job })
       
       // If job is completed, errored, or cancelled, stop uploading state and refresh project
@@ -398,13 +419,27 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  cancelBatchJob: async (projectId: string, jobId: string) => {
+  cancelBatchJob: async (projectId: string, jobId: string, force = false) => {
     try {
-      const response = await api.post(`/processing/batch-upload/${projectId}/job/${jobId}/cancel`)
+      const response = await api.post(
+        `/processing/batch-upload/${projectId}/job/${jobId}/cancel`,
+        force ? { force: true } : {},
+      )
       const job = response.data.job as BatchUploadJob
+      if (!force && (job.status === 'pending' || job.status === 'processing')) {
+        batchCancelRequestedAt.set(jobId, Date.now())
+      } else {
+        batchCancelRequestedAt.delete(jobId)
+      }
       set({ currentBatchJob: job })
       await get().fetchProject(projectId)
-      if (job.status === 'cancelled') {
+      if (force) {
+        const resumed = await get().fetchActiveBatchJob(projectId)
+        if (resumed && (resumed.status === 'pending' || resumed.status === 'processing')) {
+          return resumed
+        }
+      }
+      if (job.status === 'cancelled' || job.status === 'error') {
         set({ isBatchUploading: false })
       }
       return job
@@ -414,10 +449,11 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  cancelBatchFile: async (projectId: string, jobId: string, fileIndex: number) => {
+  cancelBatchFile: async (projectId: string, jobId: string, fileIndex: number, force = false) => {
     try {
       const response = await api.post(
         `/processing/batch-upload/${projectId}/job/${jobId}/files/${fileIndex}/cancel`,
+        force ? { force: true } : {},
       )
       const job = response.data.job as BatchUploadJob
       set({ currentBatchJob: job })
@@ -437,6 +473,11 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       const response = await api.get(`/processing/batch-upload/${projectId}/status`)
       const job = response.data.job as BatchUploadJob
       
+      if (job.recovered_stale || job.error?.includes('Stale job recovered')) {
+        set({ currentBatchJob: job, isBatchUploading: false })
+        return job
+      }
+
       // Only restore job if it's still in progress
       if (job.status === 'pending' || job.status === 'processing') {
         set({ currentBatchJob: job, isBatchUploading: true })
@@ -573,6 +614,20 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
         const statusRes = await api.get(`/processing/detect/job/${job.job_id}`)
         const updatedJob = statusRes.data.job as DetectJob
 
+        if (
+          updatedJob.cancel_requested &&
+          (updatedJob.status === 'pending' || updatedJob.status === 'processing')
+        ) {
+          const started = detectCancelRequestedAt.get(job.job_id) ?? Date.now()
+          detectCancelRequestedAt.set(job.job_id, started)
+          if (Date.now() - started > FORCE_CANCEL_MS) {
+            detectCancelRequestedAt.delete(job.job_id)
+            await get().cancelDetectJob(job.job_id, true)
+          }
+        } else {
+          detectCancelRequestedAt.delete(job.job_id)
+        }
+
         if (updatedJob.status === 'completed' && updatedJob.result?.shapes) {
           const shapes = updatedJob.result.shapes
           set((state) => ({
@@ -614,9 +669,15 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  cancelDetectJob: async (jobId: string) => {
+  cancelDetectJob: async (jobId: string, force = false) => {
     try {
-      await api.post(`/processing/detect/job/${jobId}/cancel`)
+      await api.post(`/processing/detect/job/${jobId}/cancel`, force ? { force: true } : {})
+      if (!force) {
+        detectCancelRequestedAt.set(jobId, Date.now())
+      } else {
+        detectCancelRequestedAt.delete(jobId)
+        set({ currentDetectJobId: null, isLoading: false })
+      }
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to cancel detection' })
       throw error

@@ -141,7 +141,7 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
 
         kept = []
         for idx, shape in enumerate(all_shapes):
-            if idx % 10 == 0 and _check_cancel():
+            if idx % 3 == 0 and _check_cancel():
                 return
 
             if shape.get('detection_method') == 'learned' and shape.get('extracted_text'):
@@ -150,7 +150,9 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
                 if not is_valid_sign_code(cleaned, strict=True):
                     continue
             else:
-                keep, cleaned, confidence = cv_service.run_shape_ocr(page_img, shape)
+                keep, cleaned, confidence = cv_service.run_shape_ocr(
+                    page_img, shape, should_cancel=should_cancel,
+                )
                 if not keep:
                     continue
 
@@ -173,7 +175,7 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
             return
 
         for (idx, shape, cleaned, confidence), quantity in zip(kept, quantities):
-            if idx % 10 == 0 and _check_cancel():
+            if idx % 3 == 0 and _check_cancel():
                 return
             shape_data = None
             if 'radius' in shape:

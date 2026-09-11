@@ -25,7 +25,13 @@ from app.services.cv_service import CVService
 from app.services.ocr_service import OCRService, is_valid_sign_code, clean_ocr_text
 from app.services.batch_processor import start_batch_processing, start_resume_processing, build_resume_queue
 from app.services.detect_job_service import start_detect_job
-from app.services.job_cancel import request_cancel, request_cancel_file
+from app.services.job_cancel import (
+    request_cancel,
+    request_cancel_file,
+    force_cancel_job,
+    force_cancel_file,
+)
+from app.services.job_recovery import recover_stale_jobs_for_project
 from app.utils.permissions import require_project_access, require_project_modify, check_project_access
 
 logger = logging.getLogger(__name__)
@@ -188,10 +194,16 @@ def cancel_detect_job(job_id):
     if job['status'] not in ('pending', 'processing'):
         return jsonify({'error': 'Job is not active', 'job': processing_job_to_dict(job)}), 400
 
-    request_cancel(job_id)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if force:
+        force_cancel_job(job_id)
+        message = 'Job force cancelled'
+    else:
+        request_cancel(job_id)
+        message = 'Cancellation requested'
     updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
     return jsonify({
-        'message': 'Cancellation requested',
+        'message': message,
         'job': processing_job_to_dict(updated),
     }), 200
 
@@ -1018,7 +1030,7 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
     job_doc = create_processing_job_doc(project_id, user_id, job_files)
     result = mongo.db.processing_jobs.insert_one(job_doc)
     job_doc['_id'] = result.inserted_id
-    
+
     # Get detection method from form data (default: 'auto')
     # Options: 'auto' (auto-detect), 'rectangle' (red rectangles), or 'circle' (template-based circle detection)
     detection_method = request.form.get('detection_method', 'auto')
@@ -1036,6 +1048,18 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
         'detection_method': detection_method,
         'marker_colors': marker_colors,
     }
+
+    mongo.db.processing_jobs.update_one(
+        {'_id': result.inserted_id},
+        {'$set': {
+            'detection_mode': batch_mode,
+            'detection_method': detection_method,
+            'marker_colors': marker_colors,
+        }},
+    )
+    job_doc['detection_mode'] = batch_mode
+    job_doc['detection_method'] = detection_method
+    job_doc['marker_colors'] = marker_colors
     
     start_batch_processing(
         job_id=job_doc['job_id'],
@@ -1057,7 +1081,8 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
 @require_project_access
 def get_batch_upload_status(project_id, _user=None, _project=None):
     """Get the status of the current batch upload job for a project."""
-    
+    recover_stale_jobs_for_project(project_id)
+
     # Get the most recent job for this project
     job = mongo.db.processing_jobs.find_one(
         {'project_id': ObjectId(project_id)},
@@ -1077,7 +1102,8 @@ def get_batch_upload_status(project_id, _user=None, _project=None):
 @require_project_access
 def get_batch_job_status(project_id, job_id, _user=None, _project=None):
     """Get the status of a specific batch upload job."""
-    
+    recover_stale_jobs_for_project(project_id)
+
     job = mongo.db.processing_jobs.find_one({
         'job_id': job_id,
         'project_id': ObjectId(project_id)
@@ -1107,10 +1133,16 @@ def cancel_batch_job(project_id, job_id, _user=None, _project=None):
     if job['status'] not in ('pending', 'processing'):
         return jsonify({'error': 'Job is not active', 'job': processing_job_to_dict(job)}), 400
 
-    request_cancel(job_id)
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if force:
+        force_cancel_job(job_id)
+        message = 'Job force cancelled'
+    else:
+        request_cancel(job_id)
+        message = 'Cancellation requested'
     updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
     return jsonify({
-        'message': 'Cancellation requested',
+        'message': message,
         'job': processing_job_to_dict(updated),
     }), 200
 
@@ -1138,7 +1170,15 @@ def cancel_batch_file(project_id, job_id, file_index, _user=None, _project=None)
     if file_index < 0 or file_index >= len(files):
         return jsonify({'error': 'Invalid file index'}), 400
 
-    if not request_cancel_file(job_id, file_index):
+    force = bool((request.get_json(silent=True) or {}).get('force'))
+    if force:
+        ok = force_cancel_file(job_id, file_index)
+        message = 'File force cancelled'
+    else:
+        ok = request_cancel_file(job_id, file_index)
+        message = 'File cancellation requested'
+
+    if not ok:
         updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
         return jsonify({
             'error': 'File cannot be cancelled',
@@ -1147,7 +1187,7 @@ def cancel_batch_file(project_id, job_id, file_index, _user=None, _project=None)
 
     updated = mongo.db.processing_jobs.find_one({'job_id': job_id})
     return jsonify({
-        'message': 'File cancellation requested',
+        'message': message,
         'job': processing_job_to_dict(updated),
     }), 200
 
@@ -1158,6 +1198,8 @@ def cancel_batch_file(project_id, job_id, file_index, _user=None, _project=None)
 def resume_batch_processing(project_id, _user=None, _project=None):
     """Resume detection for pending floorplans (after a cancelled batch job)."""
     user_id = get_jwt_identity()
+
+    recover_stale_jobs_for_project(project_id)
 
     active = mongo.db.processing_jobs.find_one({
         'project_id': ObjectId(project_id),

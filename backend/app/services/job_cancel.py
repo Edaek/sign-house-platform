@@ -1,8 +1,11 @@
 """Cooperative cancellation for background processing jobs."""
 
+import logging
 import time
 from datetime import datetime
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from bson import ObjectId
 
@@ -118,6 +121,69 @@ def finalize_cancelled(job_id: str, *, error: Optional[str] = None):
     if error:
         updates['error'] = error
     mongo.db.processing_jobs.update_one({'job_id': job_id}, {'$set': updates})
+
+
+def force_cancel_job(job_id: str, *, error: Optional[str] = None) -> bool:
+    """Immediately mark a job cancelled without waiting for the worker."""
+    from app.services.job_recovery import skip_stale_processing_floorplans
+
+    job = mongo.db.processing_jobs.find_one({'job_id': job_id})
+    if not job or job.get('status') not in _ACTIVE_STATUSES:
+        return False
+
+    msg = error or 'Force cancelled by user'
+    finalize_cancelled(job_id, error=msg)
+
+    for i, f in enumerate(job.get('files') or []):
+        if f.get('status') in ('completed', 'cancelled', 'error'):
+            continue
+        mongo.db.processing_jobs.update_one(
+            {'job_id': job_id},
+            {'$set': {
+                f'files.{i}.status': 'cancelled',
+                f'files.{i}.cancel_requested': True,
+                f'files.{i}.error': msg,
+                f'files.{i}.completed_at': datetime.utcnow().isoformat(),
+            }},
+        )
+
+    skip_stale_processing_floorplans(job)
+
+    if job.get('job_type') in (None, 'batch_upload', 'batch_resume'):
+        try:
+            from app.services.job_recovery import _try_auto_resume_project
+            _try_auto_resume_project(job)
+        except Exception:
+            logger.exception('Auto-resume after force cancel of job %s failed', job_id)
+
+    return True
+
+
+def force_cancel_file(job_id: str, file_index: int, *, error: Optional[str] = None) -> bool:
+    """Immediately cancel a single file within an active batch job."""
+    job = mongo.db.processing_jobs.find_one({'job_id': job_id}, {'status': 1, 'files': 1})
+    if not job or job.get('status') not in _ACTIVE_STATUSES:
+        return False
+
+    files = job.get('files') or []
+    if file_index < 0 or file_index >= len(files):
+        return False
+
+    f = files[file_index]
+    if f.get('status') in ('completed', 'cancelled', 'error'):
+        return False
+
+    msg = error or 'Force cancelled by user'
+    mongo.db.processing_jobs.update_one(
+        {'job_id': job_id},
+        {'$set': {
+            f'files.{file_index}.status': 'cancelled',
+            f'files.{file_index}.cancel_requested': True,
+            f'files.{file_index}.error': msg,
+            f'files.{file_index}.completed_at': datetime.utcnow().isoformat(),
+        }},
+    )
+    return True
 
 
 def cancel_active_jobs_for_project(project_id: str) -> int:

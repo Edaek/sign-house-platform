@@ -20,7 +20,8 @@ import {
   Check,
   Loader2,
   Eye,
-  EyeOff
+  EyeOff,
+  Trash2
 } from 'lucide-react'
 import { useProjectStore } from '../store/projectStore'
 import ProjectMembersModal from '../components/ProjectMembersModal'
@@ -46,6 +47,7 @@ export default function ProjectPage() {
     currentBatchJob,
     isBatchUploading,
     clearBatchJob,
+    deleteFloorplan,
     isLoading,
     watcherStatus,
     startWatcher,
@@ -55,6 +57,8 @@ export default function ProjectPage() {
   } = useProjectStore()
   const [showMembersModal, setShowMembersModal] = useState(false)
   const [showBatchProgress, setShowBatchProgress] = useState(false)
+  const [floorplanToDelete, setFloorplanToDelete] = useState<{ id: string; name: string } | null>(null)
+  const [isDeletingFloorplan, setIsDeletingFloorplan] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [isEditingName, setIsEditingName] = useState(false)
@@ -196,11 +200,11 @@ export default function ProjectPage() {
     }
   }, [projectId, currentBatchJob, pollBatchStatus])
 
-  const handleCancelBatch = useCallback(async () => {
+  const handleCancelBatch = useCallback(async (force = false) => {
     if (!projectId || !currentBatchJob) return
     try {
-      await cancelBatchJob(projectId, currentBatchJob.job_id)
-      toast.success('Stop requested')
+      await cancelBatchJob(projectId, currentBatchJob.job_id, force)
+      toast.success(force ? 'Processing force stopped' : 'Stop requested')
     } catch {
       toast.error('Failed to stop')
     }
@@ -255,14 +259,18 @@ export default function ProjectPage() {
         toast.success(`Batch processing completed — ${currentBatchJob?.total_files ?? ''} files processed`)
         if (projectId) fetchProject(projectId)
       } else if (curr === 'error') {
-        toast.error('Batch processing finished with errors')
+        if (currentBatchJob?.recovered_stale) {
+          toast('Skipped stuck task(s). Resume processing if the queue did not continue automatically.', { icon: '⚠️' })
+        } else {
+          toast.error('Batch processing finished with errors')
+        }
         if (projectId) fetchProject(projectId)
       } else if (curr === 'cancelled') {
         toast('Processing stopped — imported floor plans remain in the list', { icon: '⏹️' })
         if (projectId) fetchProject(projectId)
       }
     }
-  }, [currentBatchJob?.status, currentBatchJob?.total_files, projectId, fetchProject])
+  }, [currentBatchJob?.status, currentBatchJob?.total_files, currentBatchJob?.recovered_stale, projectId, fetchProject])
   
   // Close batch progress modal
   const handleCloseBatchProgress = () => {
@@ -324,6 +332,8 @@ export default function ProjectPage() {
         return <CheckCircle className="w-5 h-5 text-sign-500" />
       case 'processing':
         return <Clock className="w-5 h-5 text-sign-400" />
+      case 'error':
+        return <AlertCircle className="w-5 h-5 text-amber-500" />
       default:
         return <AlertCircle className="w-5 h-5 text-slate-400" />
     }
@@ -335,8 +345,25 @@ export default function ProjectPage() {
         return 'Completed'
       case 'processing':
         return 'In Progress'
+      case 'error':
+        return 'Skipped'
       default:
         return 'Pending'
+    }
+  }
+
+  const handleDeleteFloorplan = async () => {
+    if (!projectId || !floorplanToDelete) return
+    setIsDeletingFloorplan(true)
+    try {
+      await deleteFloorplan(projectId, floorplanToDelete.id)
+      toast.success('Floor plan deleted')
+      setFloorplanToDelete(null)
+      await fetchProject(projectId)
+    } catch {
+      toast.error('Failed to delete floor plan')
+    } finally {
+      setIsDeletingFloorplan(false)
     }
   }
 
@@ -971,13 +998,23 @@ export default function ProjectPage() {
                       </span>
                     </div>
                     
-                    <Link
-                      to={`/project/${projectId}/floor/${floorplan.id}`}
-                      className="btn btn-secondary flex items-center gap-2 text-sm"
-                    >
-                      {floorplan.status === 'completed' ? 'Review' : 'Process'}
-                      <ArrowRight className="w-4 h-4" />
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFloorplanToDelete({ id: floorplan.id, name: floorplan.floor_name })}
+                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                        title="Delete floor plan"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <Link
+                        to={`/project/${projectId}/floor/${floorplan.id}`}
+                        className="btn btn-secondary flex items-center gap-2 text-sm"
+                      >
+                        {floorplan.status === 'completed' ? 'Review' : 'Process'}
+                        <ArrowRight className="w-4 h-4" />
+                      </Link>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -994,6 +1031,35 @@ export default function ProjectPage() {
         </div>
       )}
       
+      {floorplanToDelete && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-xl w-full max-w-sm border border-slate-200 dark:border-slate-700 p-6">
+            <h3 className="font-semibold text-slate-900 dark:text-white mb-2">Delete floor plan?</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+              This will permanently delete <span className="font-medium text-slate-900 dark:text-white">{floorplanToDelete.name}</span> and all extracted data.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setFloorplanToDelete(null)}
+                disabled={isDeletingFloorplan}
+                className="flex-1 btn btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteFloorplan}
+                disabled={isDeletingFloorplan}
+                className="flex-1 btn bg-red-500 hover:bg-red-600 text-white border-0"
+              >
+                {isDeletingFloorplan ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Project Members Modal */}
       {currentProject && projectId && (
         <ProjectMembersModal
@@ -1016,23 +1082,41 @@ export default function ProjectPage() {
       
       {/* Floating Processing Indicator - shows when dialog is closed but job is running */}
       {hasActiveBackgroundJob && (
-        <motion.button
+        <motion.div
           initial={{ opacity: 0, y: 20, scale: 0.9 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 20, scale: 0.9 }}
-          onClick={() => setShowBatchProgress(true)}
-          className="fixed bottom-6 right-6 z-40 flex items-center gap-3 px-4 py-3 bg-sign-600 hover:bg-sign-500 text-white rounded-full shadow-lg shadow-sign-500/30 transition-colors cursor-pointer"
+          className="fixed bottom-6 right-6 z-40 flex items-center gap-2"
         >
-          <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-sm font-medium">
-            Processing {currentBatchJob.total_files} file{currentBatchJob.total_files > 1 ? 's' : ''}...
-          </span>
-          <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
-            <span className="text-xs font-bold">
-              {Math.round((currentBatchJob.files.reduce((sum, f) => sum + f.progress, 0) / currentBatchJob.total_files))}%
+          <button
+            type="button"
+            onClick={() => setShowBatchProgress(true)}
+            className="flex items-center gap-3 px-4 py-3 bg-sign-600 hover:bg-sign-500 text-white rounded-full shadow-lg shadow-sign-500/30 transition-colors cursor-pointer"
+          >
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="text-sm font-medium">
+              {currentBatchJob.cancel_requested ? 'Stopping...' : (
+                <>Processing {currentBatchJob.total_files} file{currentBatchJob.total_files > 1 ? 's' : ''}...</>
+              )}
             </span>
-          </div>
-        </motion.button>
+            <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">
+              <span className="text-xs font-bold">
+                {Math.round((currentBatchJob.files.reduce((sum, f) => sum + f.progress, 0) / currentBatchJob.total_files))}%
+              </span>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleCancelBatch(currentBatchJob.cancel_requested)
+            }}
+            className="px-3 py-3 rounded-full bg-amber-600 hover:bg-amber-500 text-white text-sm font-medium shadow-lg"
+            title={currentBatchJob.cancel_requested ? 'Force stop' : 'Stop processing'}
+          >
+            {currentBatchJob.cancel_requested ? 'Force Stop' : 'Stop'}
+          </button>
+        </motion.div>
       )}
     </PageContainer>
   )

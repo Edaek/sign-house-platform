@@ -100,6 +100,7 @@ export default function EditorPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   
   const [isDetectingShapes, setIsDetectingShapes] = useState(false)
+  const [isDetectStopping, setIsDetectStopping] = useState(false)
   const [isRunningOCR, setIsRunningOCR] = useState(false)
   const [isSplitting, setIsSplitting] = useState(false)
   
@@ -573,14 +574,16 @@ export default function EditorPage() {
       toast.error(msg)
     } finally {
       setIsDetectingShapes(false)
+      setIsDetectStopping(false)
     }
   }
 
-  const handleCancelDetect = async () => {
+  const handleCancelDetect = async (force = false) => {
     if (!currentDetectJobId) return
     try {
-      await cancelDetectJob(currentDetectJobId)
-      toast.success('Stop requested')
+      if (!force) setIsDetectStopping(true)
+      await cancelDetectJob(currentDetectJobId, force)
+      toast.success(force ? 'Detection force stopped' : 'Stop requested')
     } catch {
       toast.error('Failed to stop')
     }
@@ -1011,7 +1014,7 @@ export default function EditorPage() {
                 )} />
                 <div className="text-center">
                   <p className="text-white font-medium mb-1">
-                    {isDetectingShapes ? 'Detecting Shapes...' : isRunningOCR ? 'Running OCR...' : 'Splitting Floorplan...'}
+                    {isDetectStopping ? 'Stopping detection...' : isDetectingShapes ? 'Detecting Shapes...' : isRunningOCR ? 'Running OCR...' : 'Splitting Floorplan...'}
                   </p>
                   <p className="text-slate-400 text-sm">
                     {isDetectingShapes 
@@ -1239,15 +1242,15 @@ export default function EditorPage() {
                 )}>
                   <div className="btn btn-secondary w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5 opacity-80 cursor-default">
                     <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-                    <span className="truncate">Detecting...</span>
+                    <span className="truncate">{isDetectStopping ? 'Stopping...' : 'Detecting...'}</span>
                   </div>
                   {currentDetectJobId && (
                     <button
-                      onClick={handleCancelDetect}
+                      onClick={() => handleCancelDetect(isDetectStopping)}
                       className="btn w-full min-w-0 px-2 sm:px-3 text-sm flex items-center justify-center gap-1.5 border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-950/30"
                     >
                       <X className="w-4 h-4 shrink-0" />
-                      Stop
+                      {isDetectStopping ? 'Force Stop' : 'Stop'}
                     </button>
                   )}
                 </div>

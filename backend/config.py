@@ -84,6 +84,10 @@ class Config:
     # Group reminder interval (ms) — how often to check for uncategorized group images
     GROUP_REMINDER_INTERVAL_MS = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000))
 
+    # Stale job recovery — jobs with no worker progress beyond this are auto-failed
+    JOB_STALE_MINUTES = int(os.environ.get('JOB_STALE_MINUTES', 30))
+    JOB_RECOVERY_INTERVAL_MINUTES = int(os.environ.get('JOB_RECOVERY_INTERVAL_MINUTES', 5))
+
 
 class DevelopmentConfig(Config):
     """Development configuration."""

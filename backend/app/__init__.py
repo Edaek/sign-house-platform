@@ -223,5 +223,17 @@ def create_app(config_name=None):
     # Initialize NAS local-mount service
     from app.services.nas_watcher_service import nas_mount
     nas_mount.init_app(app)
+
+    # Recover zombie jobs from prior crashes, then watch for stale workers
+    from app.services.job_recovery import recover_stale_jobs, start_stale_job_watchdog
+    with app.app_context():
+        try:
+            recovered = recover_stale_jobs()
+            if recovered:
+                app.logger.info('Recovered %d stale job(s) on startup', recovered)
+        except Exception:
+            app.logger.exception('Startup stale job recovery failed')
+    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        start_stale_job_watchdog(app)
     
     return app
