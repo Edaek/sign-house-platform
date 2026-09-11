@@ -1,17 +1,5 @@
 import { create } from 'zustand'
 import api from '../lib/api'
-import type { ComputeDevicesInfo } from '../lib/deviceOptions'
-import { DEFAULT_DEVICE } from '../lib/deviceOptions'
-
-const PADDLE_DEVICE_STORAGE_KEY = 'signhouse-paddle-device'
-
-function readStoredPaddleDevice(): string {
-  try {
-    return localStorage.getItem(PADDLE_DEVICE_STORAGE_KEY) || DEFAULT_DEVICE
-  } catch {
-    return DEFAULT_DEVICE
-  }
-}
 
 interface Template {
   id: string
@@ -155,7 +143,6 @@ interface BatchUploadJob {
   completed_at: string | null
   error?: string | null
   recovered_stale?: boolean
-  paddle_device?: string | null
 }
 
 const batchCancelRequestedAt = new Map<string, number>()
@@ -174,7 +161,6 @@ interface WatcherStatus {
   status: 'running' | 'stopped' | 'error'
   watch_folder: string
   detection_mode: string
-  paddle_device?: string
   files_processed: number
   files_failed: number
   last_error: string
@@ -199,11 +185,6 @@ interface ProjectState {
 
   // Folder watcher state
   watcherStatus: WatcherStatus | null
-
-  // Compute device probe (CPU/GPU for OCR)
-  computeDevices: ComputeDevicesInfo | null
-  paddleDevice: string
-  setPaddleDevice: (device: string) => void
   
   fetchProjects: () => Promise<void>
   fetchProject: (id: string) => Promise<void>
@@ -213,9 +194,8 @@ interface ProjectState {
   
   uploadTemplate: (projectId: string, file: File) => Promise<void>
   uploadFloorplan: (projectId: string, file: File) => Promise<void>
-  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>, paddleDevice?: string) => Promise<BatchUploadJob>
-  resumeBatchProcessing: (projectId: string, detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>, paddleDevice?: string) => Promise<BatchUploadJob>
-  fetchComputeDevices: (force?: boolean) => Promise<ComputeDevicesInfo | null>
+  uploadFloorplans: (projectId: string, files: File[], detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
+  resumeBatchProcessing: (projectId: string, detectionMode?: 'fast' | 'accurate', markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<BatchUploadJob>
   pollBatchStatus: (projectId: string, jobId: string) => Promise<BatchUploadJob>
   cancelBatchJob: (projectId: string, jobId: string, force?: boolean) => Promise<BatchUploadJob>
   cancelBatchFile: (projectId: string, jobId: string, fileIndex: number, force?: boolean) => Promise<BatchUploadJob>
@@ -232,7 +212,6 @@ interface ProjectState {
     shapeType?: string,
     mode?: 'fast' | 'accurate',
     markerColors?: Array<'red' | 'blue' | 'yellow'>,
-    paddleDevice?: string,
   ) => Promise<ExtractedData[]>
   cancelDetectJob: (jobId: string, force?: boolean) => Promise<void>
   runOCR: (floorplanId: string) => Promise<ExtractedData[]>
@@ -244,7 +223,7 @@ interface ProjectState {
   deleteShapeTemplate: (templateId: string) => Promise<void>
   toggleShapeTemplate: (templateId: string, isActive: boolean) => Promise<void>
 
-  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string, markerColors?: Array<'red' | 'blue' | 'yellow'>, paddleDevice?: string) => Promise<void>
+  startWatcher: (projectId: string, watchFolder: string, detectionMode?: string, markerColors?: Array<'red' | 'blue' | 'yellow'>) => Promise<void>
   stopWatcher: (projectId: string) => Promise<void>
   fetchWatcherStatus: (projectId: string) => Promise<void>
   browseFolders: (path?: string) => Promise<{ current_path: string; parent_path: string | null; folders: { name: string; path: string }[] }>
@@ -263,37 +242,6 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   currentDetectJobId: null,
   shapeTemplates: [],
   watcherStatus: null,
-  computeDevices: null,
-  paddleDevice: readStoredPaddleDevice(),
-
-  setPaddleDevice: (device: string) => {
-    try {
-      localStorage.setItem(PADDLE_DEVICE_STORAGE_KEY, device)
-    } catch {
-      /* ignore storage errors */
-    }
-    set({ paddleDevice: device })
-  },
-
-  fetchComputeDevices: async (force = false) => {
-    try {
-      const response = await api.get('/health/compute-devices', {
-        params: force ? { force: '1' } : undefined,
-      })
-      const info = response.data as ComputeDevicesInfo
-      const current = get().paddleDevice
-      const nextDevice = info.recommended.includes(current)
-        ? current
-        : info.default_device
-      if (nextDevice !== current) {
-        get().setPaddleDevice(nextDevice)
-      }
-      set({ computeDevices: info })
-      return info
-    } catch {
-      return null
-    }
-  },
   
   fetchProjects: async () => {
     set({ isLoading: true, error: null })
@@ -388,9 +336,8 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
   
-  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'], paddleDevice?: string) => {
+  uploadFloorplans: async (projectId: string, files: File[], detectionMode: 'fast' | 'accurate' = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     set({ isBatchUploading: true, error: null })
-    const device = paddleDevice ?? get().paddleDevice
 
     const formData = new FormData()
     files.forEach(file => {
@@ -398,7 +345,6 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     })
     formData.append('detection_mode', detectionMode)
     formData.append('marker_colors', JSON.stringify(markerColors))
-    formData.append('paddle_device', device)
     
     try {
       const response = await api.post(`/processing/batch-upload/${projectId}`, formData, {
@@ -420,15 +366,12 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     projectId: string,
     detectionMode: 'fast' | 'accurate' = 'accurate',
     markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'],
-    paddleDevice?: string,
   ) => {
     set({ isBatchUploading: true, error: null })
-    const device = paddleDevice ?? get().paddleDevice
     try {
       const response = await api.post(`/processing/batch-upload/${projectId}/resume`, {
         detection_mode: detectionMode,
         marker_colors: markerColors,
-        paddle_device: device,
       })
       const job = response.data.job as BatchUploadJob
       set({ currentBatchJob: job })
@@ -649,20 +592,16 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     shapeType: string = 'auto',
     mode: 'fast' | 'accurate' = 'accurate',
     markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'],
-    paddleDevice?: string,
   ) => {
     set({ isLoading: true, error: null, currentDetectJobId: null })
-    const device = paddleDevice ?? get().paddleDevice
     try {
       const payload: {
         shape_type: string
         mode: 'fast' | 'accurate'
         marker_colors?: Array<'red' | 'blue' | 'yellow'>
-        paddle_device: string
       } = {
         shape_type: shapeType,
         mode,
-        paddle_device: device,
       }
       if (markerColors.length > 0) {
         payload.marker_colors = markerColors
@@ -859,15 +798,13 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     }
   },
 
-  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow'], paddleDevice?: string) => {
-    const device = paddleDevice ?? get().paddleDevice
+  startWatcher: async (projectId: string, watchFolder: string, detectionMode: string = 'accurate', markerColors: Array<'red' | 'blue' | 'yellow'> = ['red', 'blue', 'yellow']) => {
     try {
       await api.post('/watcher/start', {
         project_id: projectId,
         watch_folder: watchFolder,
         detection_mode: detectionMode,
         marker_colors: markerColors,
-        paddle_device: device,
       })
       const response = await api.get(`/watcher/status/${projectId}`)
       set({ watcherStatus: response.data })
@@ -880,7 +817,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   stopWatcher: async (projectId: string) => {
     try {
       await api.post('/watcher/stop', { project_id: projectId })
-      set({ watcherStatus: { status: 'stopped', watch_folder: '', detection_mode: '', paddle_device: '', files_processed: 0, files_failed: 0, last_error: '', started_at: null } })
+      set({ watcherStatus: { status: 'stopped', watch_folder: '', detection_mode: '', files_processed: 0, files_failed: 0, last_error: '', started_at: null } })
     } catch (error: any) {
       set({ error: error.response?.data?.error || 'Failed to stop watcher' })
       throw error

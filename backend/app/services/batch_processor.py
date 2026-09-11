@@ -500,20 +500,18 @@ def _run_detection_phase(job_id, page_queue, files_info, project_id, config, det
     """Run detection + OCR for a prepared page queue."""
     update_job_status(job_id, {'stage': 'detecting'})
 
-    paddle_device = config.get('paddle_device')
-
     if ocr_service is None:
         try:
-            ocr_service = OCRService(device=paddle_device)
+            ocr_service = OCRService()
         except Exception as e:
             logger.warning(f"Failed to initialize OCR service: {e}")
 
     try:
-        OCRService._get_shared_ocr(paddle_device)
+        OCRService._get_shared_ocr()
     except Exception as e:
         logger.warning(f"Failed to warm shared OCR engine: {e}")
 
-    cv_service = CVService(mode=detection_mode, paddle_device=paddle_device)
+    cv_service = CVService(mode=detection_mode)
     active_templates = []
     try:
         active_templates = list(mongo.db.shape_templates.find({'is_active': True}))
@@ -680,10 +678,9 @@ def process_batch_job(job_id, files_info, project_id, upload_folder, config, det
     try:
         update_job_status(job_id, {'status': 'processing', 'stage': 'converting'})
 
-        paddle_device = config.get('paddle_device')
         ocr_service = None
         try:
-            ocr_service = OCRService(device=paddle_device)
+            ocr_service = OCRService()
         except Exception as e:
             logger.warning(f"Failed to initialize OCR service: {e}")
 

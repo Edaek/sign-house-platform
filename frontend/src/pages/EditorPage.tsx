@@ -119,7 +119,7 @@ export default function EditorPage() {
   useEffect(() => {
     fetchShapeTemplates()
   }, [fetchShapeTemplates])
-
+  
   // Fetch project and floorplan data
   useEffect(() => {
     if (projectId) {
@@ -1233,7 +1233,7 @@ export default function EditorPage() {
                 Accurate
               </button>
             </div>
-
+            
             <div className="space-y-2 min-w-0">
               {isDetectingShapes ? (
                 <div className={clsx(

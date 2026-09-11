@@ -56,12 +56,11 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
 
         shape_type = params.get('shape_type', 'auto')
         detection_mode = params.get('mode', 'accurate')
-        paddle_device = params.get('paddle_device')
         marker_colors = params.get('marker_colors')
         normalized_samples = params.get('color_samples') or []
 
-        cv_service = CVService(mode=detection_mode, paddle_device=paddle_device)
-        ocr_service = OCRService(device=paddle_device)
+        cv_service = CVService(mode=detection_mode)
+        ocr_service = OCRService()
         image_path = floorplan['image_filepath']
         page_img = cv2.imread(image_path)
         if page_img is None:

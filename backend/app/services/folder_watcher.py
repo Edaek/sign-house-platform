@@ -29,21 +29,19 @@ _POLL_INTERVAL = 5
 class _WatcherState:
     __slots__ = (
         'thread', 'stop_event', 'project_id', 'watch_folder',
-        'detection_mode', 'marker_colors', 'paddle_device',
-        'files_processed', 'files_failed', 'last_error', 'started_at',
+        'detection_mode', 'marker_colors', 'files_processed', 'files_failed',
+        'last_error', 'started_at',
     )
 
     def __init__(self, thread: threading.Thread, stop_event: threading.Event,
                  project_id: str, watch_folder: str, detection_mode: str,
-                 marker_colors: Optional[List[str]] = None,
-                 paddle_device: Optional[str] = None):
+                 marker_colors: Optional[List[str]] = None):
         self.thread = thread
         self.stop_event = stop_event
         self.project_id = project_id
         self.watch_folder = watch_folder
         self.detection_mode = detection_mode
         self.marker_colors = marker_colors or list(CVService.MARKER_COLORS)
-        self.paddle_device = paddle_device
         self.files_processed: int = 0
         self.files_failed: int = 0
         self.last_error: str = ''
@@ -74,7 +72,7 @@ class FolderWatcherManager:
 
     def _watch_loop(self, project_id: str, watch_folder: str,
                     detection_mode: str, marker_colors: List[str],
-                    paddle_device: Optional[str], stop_event: threading.Event):
+                    stop_event: threading.Event):
         """Main polling loop that scans folder for new PDFs."""
         watch_path = Path(watch_folder)
         processed_dir = watch_path / 'processed'
@@ -107,15 +105,13 @@ class FolderWatcherManager:
                 del pending[file_path]
                 logger.info('[watcher:%s] New PDF detected: %s', project_id, file_path)
                 self._process_file(project_id, file_path, watch_folder,
-                                   detection_mode, marker_colors, paddle_device,
-                                   processed_dir)
+                                   detection_mode, marker_colors, processed_dir)
 
         logger.info('[watcher:%s] Watcher stopped', project_id)
 
     def _process_file(self, project_id: str, file_path: str,
                       watch_folder: str, detection_mode: str,
-                      marker_colors: List[str], paddle_device: Optional[str],
-                      processed_dir: Path):
+                      marker_colors: List[str], processed_dir: Path):
         """Copy PDF into the standard upload tree and kick off batch processing."""
         source = Path(file_path)
         try:
@@ -154,7 +150,6 @@ class FolderWatcherManager:
 
                 config = dict(self._config)
                 config['marker_colors'] = marker_colors
-                config['paddle_device'] = paddle_device
                 start_batch_processing(
                     job_id, files_info, project_id,
                     self._upload_folder, config, detection_mode,
@@ -183,8 +178,7 @@ class FolderWatcherManager:
 
     def start(self, project_id: str, watch_folder: str,
               detection_mode: str = 'accurate',
-              marker_colors: Optional[List[str]] = None,
-              paddle_device: Optional[str] = None):
+              marker_colors: Optional[List[str]] = None):
         marker_colors = marker_colors or list(CVService.MARKER_COLORS)
         with self._lock:
             existing = self._watchers.get(project_id)
@@ -199,7 +193,7 @@ class FolderWatcherManager:
         stop_event = threading.Event()
         thread = threading.Thread(
             target=self._watch_loop,
-            args=(project_id, watch_folder, detection_mode, marker_colors, paddle_device, stop_event),
+            args=(project_id, watch_folder, detection_mode, marker_colors, stop_event),
             daemon=True,
             name=f'watcher-{project_id}',
         )
@@ -208,10 +202,9 @@ class FolderWatcherManager:
         with self._lock:
             self._watchers[project_id] = _WatcherState(
                 thread, stop_event, project_id, watch_folder, detection_mode, marker_colors,
-                paddle_device,
             )
-        logger.info('[watcher:%s] Started watching %s (mode=%s, colors=%s, device=%s)',
-                     project_id, watch_folder, detection_mode, marker_colors, paddle_device)
+        logger.info('[watcher:%s] Started watching %s (mode=%s, colors=%s)',
+                     project_id, watch_folder, detection_mode, marker_colors)
         return True
 
     def stop(self, project_id: str):
@@ -238,7 +231,6 @@ class FolderWatcherManager:
                 'status': 'stopped',
                 'watch_folder': '',
                 'detection_mode': '',
-                'paddle_device': '',
                 'files_processed': 0,
                 'files_failed': 0,
                 'last_error': '',
@@ -248,7 +240,6 @@ class FolderWatcherManager:
             'status': 'running' if state.thread.is_alive() else 'error',
             'watch_folder': state.watch_folder,
             'detection_mode': state.detection_mode,
-            'paddle_device': state.paddle_device or '',
             'files_processed': state.files_processed,
             'files_failed': state.files_failed,
             'last_error': state.last_error,

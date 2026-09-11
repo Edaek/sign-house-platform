@@ -6,7 +6,7 @@ from bson import ObjectId
 
 from app import mongo
 from app.services.folder_watcher import watcher_manager
-from app.api.processing import normalize_marker_colors, parse_paddle_device
+from app.api.processing import normalize_marker_colors
 from app.services.job_cancel import cancel_active_jobs_for_project
 
 watcher_bp = Blueprint('watcher', __name__)
@@ -35,7 +35,6 @@ def start_watcher():
     project_id = data.get('project_id')
     watch_folder = data.get('watch_folder', '')
     detection_mode = data.get('detection_mode', 'accurate')
-    paddle_device = parse_paddle_device(data.get('paddle_device'))
     try:
         marker_colors = normalize_marker_colors(data.get('marker_colors'))
     except ValueError as exc:
@@ -48,9 +47,7 @@ def start_watcher():
     if not project:
         return jsonify({'error': 'Project not found'}), 404
 
-    started = watcher_manager.start(
-        project_id, watch_folder, detection_mode, marker_colors, paddle_device,
-    )
+    started = watcher_manager.start(project_id, watch_folder, detection_mode, marker_colors)
     if not started:
         return jsonify({'message': 'Watcher already running', 'status': 'running'}), 200
 
@@ -60,7 +57,6 @@ def start_watcher():
             'watcher_folder': watch_folder,
             'watcher_detection_mode': detection_mode,
             'watcher_marker_colors': marker_colors,
-            'watcher_paddle_device': paddle_device,
         }}
     )
 
@@ -70,7 +66,6 @@ def start_watcher():
         'watch_folder': watch_folder,
         'detection_mode': detection_mode,
         'marker_colors': marker_colors,
-        'paddle_device': paddle_device,
     }), 200
 
 

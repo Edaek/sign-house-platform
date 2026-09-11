@@ -88,11 +88,6 @@ class Config:
     JOB_STALE_MINUTES = int(os.environ.get('JOB_STALE_MINUTES', 30))
     JOB_RECOVERY_INTERVAL_MINUTES = int(os.environ.get('JOB_RECOVERY_INTERVAL_MINUTES', 5))
 
-    # PaddleOCR device default: cpu | gpu | gpu:0
-    PADDLE_DEVICE = os.environ.get('PADDLE_DEVICE', 'cpu')
-    # GPU-only hosts (e.g. HPE with L20): OCR must run on GPU; hide CPU in UI
-    PADDLE_GPU_ONLY = os.environ.get('PADDLE_GPU_ONLY', 'false').lower() == 'true'
-
 
 class DevelopmentConfig(Config):
     """Development configuration."""

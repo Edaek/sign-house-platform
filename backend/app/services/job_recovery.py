@@ -90,14 +90,12 @@ def _try_auto_resume_project(stale_job) -> bool:
         str(project_id), str(user_id), job_files, job_type='batch_resume',
     )
     job_doc['detection_mode'] = stale_job.get('detection_mode', 'accurate')
-    job_doc['paddle_device'] = stale_job.get('paddle_device')
     result = mongo.db.processing_jobs.insert_one(job_doc)
     job_doc['_id'] = result.inserted_id
 
     config = {
         'detection_method': stale_job.get('detection_method', 'auto'),
         'marker_colors': stale_job.get('marker_colors'),
-        'paddle_device': stale_job.get('paddle_device'),
     }
     files_info = [{'index': i, 'filename': f['filename']} for i, f in enumerate(job_files)]
     start_resume_processing(
