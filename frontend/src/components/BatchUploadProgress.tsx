@@ -37,6 +37,7 @@ interface BatchUploadJob {
   status: 'pending' | 'processing' | 'completed' | 'error' | 'cancelled'
   cancel_requested?: boolean
   job_type?: string
+  paddle_device?: string | null
   total_files: number
   processed_files: number
   files: ProcessingFile[]
@@ -202,6 +203,7 @@ export default function BatchUploadProgress({ job, isOpen, onClose, onPoll, onCa
                 <p className="text-sm text-slate-500 dark:text-slate-400">
                   {completedCount} of {job.total_files} files processed
                   {errorCount > 0 && ` (${errorCount} failed)`}
+                  {job.paddle_device && ` · OCR: ${job.paddle_device === 'cpu' ? 'CPU' : 'GPU'}`}
                   {cancelledCount > 0 && ` (${cancelledCount} cancelled)`}
                 </p>
               </div>

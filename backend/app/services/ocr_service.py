@@ -167,49 +167,63 @@ def is_valid_sign_code(text, strict=False):
 class OCRService:
     """Service for OCR text extraction using PaddleOCR."""
 
-    _shared_ocr = None
-    _shared_ocr_fast = None
+    _shared_ocr = {}
+    _shared_ocr_fast = {}
 
-    def __init__(self):
+    def __init__(self, device=None):
         """Initialize OCR service with lazy-loaded PaddleOCR models."""
+        from app.services.device_probe import normalize_device
+        self._device, self._device_warning = normalize_device(device)
         self._ocr = None
         self._ocr_fast = None
 
     @classmethod
-    def _get_shared_ocr(cls):
-        if cls._shared_ocr is None:
-            from paddleocr import PaddleOCR
-            cls._shared_ocr = PaddleOCR(
-                lang='en',
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
-        return cls._shared_ocr
+    def _paddle_ocr_kwargs(cls, device: str) -> dict:
+        return {
+            'lang': 'en',
+            'use_doc_orientation_classify': False,
+            'use_doc_unwarping': False,
+            'use_textline_orientation': False,
+            'device': device,
+        }
 
     @classmethod
-    def _get_shared_ocr_fast(cls):
+    def _get_shared_ocr(cls, device=None):
+        from app.services.device_probe import normalize_device
+        from paddleocr import PaddleOCR
+
+        resolved, _ = normalize_device(device)
+        if resolved not in cls._shared_ocr:
+            logger.info('Loading PaddleOCR (standard) on device=%s', resolved)
+            cls._shared_ocr[resolved] = PaddleOCR(**cls._paddle_ocr_kwargs(resolved))
+        return cls._shared_ocr[resolved]
+
+    @classmethod
+    def _get_shared_ocr_fast(cls, device=None):
         """Lightweight instance for quick recognition on small crops."""
-        if cls._shared_ocr_fast is None:
-            from paddleocr import PaddleOCR
-            cls._shared_ocr_fast = PaddleOCR(
-                lang='en',
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-            )
-        return cls._shared_ocr_fast
+        from app.services.device_probe import normalize_device
+        from paddleocr import PaddleOCR
+
+        resolved, _ = normalize_device(device)
+        if resolved not in cls._shared_ocr_fast:
+            logger.info('Loading PaddleOCR (fast) on device=%s', resolved)
+            cls._shared_ocr_fast[resolved] = PaddleOCR(**cls._paddle_ocr_kwargs(resolved))
+        return cls._shared_ocr_fast[resolved]
+
+    @property
+    def device(self):
+        return self._device
 
     @property
     def ocr(self):
         if self._ocr is None:
-            self._ocr = self._get_shared_ocr()
+            self._ocr = self._get_shared_ocr(self._device)
         return self._ocr
 
     @property
     def ocr_fast(self):
         if self._ocr_fast is None:
-            self._ocr_fast = self._get_shared_ocr_fast()
+            self._ocr_fast = self._get_shared_ocr_fast(self._device)
         return self._ocr_fast
 
     def _run_ocr(self, image, fast=False):

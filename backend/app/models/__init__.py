@@ -406,6 +406,7 @@ def processing_job_to_dict(job_doc):
         'result': job_doc.get('result'),
         'error': job_doc.get('error'),
         'recovered_stale': job_doc.get('recovered_stale', False),
+        'paddle_device': job_doc.get('paddle_device'),
         'created_at': job_doc['created_at'].isoformat() if job_doc.get('created_at') else None,
         'updated_at': job_doc['updated_at'].isoformat() if job_doc.get('updated_at') else None,
         'completed_at': job_doc['completed_at'].isoformat() if job_doc.get('completed_at') else None

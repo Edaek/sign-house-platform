@@ -1,0 +1,11 @@
+# GPU Paddle override — install AFTER requirements.txt:
+#
+#   pip install -r requirements.txt
+#   pip uninstall -y paddlepaddle
+#   pip install -r requirements-gpu.txt
+#
+# HPE (L20, driver 610 / CUDA 13.3): use cu126 wheel below.
+# Fallback if import fails: cu118 index in docs/GPU_SETUP.md
+
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddlepaddle-gpu==3.3.0

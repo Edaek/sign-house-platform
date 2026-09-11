@@ -15,10 +15,21 @@ import { useProjectStore } from '../store/projectStore'
 import { useAuthStore } from '../store/authStore'
 import PageContainer from '../components/PageContainer'
 import StatusBadge from '../components/StatusBadge'
+import ComputeDevicePanel from '../components/ComputeDevicePanel'
 import toast from 'react-hot-toast'
 
 export default function DashboardPage() {
-  const { projects, fetchProjects, createProject, deleteProject, isLoading } = useProjectStore()
+  const {
+    projects,
+    fetchProjects,
+    createProject,
+    deleteProject,
+    isLoading,
+    fetchComputeDevices,
+    computeDevices,
+    paddleDevice,
+    setPaddleDevice,
+  } = useProjectStore()
   const { isManager } = useAuthStore()
   const navigate = useNavigate()
   const [showNewProject, setShowNewProject] = useState(false)
@@ -28,7 +39,8 @@ export default function DashboardPage() {
   
   useEffect(() => {
     fetchProjects()
-  }, [fetchProjects])
+    fetchComputeDevices()
+  }, [fetchProjects, fetchComputeDevices])
   
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,19 +72,27 @@ export default function DashboardPage() {
   
   return (
     <PageContainer>
-      <div className="flex items-center justify-between page-header">
-        <div>
-          <h1 className="page-title">Projects</h1>
-          <p className="page-subtitle">Manage your floor plan analysis projects</p>
+      <div className="page-header space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h1 className="page-title">Projects</h1>
+            <p className="page-subtitle">Manage your floor plan analysis projects</p>
+          </div>
+          <button
+            onClick={() => setShowNewProject(true)}
+            className="btn btn-primary shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            New Project
+          </button>
         </div>
-        
-        <button
-          onClick={() => setShowNewProject(true)}
-          className="btn btn-primary"
-        >
-          <Plus className="w-4 h-4" />
-          New Project
-        </button>
+
+        <ComputeDevicePanel
+          computeDevices={computeDevices}
+          paddleDevice={paddleDevice}
+          onDeviceChange={setPaddleDevice}
+          onRefresh={fetchComputeDevices}
+        />
       </div>
       
       {showNewProject && (

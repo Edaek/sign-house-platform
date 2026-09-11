@@ -62,6 +62,13 @@ def normalize_marker_colors(raw):
     return normalized or list(CVService.MARKER_COLORS)
 
 
+def parse_paddle_device(raw):
+    """Validate and normalize a requested PaddleOCR device string."""
+    from app.services.device_probe import normalize_device
+    device, _warning = normalize_device(raw)
+    return device
+
+
 def allowed_file(filename, allowed_extensions):
     """Check if file extension is allowed."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
@@ -88,6 +95,7 @@ def detect_shapes(floorplan_id):
     data = request.get_json() or {}
     shape_type = data.get('shape_type', 'auto')
     detection_mode = data.get('mode', 'accurate')
+    paddle_device = parse_paddle_device(data.get('paddle_device'))
     marker_colors = data.get('marker_colors')
     color_samples = data.get('color_samples')
 
@@ -140,6 +148,7 @@ def detect_shapes(floorplan_id):
     params = {
         'shape_type': shape_type,
         'mode': detection_mode,
+        'paddle_device': paddle_device,
         'marker_colors': marker_colors,
         'color_samples': normalized_samples,
     }
@@ -1035,6 +1044,7 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
     # Options: 'auto' (auto-detect), 'rectangle' (red rectangles), or 'circle' (template-based circle detection)
     detection_method = request.form.get('detection_method', 'auto')
     batch_mode = request.form.get('detection_mode', 'accurate')
+    paddle_device = parse_paddle_device(request.form.get('paddle_device'))
     try:
         marker_colors = normalize_marker_colors(request.form.get('marker_colors'))
     except ValueError as exc:
@@ -1047,6 +1057,7 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
         'TITLE_REGION_HEIGHT': current_app.config.get('TITLE_REGION_HEIGHT', 15),
         'detection_method': detection_method,
         'marker_colors': marker_colors,
+        'paddle_device': paddle_device,
     }
 
     mongo.db.processing_jobs.update_one(
@@ -1055,11 +1066,13 @@ def batch_upload_floorplans(project_id, _user=None, _project=None):
             'detection_mode': batch_mode,
             'detection_method': detection_method,
             'marker_colors': marker_colors,
+            'paddle_device': paddle_device,
         }},
     )
     job_doc['detection_mode'] = batch_mode
     job_doc['detection_method'] = detection_method
     job_doc['marker_colors'] = marker_colors
+    job_doc['paddle_device'] = paddle_device
     
     start_batch_processing(
         job_id=job_doc['job_id'],
@@ -1213,6 +1226,7 @@ def resume_batch_processing(project_id, _user=None, _project=None):
 
     data = request.get_json() or {}
     detection_mode = data.get('detection_mode', 'accurate')
+    paddle_device = parse_paddle_device(data.get('paddle_device'))
     try:
         marker_colors = normalize_marker_colors(data.get('marker_colors'))
     except ValueError as exc:
@@ -1236,12 +1250,14 @@ def resume_batch_processing(project_id, _user=None, _project=None):
         project_id, user_id, job_files, job_type='batch_resume',
     )
     job_doc['detection_mode'] = detection_mode
+    job_doc['paddle_device'] = paddle_device
     result = mongo.db.processing_jobs.insert_one(job_doc)
     job_doc['_id'] = result.inserted_id
 
     config = {
         'detection_method': data.get('detection_method', 'auto'),
         'marker_colors': marker_colors,
+        'paddle_device': paddle_device,
     }
 
     files_info = [

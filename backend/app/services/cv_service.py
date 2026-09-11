@@ -27,14 +27,16 @@ class CVService:
         h, w = img.shape[:2]
         return h > w
     
-    def __init__(self, mode='accurate'):
+    def __init__(self, mode='accurate', paddle_device=None):
         """Initialize CV service with default parameters.
         
         Args:
             mode: 'fast' for speed-optimized detection (fewer passes, no OCR gating),
                   'accurate' for full detection (all passes, OCR verification).
+            paddle_device: PaddleOCR device string (cpu, gpu:0, etc.).
         """
         self._ocr_engine = None
+        self._paddle_device = paddle_device
         self.mode = mode
         # Circle detection parameters
         self.circle_params = {
@@ -1782,7 +1784,7 @@ class CVService:
         """Reuse the shared PaddleOCR instance from OCRService."""
         if self._ocr_engine is None:
             from app.services.ocr_service import OCRService
-            self._ocr_engine = OCRService._get_shared_ocr()
+            self._ocr_engine = OCRService._get_shared_ocr(self._paddle_device)
         return self._ocr_engine
 
     def run_shape_ocr(self, img, shape, should_cancel=None):

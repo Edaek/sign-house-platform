@@ -1,7 +1,7 @@
 """Health check endpoints for monitoring and orchestration."""
 import os
 import subprocess
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from app import mongo
 
 health_bp = Blueprint('health', __name__)
@@ -144,10 +144,33 @@ def diagnostics():
         info['paddleocr'] = f'error: {e}'
 
     try:
+        from app.services.device_probe import probe_compute_devices
+        devices = probe_compute_devices()
+        info['compute_devices'] = {
+            'paddle_package': devices.get('paddle_package'),
+            'paddle_version': devices.get('paddle_version'),
+            'default_device': devices.get('default_device'),
+            'recommended': devices.get('recommended'),
+            'gpu_available': devices.get('gpu', {}).get('available'),
+            'gpu_only': devices.get('gpu_only', False),
+            'gpu_count': devices.get('gpu', {}).get('count', 0),
+        }
+    except Exception as e:
+        info['compute_devices'] = f'error: {e}'
+
+    try:
         mongo.db.command('ping')
         info['database'] = 'healthy'
     except Exception as e:
         info['database'] = f'unhealthy: {e}'
 
     return jsonify(info), 200
+
+
+@health_bp.route('/health/compute-devices', methods=['GET'])
+def compute_devices():
+    """Report CPU/GPU availability for PaddleOCR (no auth required)."""
+    from app.services.device_probe import probe_compute_devices
+    force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
+    return jsonify(probe_compute_devices(force=force)), 200
 
