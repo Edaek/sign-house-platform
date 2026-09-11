@@ -1,5 +1,7 @@
 # GPU Setup (Bare Metal)
 
+> **完整中文指南**：请参阅 [GPU_LOCAL_GUIDE.md](GPU_LOCAL_GUIDE.md)（安装、配置、界面、API、排错、性能对比）。
+
 Sign House uses **PaddleOCR** for text recognition. Shape detection (OpenCV) always runs on CPU; enabling GPU accelerates OCR only.
 
 ## HPE deployment (NVIDIA L20, GPU-only)
