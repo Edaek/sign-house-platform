@@ -14,12 +14,16 @@ for _name in ('paddleocr', 'paddlex', 'ppocr', 'paddle'):
 os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
 
 SIGN_CODE_PATTERN = re.compile(
+    # Format 1: letters + digits, e.g. S10, S10-122, TC107, CP-10
     r'^[A-Z][a-zA-Z]{0,3}[.\-]?\d+[a-zA-Z]?([.\-]\d+[a-zA-Z]?)*(\s*[xX]\d+)?$'
+    r'|'
+    # Format 2: multi-segment dot/dash codes, e.g. D.C.L0.148.D, BC-G-030, APF.L0.BC.109D
+    r'^(?=.*\d)[A-Z](?:[a-zA-Z]{0,3})?(?:[.\-][A-Za-z0-9]+){2,}$'
 )
 
 # Pure-letter sign codes that bypass the normal digit requirement.
 # Add entries in UPPER CASE exactly as they appear on drawings.
-LETTER_ONLY_SIGN_CODES = frozenset({'D', 'CS'})
+LETTER_ONLY_SIGN_CODES = frozenset({'D', 'CS', 'CMC', 'WMC', 'HR', 'TRS', 'CP'})
 
 # Standalone x2 / ×3 only — do not match the X2 inside sign codes like EX2, EX4.
 MULTIPLIER_PATTERN = re.compile(r'(?<![A-Za-z])[xX\u00d7*]\s*(\d+)')
@@ -70,6 +74,14 @@ def clean_ocr_text(text):
     text = text.replace('*', 'x')
     text = text.strip(' |])[}{(.!@#%^&+=:;"\'<>,?/~`')
     text = re.sub(r'[^A-Za-z0-9\s.\-xX]', '', text)
+    # Strip spaces between separators and digits (OCR artifact: "BC-G- 030" → "BC-G-030")
+    text = re.sub(r'([.\-])\s+(\d)', r'\1\2', text)
+    # Strip spaces between digits and letters (OCR artifact: "S10 a" → "S10a")
+    text = re.sub(r'(\d)\s+([a-zA-Z])', r'\1\2', text)
+    # Strip spaces between letters and separators (OCR artifact: "BC -1" → "BC-1")
+    text = re.sub(r'([A-Za-z])\s+([.\-])', r'\1\2', text)
+    # Strip spaces between single letters (OCR artifact: "B C-1" → "BC-1")
+    text = re.sub(r'(?<![A-Za-z])([A-Z])\s+([A-Z])(?=[.\-\d])', r'\1\2', text)
     return text.strip()
 
 

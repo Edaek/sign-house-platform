@@ -350,7 +350,7 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
             kept = []
             ocr_t0 = _time.time()
             for idx, shape in enumerate(shapes):
-                if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
+                if idx % 10 == 0 and (is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index)):
                     return _cancel_result(shapes_detected)
                 try:
                     if shape.get('detection_method') == 'learned' and shape.get('extracted_text'):

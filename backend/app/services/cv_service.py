@@ -75,14 +75,14 @@ class CVService:
         
         # Red rectangle detection parameters
         self.red_rect_params = {
-            'min_area': 700,  # Lowered to catch short labels like A1, A7 (~35x20)
-            'max_area': 5000,  # Labels are small
-            'min_width': 30,  # Lowered for 2-char labels like A1 (~30-45px wide)
-            'max_width': 115,  # Allow wider labels like S10-122 (~108px)
-            'min_height': 18,  # Lowered for short labels with thin borders
-            'max_height': 38,  # Labels are not too tall
-            'min_aspect_ratio': 1.2,  # Lowered for short labels (w/h can be ~1.2-1.5)
-            'max_aspect_ratio': 4.5,  # Allow wide labels like S10-122
+            'min_area': 400,  # Lowered to catch small labels on coloured backgrounds (~28x18)
+            'max_area': 30000,  # Raised for large labels like D.C.L0.148.D (~269x97)
+            'min_width': 20,  # Lowered for small labels on coloured backgrounds (~27px)
+            'max_width': 280,  # Raised for long labels like D.C.L0.148.D (~269px)
+            'min_height': 14,  # Lowered for short labels with thin borders
+            'max_height': 100,  # Raised for tall labels (~57-97px in DS-BC plans)
+            'min_aspect_ratio': 1.0,  # Lowered for near-square labels like L0 (86x57)
+            'max_aspect_ratio': 7.0,  # Raised for very wide labels
             'approx_epsilon': 0.03,
             # Red color ranges in HSV (red wraps around at 0/180)
             'lower_red1': np.array([0, 50, 50]),
@@ -1866,6 +1866,12 @@ class CVService:
                     return (False, '', avg_conf)
 
                 keep = is_valid_sign_code(cleaned, strict=True)
+                if not keep and not is_circle:
+                    # Retry: strip ALL internal spaces (multi-line small rects)
+                    no_space = cleaned.replace(' ', '')
+                    if no_space and is_valid_sign_code(no_space, strict=True):
+                        cleaned = no_space
+                        keep = True
                 if not keep:
                     logger.debug(
                         f"Shape {shape.get('type')} at ({shape.get('x')},{shape.get('y')}) "
@@ -2066,13 +2072,9 @@ class CVService:
     
     def _search_ring_on_mask(self, roi, local_cx, local_cy, radius, shift, rad_span, step=1):
         """Grid-search the best (cx, cy, r) ring alignment on a local ROI."""
-        should_cancel = getattr(self, '_should_cancel', None)
         best = (local_cx, local_cy, float(radius))
         best_score = -1.0
         for dx in range(-shift, shift + 1, step):
-            if should_cancel and should_cancel():
-                from app.services.job_cancel import JobCancelledError
-                raise JobCancelledError()
             for dy in range(-shift, shift + 1, step):
                 for dr in range(-rad_span, rad_span + 1, step):
                     trial_r = radius + dr
@@ -2087,11 +2089,6 @@ class CVService:
 
     def _refine_circle_from_ring_mask(self, color_mask, cx, cy, radius, is_thin_ring=False):
         """Refine circle center and radius using ring pixels on an undilated mask."""
-        should_cancel = getattr(self, '_should_cancel', None)
-        if should_cancel and should_cancel():
-            from app.services.job_cancel import JobCancelledError
-            raise JobCancelledError()
-
         h, w = color_mask.shape[:2]
         search_pad = max(int(radius * 1.8), 14)
         y1 = max(0, cy - search_pad)
@@ -2275,6 +2272,27 @@ class CVService:
             contour, circularity, radius = self._find_best_circle_in_mask(color_mask)
             
             if contour is not None and circularity >= self.MIN_CIRCULARITY:
+                # Reject filled circles (e.g. revision markers A/B/C/D).
+                # A real sample circle is an empty ring with a white interior.
+                (check_cx, check_cy), check_r = cv2.minEnclosingCircle(contour)
+                inner_r = max(3, int(check_r * 0.55))
+                cy_i, cx_i = int(round(check_cy)), int(round(check_cx))
+                rh, rw = search_region.shape[:2]
+                y1 = max(0, cy_i - inner_r)
+                y2 = min(rh, cy_i + inner_r + 1)
+                x1 = max(0, cx_i - inner_r)
+                x2 = min(rw, cx_i + inner_r + 1)
+                inner_roi = search_region[y1:y2, x1:x2]
+                if inner_roi.size > 0:
+                    inner_gray = cv2.cvtColor(inner_roi, cv2.COLOR_BGR2GRAY)
+                    dark_ratio = np.count_nonzero(inner_gray < 180) / max(1, inner_gray.size)
+                    color_fill = cv2.countNonZero(color_mask[y1:y2, x1:x2]) / max(1, inner_gray.size)
+                    if dark_ratio > 0.25 or color_fill > 0.40:
+                        logger.debug(
+                            f"Sample circle candidate rejected (filled): "
+                            f"color={color_type} dark={dark_ratio:.2f} fill={color_fill:.2f}")
+                        continue
+
                 candidates.append({
                     'contour': contour,
                     'circularity': circularity,
@@ -2627,8 +2645,8 @@ class CVService:
                 area = cv2.contourArea(approx)
                 bounding_area = w * h
                 
-                # Label size filter (h min lowered to 14 for thin borders)
-                if w >= 25 and w <= 110 and h >= 14 and h <= 60 and bounding_area >= 400:
+                # Label size filter
+                if w >= 20 and w <= 280 and h >= 14 and h <= 100 and bounding_area >= 400:
                     if bounding_area > 0 and area > 0:
                         rect_ratio = area / bounding_area
                         if rect_ratio >= 0.15:  # Very low threshold for thin border contours
@@ -2637,8 +2655,40 @@ class CVService:
                             ], dtype=np.int32)
                             contours3.append(rect_contour)
         
+        # PASS 4: White-region detection for signs on coloured backgrounds.
+        # On tinted floor-plan zones the edge / red-mask passes often produce
+        # contours whose bounding boxes are too small or irregularly shaped.
+        # Here we look for small white rectangular blobs (the sign interior),
+        # expand them slightly to include the red border, and add synthetic
+        # rectangle contours so they enter the shared validation pipeline.
+        white_mask = cv2.inRange(hsv, np.array([0, 0, 195]), np.array([180, 55, 255]))
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN,
+                                      np.ones((2, 2), np.uint8))
+        white_contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+        contours4 = []
+        for wc in white_contours:
+            wx, wy, ww, wh = cv2.boundingRect(wc)
+            warea = ww * wh
+            if warea < 250 or warea > 6000:
+                continue
+            if ww < 15 or ww > 120 or wh < 10 or wh > 70:
+                continue
+            w_aspect = ww / wh if wh > 0 else 0
+            if w_aspect < 0.6 or w_aspect > 5.0:
+                continue
+            # Expand bounding box by 3px to include the red border
+            ex, ey = max(0, wx - 3), max(0, wy - 3)
+            ew = min(w_img, wx + ww + 3) - ex
+            eh = min(h_img, wy + wh + 3) - ey
+            rect_contour = np.array([
+                [[ex, ey]], [[ex + ew, ey]],
+                [[ex + ew, ey + eh]], [[ex, ey + eh]]
+            ], dtype=np.int32)
+            contours4.append(rect_contour)
+
         # Process all sets of contours
-        all_contours = list(contours1) + list(contours2) + list(contours3)
+        all_contours = list(contours1) + list(contours2) + list(contours3) + list(contours4)
         
         for contour_idx, contour in enumerate(all_contours):
             raise_if_cancelled(should_cancel, contour_idx, every=1)
@@ -2671,7 +2721,7 @@ class CVService:
             contour_area = cv2.contourArea(contour)
             if bounding_area > 0 and contour_area > 0:
                 rectangularity = contour_area / bounding_area
-                if rectangularity < 0.7:  # At least 70% fill
+                if rectangularity < 0.6:  # At least 60% fill
                     continue
             
             # Duplicate check (finer grid to avoid merging small nearby labels)
@@ -2679,9 +2729,9 @@ class CVService:
             if rect_key in seen_rects:
                 continue
             
-            # KEY FILTER: must have red border on all 4 sides AND white interior
+            # KEY FILTER: must have red border on all 4 sides AND valid interior
             has_red = self._has_complete_red_border(red_mask, x, y, w, h)
-            has_white = self._has_white_interior(gray, x, y, w, h)
+            has_white = self._has_white_interior(gray, x, y, w, h, bgr_image=img)
             
             if has_red and has_white:
                 candidate = {
@@ -2888,15 +2938,19 @@ class CVService:
         # Require at least 2 out of 4 edges to have red (tolerance for bounding box misalignment)
         return edges_with_red >= 2
     
-    def _has_white_interior(self, gray_image, x, y, w, h):
-        """Check if the interior of a rectangle has mostly white pixels with some text.
-        
+    def _has_white_interior(self, gray_image, x, y, w, h, bgr_image=None):
+        """Check if the interior of a rectangle has a valid background.
+
+        Accepts either a mostly-white interior (original check) or a
+        uniformly-coloured interior (e.g. orange/yellow filled signs).
+
         Args:
             gray_image: Grayscale image
             x, y, w, h: Rectangle bounding box
-            
+            bgr_image: Optional BGR image for colour-fill check
+
         Returns:
-            True if the interior is mostly white but has some dark text
+            True if the interior looks like a sign background
         """
         # Shrink the region slightly to avoid the border
         margin = max(2, min(w, h) // 10)
@@ -2921,7 +2975,7 @@ class CVService:
         if interior.size == 0:
             return True  # Empty region, assume valid
         
-        # Count white pixels (above threshold)
+        # --- Path 1: mostly white (original logic) ---
         white_pixels = np.sum(interior > self.red_rect_params['white_threshold'])
         total_pixels = interior.size
         white_ratio = white_pixels / total_pixels
@@ -2933,13 +2987,25 @@ class CVService:
             min_white = self.red_rect_params['white_ratio_min']
         max_white = 0.92
         
-        if white_ratio < min_white:
-            return False
-        
-        if white_ratio > max_white:
-            return False
-        
-        return True
+        if min_white <= white_ratio <= max_white:
+            return True
+
+        # --- Path 2: uniformly coloured interior (orange / yellow fills) ---
+        if bgr_image is not None:
+            roi_bgr = bgr_image[y1:y2, x1:x2]
+            if roi_bgr.size > 0:
+                roi_hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+                sat = roi_hsv[:, :, 1]
+                val = roi_hsv[:, :, 2]
+                # "Bright & colourful" pixels: S > 40 and V > 120
+                bright_colored = (sat > 40) & (val > 120)
+                bright_ratio = np.count_nonzero(bright_colored) / max(1, total_pixels)
+                # Accept if ≥ 35 % of interior is bright & colourful
+                # (catches orange / yellow fills while rejecting dark areas)
+                if bright_ratio >= 0.35:
+                    return True
+
+        return False
     
     def detect_all_shapes(self, image_path):
         """Detect both circles and rectangles in an image.
