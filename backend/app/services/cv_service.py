@@ -26,6 +26,15 @@ class CVService:
     def _is_portrait(img):
         h, w = img.shape[:2]
         return h > w
+
+    def _reset_layout_caches(self):
+        """Drop title/frame caches so a new page cannot inherit another image's strip.
+
+        Keys use id(img); same-size numpy buffers are often reused after the
+        previous page is freed, which caused a false hit across batch pages.
+        """
+        self.__dict__.pop('_title_block_cache', None)
+        self.__dict__.pop('_frame_cache', None)
     
     def __init__(self, mode='accurate'):
         """Initialize CV service with default parameters.
@@ -144,7 +153,8 @@ class CVService:
         """
         if params:
             self.circle_params.update(params)
-        
+
+        self._reset_layout_caches()
         img, gray = self.load_image(image_path)
         processed = self.preprocess_for_detection(gray)
         
@@ -433,6 +443,7 @@ class CVService:
 
         raise_if_cancelled(should_cancel)
 
+        self._reset_layout_caches()
         if params:
             self.template_circle_params.update(params)
         
@@ -1786,7 +1797,12 @@ class CVService:
         return self._ocr_engine
 
     def run_shape_ocr(self, img, shape, should_cancel=None):
-        """Run CV-quality OCR on a detected shape (strict sign-code validation)."""
+        """Run CV-quality OCR on a detected shape (strict sign-code validation).
+
+        Returns:
+            Tuple of (keep, text, conf).  When the shape contains multiple
+            stacked signs, ``shape['_sub_signs']`` will be populated.
+        """
         color_type = shape.get('marker_color')
         prev = getattr(self, '_defer_shape_ocr', False)
         self._defer_shape_ocr = False
@@ -1863,6 +1879,16 @@ class CVService:
                 if not cleaned:
                     return (False, '', avg_conf)
 
+                # --- Multi-sign split for rectangles (check FIRST) ---
+                # If OCR found ≥ 2 text boxes that are each individually
+                # a valid sign code, the rectangle likely contains multiple
+                # stacked signs (e.g. S2-1 on top, S8 on bottom).
+                # Result is stored on shape['_sub_signs'] for the caller.
+                dt_polys = result.get('dt_polys', [])
+                if not is_circle and len(dt_polys) >= 2:
+                    self._try_split_multi_sign(
+                        shape, filtered_pairs, dt_polys, cropped_bgr)
+
                 keep = is_valid_sign_code(cleaned, strict=True)
                 if not keep and not is_circle:
                     # Retry: strip ALL internal spaces (multi-line small rects)
@@ -1870,6 +1896,10 @@ class CVService:
                     if no_space and is_valid_sign_code(no_space, strict=True):
                         cleaned = no_space
                         keep = True
+                # If split found valid sub-signs, force keep so shape isn't rejected
+                if not keep and '_sub_signs' in shape:
+                    keep = True
+                    cleaned = shape['_sub_signs'][0]['extracted_text']
                 if not keep:
                     logger.debug(
                         f"Shape {shape.get('type')} at ({shape.get('x')},{shape.get('y')}) "
@@ -1882,6 +1912,88 @@ class CVService:
             return (False, '', 0.0)
 
         return (False, '', 0.0)
+
+    # ------------------------------------------------------------------
+    # Multi-sign rectangle splitting
+    # ------------------------------------------------------------------
+    def _try_split_multi_sign(self, shape, filtered_pairs, dt_polys, cropped_bgr):
+        """Detect multiple stacked signs inside one rectangle.
+
+        If ≥ 2 individual OCR text boxes are each a valid sign code,
+        store the sub-sign list on ``shape['_sub_signs']`` so callers
+        can expand it.  Always returns None (no return-value change).
+        """
+        if not dt_polys or len(dt_polys) < 2:
+            return
+        if len(dt_polys) != len(filtered_pairs):
+            return
+
+        valid_parts = []
+        for (raw_text, score), poly in zip(filtered_pairs, dt_polys):
+            cleaned = clean_ocr_text(raw_text)
+            if not cleaned:
+                continue
+            ok = is_valid_sign_code(cleaned, strict=True)
+            if not ok:
+                no_sp = cleaned.replace(' ', '')
+                if no_sp and is_valid_sign_code(no_sp, strict=True):
+                    cleaned = no_sp
+                    ok = True
+            if ok:
+                poly_arr = np.array(poly)
+                y_min = float(poly_arr[:, 1].min())
+                y_max = float(poly_arr[:, 1].max())
+                valid_parts.append({
+                    'text': cleaned,
+                    'score': score,
+                    'y_min': y_min,
+                    'y_max': y_max,
+                })
+
+        if len(valid_parts) < 2:
+            return
+
+        valid_parts.sort(key=lambda p: p['y_min'])
+
+        sx, sy = shape['x'], shape['y']
+        sw, sh = shape['width'], shape['height']
+        pad = max(2, min(sw, sh) // 8)
+        crop_h = sh + 2 * pad
+        scale = max(3.0, 120.0 / max(crop_h, 1))
+
+        sub_signs = []
+        n = len(valid_parts)
+        for i, part in enumerate(valid_parts):
+            orig_y_min = part['y_min'] / scale - pad
+            orig_y_max = part['y_max'] / scale - pad
+
+            if i == 0:
+                sub_y = sy
+            else:
+                prev_bottom = valid_parts[i - 1]['y_max'] / scale - pad
+                sub_y = int(sy + (prev_bottom + orig_y_min) / 2)
+
+            if i == n - 1:
+                sub_y_end = sy + sh
+            else:
+                next_top = valid_parts[i + 1]['y_min'] / scale - pad
+                sub_y_end = int(sy + (orig_y_max + next_top) / 2)
+
+            sub_h = max(10, sub_y_end - sub_y)
+            sub_signs.append({
+                'type': 'rectangle',
+                'x': sx,
+                'y': int(sub_y),
+                'width': sw,
+                'height': int(sub_h),
+                'extracted_text': part['text'],
+                'ocr_confidence': part['score'],
+            })
+
+        shape['_sub_signs'] = sub_signs
+        logger.debug(
+            f"Split rectangle ({sx},{sy}) {sw}x{sh} into {len(sub_signs)} sub-signs: "
+            + ', '.join(s['extracted_text'] for s in sub_signs))
 
     def _crop_circle_for_ocr(self, img, cx, cy, radius, color_type=None):
         """Crop and preprocess a circle region for OCR verification.
@@ -2566,6 +2678,128 @@ class CVService:
         
         return detected
     
+    @staticmethod
+    def _split_stacked_color_bars(mask, x, y, w, h):
+        """Split a tall same-color blob into horizontal strips by row fill.
+
+        A gap must last a few rows so white text holes inside one bar
+        do not split it in half.
+        """
+        roi = mask[y:y + h, x:x + w]
+        if roi.size == 0 or w <= 0:
+            return []
+        row_fill = np.count_nonzero(roi, axis=1) / float(w)
+        strips = []
+        in_bar = False
+        start = 0
+        gap = 0
+        for i, fill in enumerate(row_fill):
+            if fill >= 0.50:
+                gap = 0
+                if not in_bar:
+                    in_bar = True
+                    start = i
+            elif in_bar:
+                gap += 1
+                if gap >= 3:
+                    strips.append((start, i - gap + 1))
+                    in_bar = False
+                    gap = 0
+        if in_bar:
+            strips.append((start, len(row_fill)))
+        return strips
+
+    @staticmethod
+    def _refine_bar_bbox(mask, x, y, w, h):
+        """Tighten a strip bbox to the actual filled columns."""
+        roi = mask[y:y + h, x:x + w]
+        if roi.size == 0 or h <= 0:
+            return x, y, w, h
+        col_fill = np.count_nonzero(roi, axis=0) / float(h)
+        filled = np.flatnonzero(col_fill >= 0.40)
+        if filled.size == 0:
+            return x, y, w, h
+        x1 = int(filled[0])
+        x2 = int(filled[-1]) + 1
+        return x + x1, y, x2 - x1, h
+
+    def detect_filled_color_bars(self, img, should_cancel=None):
+        """Detect solid cyan/purple callout bars used as schedule signs.
+
+        These have no red border and vary widely in width, so they are
+        handled in a dedicated pass instead of loosening red-rect limits.
+        Stacked same-color bars are separated by a light vertical erode,
+        then any remaining tall blobs are split by horizontal projection.
+        """
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        h_img, w_img = img.shape[:2]
+        color_ranges = (
+            ('cyan', np.array([75, 60, 110]), np.array([120, 255, 255])),
+            ('purple', np.array([120, 50, 60]), np.array([165, 255, 230])),
+        )
+        detected = []
+
+        for color_name, lo, hi in color_ranges:
+            raise_if_cancelled(should_cancel)
+            mask = cv2.inRange(hsv, lo, hi)
+            # Join text holes horizontally; do not glue stacked bars vertically
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((1, 7), np.uint8))
+            # Nudge stacked touching bars apart without shrinking width
+            separated = cv2.erode(mask, np.ones((3, 1), np.uint8), iterations=1)
+            contours, _ = cv2.findContours(separated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            for contour_idx, contour in enumerate(contours):
+                raise_if_cancelled(should_cancel, contour_idx, every=8)
+                x, y, w, h = cv2.boundingRect(contour)
+                # Restore the 1px eaten on top/bottom by the vertical erode
+                y = max(0, y - 2)
+                h = min(h_img - y, h + 4)
+                if w < 40 or w > 450 or h < 16:
+                    continue
+
+                if h <= 42:
+                    strips = [(0, h)]
+                else:
+                    strips = self._split_stacked_color_bars(mask, x, y, w, h)
+
+                for y1, y2 in strips:
+                    bh = y2 - y1
+                    if bh < 16 or bh > 40:
+                        continue
+                    bx, by, bw, bh = self._refine_bar_bbox(mask, x, y + y1, w, bh)
+                    if bw < 40 or bw > 450 or bh < 16 or bh > 40:
+                        continue
+                    aspect = bw / bh if bh > 0 else 0
+                    if aspect < 2.2 or bw * bh > 20000:
+                        continue
+
+                    candidate = {
+                        'type': 'rectangle',
+                        'x': int(bx),
+                        'y': int(by),
+                        'width': int(bw),
+                        'height': int(bh),
+                    }
+                    keep, text, conf = self._verify_shape_content(
+                        img, candidate, should_cancel=should_cancel)
+                    if not keep:
+                        continue
+                    # Color bars are single-line labels; reject digit-leading OCR junk
+                    # like "17.A" / "7.B" that the generic fallback would accept.
+                    if text and not (text[0].isalpha() and any(c.isdigit() for c in text)):
+                        continue
+
+                    if text:
+                        candidate['extracted_text'] = text
+                        candidate['ocr_confidence'] = conf
+                    candidate['detection_method'] = 'color_bar'
+                    detected.append(candidate)
+
+        detected = self._remove_duplicate_boxes(detected, threshold=18)
+        if detected:
+            logger.info(f"Filled color-bar pass: {len(detected)} candidates")
+        return detected
+
     def detect_red_rectangles(self, image_path, params=None, img=None):
         """Detect rectangles with red borders and white backgrounds.
         
@@ -2587,7 +2821,8 @@ class CVService:
             self.red_rect_params.update(params)
         else:
             should_cancel = None
-        
+
+        self._reset_layout_caches()
         img, gray = self.load_image(image_path, img=img)
         
         # Convert to HSV for red detection
@@ -2745,6 +2980,15 @@ class CVService:
                 if not keep:
                     continue
 
+                # Expand stacked multi-sign rectangles
+                if '_sub_signs' in candidate:
+                    for sub in candidate['_sub_signs']:
+                        sub_key = (sub['x'] // 15, sub['y'] // 15)
+                        if sub_key not in seen_rects:
+                            seen_rects.add(sub_key)
+                            detected.append(sub)
+                    continue
+
                 if text:
                     candidate['extracted_text'] = text
                     candidate['ocr_confidence'] = conf
@@ -2772,6 +3016,20 @@ class CVService:
             detected = [d for d in detected
                         if (frame_top is None or d['y'] + d['height'] // 2 > frame_top)
                         and (frame_bottom is None or d['y'] + d['height'] // 2 < frame_bottom)]
+
+        # Extra pass: solid cyan/purple callout bars (does not change red-rect params)
+        color_bars = self.detect_filled_color_bars(img, should_cancel=should_cancel)
+        # Color bars sit in the right-hand schedule column. The landscape
+        # title-block strip is often drawn too far left and would delete them.
+        # Keep drawing-frame exclusion only.
+        if frame_top is not None or frame_bottom is not None:
+            color_bars = [d for d in color_bars
+                          if (frame_top is None or d['y'] + d['height'] // 2 > frame_top)
+                          and (frame_bottom is None or d['y'] + d['height'] // 2 < frame_bottom)]
+        unique_bars = self.deduplicate_with_existing(color_bars, detected, iou_threshold=0.3)
+        if unique_bars:
+            detected.extend(unique_bars)
+            detected.sort(key=lambda r: (r['y'], r['x']))
 
         return detected
     
@@ -3269,6 +3527,7 @@ class CVService:
         if not templates:
             return []
 
+        self._reset_layout_caches()
         if img is None:
             img, gray = self.load_image(image_path, img=img)
             if img is None:
