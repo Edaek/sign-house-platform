@@ -155,21 +155,39 @@ def run_detect_job(job_id: str, floorplan_id: str, params: dict):
                 )
                 if not keep:
                     continue
+                if shape.get('detection_method') == 'color_bar':
+                    if not cleaned or not (cleaned[0].isalpha() and any(c.isdigit() for c in cleaned)):
+                        continue
+                elif '_sub_signs' in shape:
+                    for sub in shape['_sub_signs']:
+                        kept.append((idx, sub, sub['extracted_text'],
+                                     sub.get('ocr_confidence', confidence)))
+                    continue
 
             kept.append((idx, shape, cleaned, confidence))
 
         if _check_cancel():
             return
 
-        quantities = ocr_service.assign_quantities(
-            img_for_ocr,
-            [{
+        qty_targets = [
+            {
                 'x': shape['x'], 'y': shape['y'],
                 'width': shape['width'], 'height': shape['height'],
                 'center_x': shape.get('center_x'),
                 'center_y': shape.get('center_y'),
-            } for _idx, shape, _cleaned, _conf in kept],
-        ) if img_for_ocr is not None else [1] * len(kept)
+            }
+            for _idx, shape, _cleaned, _conf in kept
+            if shape.get('detection_method') != 'color_bar'
+        ]
+        qty_values = (
+            ocr_service.assign_quantities(img_for_ocr, qty_targets)
+            if img_for_ocr is not None and qty_targets else []
+        )
+        qty_iter = iter(qty_values)
+        quantities = [
+            1 if shape.get('detection_method') == 'color_bar' else next(qty_iter, 1)
+            for _idx, shape, _cleaned, _conf in kept
+        ]
 
         if _check_cancel():
             return

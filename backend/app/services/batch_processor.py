@@ -364,6 +364,15 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
                         )
                         if not keep:
                             continue
+                        if shape.get('detection_method') == 'color_bar':
+                            if not cleaned or not (cleaned[0].isalpha() and any(c.isdigit() for c in cleaned)):
+                                continue
+                        elif '_sub_signs' in shape:
+                            # Expand stacked multi-sign rectangles
+                            for sub in shape['_sub_signs']:
+                                kept.append((idx, sub, sub['extracted_text'],
+                                             sub.get('ocr_confidence', confidence)))
+                            continue
 
                     kept.append((idx, shape, cleaned, confidence))
                 except Exception as e:
@@ -377,15 +386,22 @@ def detect_floorplan_page(job_id, item, project_id, config, detection_mode, cv_s
             if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
                 return _cancel_result(shapes_detected)
 
-            quantities = ocr_service.assign_quantities(
-                page_img,
-                [{
+            qty_targets = [
+                {
                     'x': shape['x'], 'y': shape['y'],
                     'width': shape['width'], 'height': shape['height'],
                     'center_x': shape.get('center_x'),
                     'center_y': shape.get('center_y'),
-                } for _idx, shape, _cleaned, _conf in kept],
-            )
+                }
+                for _idx, shape, _cleaned, _conf in kept
+                if shape.get('detection_method') != 'color_bar'
+            ]
+            qty_values = ocr_service.assign_quantities(page_img, qty_targets) if qty_targets else []
+            qty_iter = iter(qty_values)
+            quantities = [
+                1 if shape.get('detection_method') == 'color_bar' else next(qty_iter, 1)
+                for _idx, shape, _cleaned, _conf in kept
+            ]
 
             if is_cancel_requested(job_id) or is_file_cancel_requested(job_id, file_index):
                 return _cancel_result(shapes_detected)
