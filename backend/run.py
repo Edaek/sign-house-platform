@@ -39,7 +39,11 @@ def run_all():
     print(f"Backend started on http://{host}:{port}")
 
     os.environ.setdefault('APP_URL', f'http://localhost:{port}')
-    run_gateway()
+    try:
+        run_gateway()
+    except Exception as e:
+        logging.error('Gateway exited (%s); Flask API keeps running on port %s', e, port)
+        t.join()
 
 
 if __name__ == '__main__':

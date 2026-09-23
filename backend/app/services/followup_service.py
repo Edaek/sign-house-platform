@@ -143,8 +143,8 @@ def send_follow_up(record_id):
         question = None
 
     if not question:
-        question = 'Please provide the following:\n' + '\n'.join(
-            f'{i+1}. {f}' for i, f in enumerate(fields_to_ask)
+        question = '請提供以下資訊：\n' + '\n'.join(
+            f'{i + 1}. {f}' for i, f in enumerate(fields_to_ask)
         )
 
     try:

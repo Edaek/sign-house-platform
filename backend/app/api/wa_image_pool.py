@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from bson import ObjectId
@@ -5,6 +7,7 @@ from datetime import datetime
 from app import mongo
 from app.models import serialize_doc
 
+logger = logging.getLogger(__name__)
 wa_image_pool_bp = Blueprint('wa_image_pool', __name__)
 
 @wa_image_pool_bp.route('', methods=['GET'])
@@ -75,7 +78,17 @@ def assign_images():
         return jsonify({'error': 'Project must be active to assign images'}), 400
 
     from app.services.image_pool_service import assign_images_to_project
-    count = assign_images_to_project(image_ids, project, 'operator')
+    try:
+        count = assign_images_to_project(image_ids, project, 'operator')
+    except Exception as exc:
+        logger.exception('[ImagePool] Manual assign failed')
+        return jsonify({'error': str(exc)}), 500
+
+    if count == 0:
+        return jsonify({
+            'error': 'No files were assigned (they may already be assigned to a project)',
+            'assigned': 0,
+        }), 409
     return jsonify({'assigned': count, 'projectCode': project['code']})
 
 @wa_image_pool_bp.route('/retry-download', methods=['POST'])

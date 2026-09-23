@@ -554,7 +554,7 @@ export default function EditorPage() {
     if (!floorId || isDetectingShapes) return
 
     if (markerColors.length === 0) {
-      toast.error('请至少选择一种 Marker color')
+      toast.error('Select at least one marker color')
       return
     }
     
@@ -562,7 +562,7 @@ export default function EditorPage() {
     try {
       await detectShapes(floorId, shapeType, detectionMode, markerColors)
       const count = useProjectStore.getState().currentFloorplan?.extracted_data?.length ?? 0
-      toast.success(`检测完成，共 ${count} 个标识`)
+      toast.success(`Detection complete: ${count} marker(s) found`)
     } catch (err: any) {
       if (err?.cancelled) {
         toast('Detection stopped', { icon: '⏹️' })

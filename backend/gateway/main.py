@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
-from gateway.wakka_client import WakkaClient, WAMessage
+from gateway.wakka_client import WakkaClient, WAMessage, TYPE_MAP
 from gateway.media_handler import handle_media_message
 from gateway.group_reminder import GroupReminderScheduler
 
@@ -63,6 +63,72 @@ class LRUSet:
 recent_ids = LRUSet(MSG_DEDUP_MAX)
 
 reminder: Optional[GroupReminderScheduler] = None
+
+_ALBUM_LIST_KEYS = (
+    'albumItems', 'mediaItems', 'attachments', 'messages', 'files', 'items', 'mediaList', 'media',
+)
+
+
+def _album_raw_items(raw: dict) -> list:
+    """If Wakka sends multiple media in one payload, return sub-item dicts."""
+    if not isinstance(raw, dict):
+        return []
+
+    found = []
+
+    def scan(obj):
+        if not isinstance(obj, dict):
+            return
+        for key in _ALBUM_LIST_KEYS:
+            items = obj.get(key)
+            if isinstance(items, list) and len(items) > 1:
+                dict_items = [i for i in items if isinstance(i, dict)]
+                if len(dict_items) > 1:
+                    found.append(dict_items)
+        for nest in ('_data', 'message', 'msg', 'data'):
+            nested = obj.get(nest)
+            if isinstance(nested, dict):
+                scan(nested)
+
+    scan(raw)
+    if found:
+        return max(found, key=len)
+    return []
+
+
+def _media_parts_from_message(msg: WAMessage) -> list:
+    """Build one or more pseudo-messages for media download (single or album)."""
+    raw = msg.raw if isinstance(msg.raw, dict) else {}
+    items = _album_raw_items(raw)
+    if not items:
+        return [msg]
+
+    parts = []
+    for idx, item in enumerate(items):
+        item_id = item.get('id')
+        if isinstance(item_id, dict) and '_serialized' in item_id:
+            item_id = item_id['_serialized']
+        if not item_id:
+            item_id = f'{msg.id}#{idx}'
+
+        parts.append(WAMessage(
+            id=str(item_id),
+            from_jid=msg.from_jid,
+            from_name=msg.from_name,
+            author=msg.author,
+            timestamp=msg.timestamp,
+            type=TYPE_MAP.get(item.get('type', msg.type), msg.type),
+            text=msg.text,
+            has_media=True,
+            media_data=item.get('mediaData') or item.get('data'),
+            media_url=item.get('mediaUrl') or item.get('url'),
+            mime_type=item.get('mimetype') or msg.mime_type,
+            caption=msg.caption if idx == 0 else item.get('caption'),
+            has_quoted_msg=msg.has_quoted_msg,
+            quoted_msg_id=msg.quoted_msg_id,
+            raw=item,
+        ))
+    return parts
 
 
 def forward_to_app(msg: WAMessage, photos: List[str], has_media: bool):
@@ -114,11 +180,12 @@ def on_message(msg: WAMessage):
 
     if msg.has_media:
         try:
-            local_path = handle_media_message(msg, MEDIA_DIR, WAKKA_API_URL, WAKKA_API_KEY)
-            if local_path:
-                photos = [local_path]
-            else:
-                media_failed = True
+            for part in _media_parts_from_message(msg):
+                local_path = handle_media_message(part, MEDIA_DIR, WAKKA_API_URL, WAKKA_API_KEY)
+                if local_path:
+                    photos.append(local_path)
+                else:
+                    media_failed = True
         except Exception as e:
             logger.error('[Gateway] Media handling failed: %s', e)
             media_failed = True
@@ -127,9 +194,18 @@ def on_message(msg: WAMessage):
         logger.warning('[Gateway] Skipping forward for failed media in group %s', msg.from_jid)
         return
 
+    if msg.has_media and len(photos) > 1:
+        logger.info('[Gateway] Downloaded %d media file(s) for message %s', len(photos), msg.id)
+
     forward_to_app(msg, photos, msg.has_media)
 
-    if msg.has_media and msg.from_jid.endswith('@g.us') and msg.author and reminder:
+    if (
+        msg.has_media
+        and msg.from_jid.endswith('@g.us')
+        and msg.author
+        and reminder
+        and os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
+    ):
         reminder.trigger(msg.from_jid, msg.author)
 
 

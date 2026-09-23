@@ -31,7 +31,7 @@ def build_followup_prompt(missing_fields, raw_message, previous_questions=None):
 Original message: \"{raw_message}\"
 Missing fields: {fields_str}{prev}
 
-Return ONLY the question text in English. Keep it conversational and under 2 sentences."""
+Return ONLY the question text in Traditional Chinese (繁體中文). Keep it conversational and under 2 sentences."""
 
 def build_image_analysis_prompt():
     return """Analyze this construction site photo. Describe:

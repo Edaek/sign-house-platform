@@ -13,8 +13,15 @@ export default function WaManageProjectsPage() {
   const [stageFilter, setStageFilter] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; code: string } | null>(null)
-  const [deleteNasFolder, setDeleteNasFolder] = useState(false)
+
+  useEffect(() => {
+    if (deleteTarget && nasStatus?.connected) {
+      setDeleteNasFolder(true)
+    }
+  }, [deleteTarget, nasStatus?.connected])
+  const [deleteNasFolder, setDeleteNasFolder] = useState(true)
   const [deleting, setDeleting] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchProjects().then(() => setLoading(false))
@@ -30,6 +37,7 @@ export default function WaManageProjectsPage() {
 
   async function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    setCreateError(null)
     const form = new FormData(e.currentTarget)
     try {
       await createProject({
@@ -41,8 +49,11 @@ export default function WaManageProjectsPage() {
       toast.success('Project created')
       setDialogOpen(false)
       fetchProjects()
-    } catch {
-      toast.error('Failed to create project')
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+      const text = msg || 'Failed to create project'
+      setCreateError(text)
+      toast.error(text)
     }
   }
 
@@ -73,7 +84,13 @@ export default function WaManageProjectsPage() {
               : `${projects.length} projects`}
           </p>
         </div>
-        <button onClick={() => setDialogOpen(true)} className="btn btn-primary text-sm px-3 py-1.5 flex items-center gap-1.5">
+        <button
+          onClick={() => {
+            setCreateError(null)
+            setDialogOpen(true)
+          }}
+          className="btn btn-primary text-sm px-3 py-1.5 flex items-center gap-1.5"
+        >
           <Plus className="h-3.5 w-3.5" />New Project
         </button>
       </div>
@@ -109,14 +126,24 @@ export default function WaManageProjectsPage() {
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="card p-6 w-full max-w-md mx-4">
             <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Create Project</h2>
+            {createError && (
+              <div
+                className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200"
+                role="alert"
+              >
+                {createError}
+              </div>
+            )}
             <form onSubmit={handleCreate} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Code (e.g. P-001)</label>
-                <input name="code" required placeholder="P-001" className="input w-full" />
+                <input name="code" required placeholder="P-001" className="input w-full font-mono" />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Unique among project codes only.</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name</label>
                 <input name="name" required className="input w-full" />
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Unique among project names only (may differ from code).</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location</label>

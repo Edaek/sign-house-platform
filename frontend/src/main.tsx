@@ -9,8 +9,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <App />
-      <Toaster 
+      <Toaster
         position="top-right"
+        containerClassName="!z-[10050]"
         toastOptions={{
           duration: 4000,
           style: {

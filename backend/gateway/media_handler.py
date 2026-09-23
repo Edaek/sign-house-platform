@@ -20,6 +20,10 @@ MIME_TO_EXT = {
     'audio/ogg; codecs=opus': '.ogg',
     'audio/mpeg': '.mp3',
     'application/pdf': '.pdf',
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
 }
 
 TYPE_TO_MIME = {

@@ -14,6 +14,7 @@ from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
+REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
 REMINDER_INTERVAL = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000)) / 1000
 REMINDER_COOLDOWN = 50   # 50s between reminders per sender
 FAILED_COOLDOWN = 50     # 50s after send failure
@@ -42,6 +43,9 @@ class GroupReminderScheduler:
         return self._client.get_default_database()
 
     def start(self):
+        if not REMINDER_ENABLED:
+            logger.info('[GroupReminder] Disabled (GROUP_REMINDER_ENABLED=false)')
+            return
         if self._timer:
             return
         logger.info('[GroupReminder] Starting scheduler (interval: %ds)', REMINDER_INTERVAL)
@@ -59,6 +63,8 @@ class GroupReminderScheduler:
     def trigger(self, group_id: str, sender_phone: str):
         """Called when a group image arrives — run reminder after grace period.
         Resets the timer for this sender so rapid-fire images only trigger once."""
+        if not REMINDER_ENABLED:
+            return
         key = f'{group_id}::{sender_phone}'
         existing = self._trigger_timers.pop(key, None)
         if existing:
@@ -79,6 +85,8 @@ class GroupReminderScheduler:
             self._schedule_next()
 
     def _send_reminders(self):
+        if not REMINDER_ENABLED:
+            return
         if self._running:
             return
         self._running = True
@@ -124,9 +132,9 @@ class GroupReminderScheduler:
 
                 count = len(images)
                 if count == 1:
-                    message = f'📷 @{sender_name} 有 1 张图片待归类，请*引用此消息*回复项目编码（如 P-001）。'
+                    message = f'📷 @{sender_name} 有 1 張圖片待歸類，請*引用此訊息*回覆專案編碼（如 P-001）或專案名稱。'
                 else:
-                    message = f'📷 @{sender_name} 有 *{count}* 张图片待归类，请*引用此消息*回复项目编码即可归类全部图片。'
+                    message = f'📷 @{sender_name} 有 *{count}* 張圖片待歸類，請*引用此訊息*回覆專案編碼或專案名稱即可歸類全部圖片。'
 
                 composite = self._build_composite(images[:9])
                 if composite:

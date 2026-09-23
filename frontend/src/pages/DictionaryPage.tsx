@@ -600,7 +600,7 @@ export default function DictionaryPage() {
           <textarea
             value={bulkData}
             onChange={(e) => setBulkData(e.target.value)}
-            placeholder="Exit,EXIT-001,出口;退出&#10;Fire,FIRE-001,火;火災&#10;Emergency,EMERG-001,緊急;急救"
+            placeholder="Exit,EXIT-001,translation A;translation B&#10;Fire,FIRE-001,translation A;translation B"
             rows={4}
             className="input font-mono text-sm"
           />
@@ -653,7 +653,7 @@ export default function DictionaryPage() {
                       Sign
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                      Chinese Translations (中文翻譯)
+                      Chinese translations
                     </th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-24">
                       Actions

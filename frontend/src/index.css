@@ -132,6 +132,11 @@ input, textarea, select, button {
     @apply text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800;
   }
 
+  /* Above app header (z-50), below toasts (z-10050) */
+  .modal-overlay {
+    @apply fixed inset-0 z-[10040] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4;
+  }
+
   /* Buttons */
   .btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;

@@ -24,7 +24,7 @@ interface NavItem {
 const mainNav: NavItem[] = [
   { path: '/wa', icon: LayoutDashboard, label: 'Dashboard', exact: true },
   { path: '/wa/projects', icon: FolderOpen, label: 'Projects' },
-  { path: '/wa/image-pool', icon: Image, label: 'Image Pool' },
+  { path: '/wa/image-pool', icon: Image, label: 'Media Pool' },
   { path: '/wa/search', icon: Search, label: 'Search' },
 ]
 
@@ -48,27 +48,33 @@ export default function WaLayout() {
   }
 
   return (
-    <PageContainer className="py-6">
-      <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-1 scrollbar-hide">
-        {allNav.map((item) => {
-          const active = isActive(item.path, item.exact)
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={clsx(
-                'nav-link',
-                active ? 'nav-link-active' : 'nav-link-inactive'
-              )}
-            >
-              <item.icon className="w-4 h-4 shrink-0" />
-              {item.label}
-            </Link>
-          )
-        })}
+    <>
+      <div className="sticky top-16 z-40 border-b border-slate-200/80 dark:border-slate-700/80 bg-[var(--color-bg)]/95 backdrop-blur-md supports-[backdrop-filter]:bg-[var(--color-bg)]/80">
+        <PageContainer className="!py-3">
+          <div className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-hide -mb-0.5">
+            {allNav.map((item) => {
+              const active = isActive(item.path, item.exact)
+              return (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={clsx(
+                    'nav-link shrink-0',
+                    active ? 'nav-link-active' : 'nav-link-inactive'
+                  )}
+                >
+                  <item.icon className="w-4 h-4 shrink-0" />
+                  {item.label}
+                </Link>
+              )
+            })}
+          </div>
+        </PageContainer>
       </div>
 
-      <Outlet />
-    </PageContainer>
+      <PageContainer className="pt-6 pb-8">
+        <Outlet />
+      </PageContainer>
+    </>
   )
 }

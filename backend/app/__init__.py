@@ -154,6 +154,21 @@ def create_app(config_name=None):
         mongo.db.wa_records.create_index([('createdAt', -1)])
         mongo.db.wa_records.create_index([('senderPhone', 1), ('status', 1), ('createdAt', -1)])
         mongo.db.wa_projects.create_index('code', unique=True)
+        for _p in mongo.db.wa_projects.find({'nameNormalized': {'$exists': False}}, {'name': 1}):
+            _n = (_p.get('name') or '').strip()
+            if _n:
+                mongo.db.wa_projects.update_one(
+                    {'_id': _p['_id']},
+                    {'$set': {'nameNormalized': _n.casefold()}},
+                )
+        try:
+            mongo.db.wa_projects.create_index(
+                'nameNormalized',
+                unique=True,
+                partialFilterExpression={'status': {'$ne': 'archived'}},
+            )
+        except Exception:
+            app.logger.warning('wa_projects nameNormalized unique index not created (duplicate names?)')
         mongo.db.wa_projects.create_index('status')
         mongo.db.pool_images.create_index([('phone', 1), ('projectId', 1)])
         mongo.db.pool_images.create_index([('createdAt', -1)])
@@ -224,6 +239,9 @@ def create_app(config_name=None):
     from app.services.nas_watcher_service import nas_mount
     nas_mount.init_app(app)
 
+    from app.services.nas_sync_scheduler import nas_sync_scheduler
+    nas_sync_scheduler.init_app(app)
+
     # Recover zombie jobs from prior crashes, then watch for stale workers
     from app.services.job_recovery import recover_stale_jobs, start_stale_job_watchdog
     with app.app_context():
@@ -235,5 +253,6 @@ def create_app(config_name=None):
             app.logger.exception('Startup stale job recovery failed')
     if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         start_stale_job_watchdog(app)
-    
+        nas_sync_scheduler.start()
+
     return app

@@ -1,5 +1,7 @@
 """Image pool service — manages private-chat image pool and project assignment."""
 import logging
+import os
+import re
 import threading
 from datetime import datetime
 
@@ -14,6 +16,7 @@ from app.services.message_parser_service import extract_project_code
 logger = logging.getLogger(__name__)
 
 REMIND_AFTER_S = 30
+POOL_REMINDER_ENABLED = os.environ.get('POOL_REMINDER_ENABLED', 'false').lower() == 'true'
 
 _pending_reminders = {}  # type: dict
 _reminder_lock = threading.Lock()
@@ -27,14 +30,11 @@ def _send_pool_reminder(phone: str) -> None:
             'projectId': {'$exists': False},
         })
         if count > 0:
-            suffix = '' if count == 1 else 's'
-            is_are = 'is it' if count == 1 else 'are they'
             send_message(
                 phone,
-                f'\U0001f4f7 You have *{count}* unlabeled photo{suffix}.\n\n'
-                f'Which project {is_are} for? Reply with the project code '
-                f'(e.g. P-001) or project name.\n\n'
-                f'Send *projects* to see the list.',
+                f'📷 您有 *{count}* 張未標記的照片。\n\n'
+                f'請回覆專案編碼（例如 P-001）或專案名稱。\n\n'
+                f'發送 *projects* 查看專案列表。',
             )
     except Exception:
         logger.exception('[ImagePool] Failed to send scheduled reminder')
@@ -42,6 +42,8 @@ def _send_pool_reminder(phone: str) -> None:
 
 def schedule_reminder(phone: str) -> None:
     """Schedule a 30s reminder. Resets the timer on each new image."""
+    if not POOL_REMINDER_ENABLED:
+        return
     with _reminder_lock:
         existing = _pending_reminders.pop(phone, None)
         if existing:
@@ -61,40 +63,120 @@ def cancel_reminder(phone: str) -> None:
             existing.cancel()
 
 
-def match_project(text):
-    """Match text to a project by code or name. Returns project dict or None."""
-    trimmed = (text or '').strip()
+def _normalize_project_label(text):
+    return ' '.join((text or '').strip().split())
+
+
+def _active_project_query():
+    return {'status': 'active'}
+
+
+def _match_project_single(trimmed, *, active_only=True):
     if not trimmed:
         return None
+    query = _active_project_query() if active_only else {'status': {'$ne': 'archived'}}
 
-    code = extract_project_code(trimmed)
-    if code:
-        project = mongo.db.wa_projects.find_one({'code': code, 'status': {'$ne': 'archived'}})
-        if project:
-            return project
-
-    import re
-    escaped = re.escape(trimmed)
     project = mongo.db.wa_projects.find_one({
-        'name': {'$regex': f'^{escaped}$', '$options': 'i'},
-        'status': {'$ne': 'archived'},
+        **query,
+        'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
     })
     if project:
         return project
 
-    return mongo.db.wa_projects.find_one({
-        'name': {'$regex': escaped, '$options': 'i'},
-        'status': {'$ne': 'archived'},
-    })
+    code = extract_project_code(trimmed)
+    if code:
+        project = mongo.db.wa_projects.find_one({**query, 'code': code})
+        if project:
+            return project
+
+    exact_name = list(mongo.db.wa_projects.find({
+        **query,
+        'name': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
+    }))
+    if len(exact_name) == 1:
+        return exact_name[0]
+    if len(exact_name) > 1:
+        return None
+
+    partial = list(mongo.db.wa_projects.find({
+        **query,
+        'name': {'$regex': re.escape(trimmed), '$options': 'i'},
+    }))
+    if len(partial) == 1:
+        return partial[0]
+    return None
 
 
-def save_to_pool(phone, image_path, caption, message_id, sender_name=None):
-    """Save an image to the pool. Auto-assigns if caption has a project code."""
+def match_project(text, *, active_only=True):
+    """Match user text to a project by code or name (active projects only by default)."""
+    trimmed = _normalize_project_label(text)
+    if not trimmed:
+        return None
+
+    hit = _match_project_single(trimmed, active_only=active_only)
+    if hit:
+        return hit
+
+    for sep in (' - ', ' – ', ' — ', '—'):
+        if sep in trimmed:
+            left, _, right = trimmed.partition(sep)
+            for part in (left.strip(), right.strip()):
+                if not part:
+                    continue
+                hit = _match_project_single(part, active_only=active_only)
+                if hit:
+                    return hit
+    return None
+
+
+def infer_pool_media_meta(image_path, wa_type=None, mime_type=None):
+    """Classify pool item for UI (image vs document vs video)."""
+    file_name = os.path.basename((image_path or '').split('?')[0]) if image_path else None
+    ext = os.path.splitext(file_name or '')[1].lower()
+    doc_exts = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv'}
+    video_exts = {'.mp4', '.3gp', '.mov', '.webm'}
+    image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.bmp'}
+
+    if ext in doc_exts or wa_type == 'document':
+        kind = 'document'
+    elif ext in video_exts or wa_type == 'video':
+        kind = 'video'
+    elif ext in image_exts or wa_type == 'image':
+        kind = 'image'
+    elif mime_type:
+        if mime_type.startswith('image/'):
+            kind = 'image'
+        elif mime_type.startswith('video/'):
+            kind = 'video'
+        else:
+            kind = 'document'
+    else:
+        kind = 'file'
+    return kind, file_name
+
+
+def save_to_pool(
+    phone,
+    image_path,
+    caption,
+    message_id,
+    sender_name=None,
+    *,
+    defer_assign=False,
+    defer_reminder=False,
+    wa_type=None,
+    mime_type=None,
+):
+    """Save media to the pool. Auto-assigns if caption matches project code or name."""
     now = datetime.utcnow()
+    media_type, file_name = infer_pool_media_meta(image_path, wa_type=wa_type, mime_type=mime_type)
     doc = {
         'phone': phone,
         'senderName': sender_name,
         'imagePath': image_path or None,
+        'fileName': file_name,
+        'mediaType': media_type,
+        'mimeType': mime_type,
         'downloadFailed': not image_path,
         'caption': caption or None,
         'messageId': message_id,
@@ -104,16 +186,15 @@ def save_to_pool(phone, image_path, caption, message_id, sender_name=None):
     result = mongo.db.pool_images.insert_one(doc)
     pool_id = str(result.inserted_id)
 
-    if caption:
-        code = extract_project_code(caption)
-        if code:
-            project = mongo.db.wa_projects.find_one({'code': code, 'status': 'active'})
-            if project:
-                assign_images_to_project([pool_id], project, 'user')
-                return {'auto_assigned': True, 'project_code': project['code']}
+    if caption and not defer_assign:
+        project = match_project(caption)
+        if project and project.get('status') == 'active':
+            assign_images_to_project([pool_id], project, 'user')
+            return {'auto_assigned': True, 'project_code': project['code'], 'pool_id': pool_id}
 
-    schedule_reminder(phone)
-    return {'auto_assigned': False}
+    if not defer_reminder:
+        schedule_reminder(phone)
+    return {'auto_assigned': False, 'pool_id': pool_id}
 
 
 def assign_images_to_project(image_ids, project, assigned_by='operator'):
@@ -128,7 +209,14 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
         return 0
 
     photos = [img['imagePath'] for img in images if img.get('imagePath')]
-    caption = next((img['caption'] for img in images if img.get('caption')), '[Pool photo]')
+    caption = next((img['caption'] for img in images if img.get('caption')), '[Pool media]')
+    kinds = {img.get('mediaType') or infer_pool_media_meta(img.get('imagePath'))[0] for img in images}
+    if kinds <= {'image'}:
+        rec_type, rec_media = 'photo', 'image'
+    elif kinds <= {'document'}:
+        rec_type, rec_media = 'document', 'document'
+    else:
+        rec_type, rec_media = 'photo', 'mixed'
 
     ref_number = generate_reference_number()
     now = datetime.utcnow()
@@ -137,14 +225,14 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
         'projectId': project['_id'],
         'referenceNumber': ref_number,
         'status': 'awaiting_review',
-        'type': 'photo',
+        'type': rec_type,
         'rawMessage': caption,
         'senderPhone': images[0]['phone'],
         'senderName': images[0].get('senderName'),
         'photos': photos,
         'nasPhotos': [],
         'hasMedia': True,
-        'mediaType': 'image',
+        'mediaType': rec_media,
         'extractedFields': [],
         'followUpThread': [],
         'followUpRound': 0,
@@ -153,17 +241,19 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
         'updatedAt': now,
     }
 
-    for attempt in range(3):
+    from pymongo.errors import DuplicateKeyError
+
+    record_id = None
+    for attempt in range(8):
         try:
             result = mongo.db.wa_records.insert_one(record_doc)
             record_id = result.inserted_id
             break
-        except Exception as e:
-            if hasattr(e, 'code') and e.code == 11000 and attempt < 2:
-                record_doc['referenceNumber'] = generate_reference_number()
-                continue
-            raise
-    else:
+        except DuplicateKeyError:
+            record_doc['referenceNumber'] = generate_reference_number()
+            if attempt >= 7:
+                raise
+    if not record_id:
         return 0
 
     mongo.db.pool_images.update_many(
@@ -177,6 +267,21 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
             'recordId': record_id,
         }},
     )
+
+    cancel_reminder(images[0]['phone'])
+
+    msg_ids = [img['messageId'] for img in images if img.get('messageId')]
+    if msg_ids:
+        mongo.db.group_pending_images.update_many(
+            {'messageId': {'$in': msg_ids}, 'categorized': False},
+            {'$set': {
+                'categorized': True,
+                'projectCode': project['code'],
+                'projectId': project['_id'],
+                'updatedAt': now,
+                'assignedVia': assigned_by,
+            }},
+        )
 
     # Copy to NAS — prefer local mount, fall back to SFTP
     from app.services.nas_watcher_service import nas_mount
@@ -198,6 +303,7 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
             with _app.app_context():
                 try:
                     nas_photos = []
+                    expected = sum(1 for img in _images if img.get('imagePath'))
                     for img in _images:
                         if not img.get('imagePath'):
                             continue
@@ -210,13 +316,25 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
                             local_file = os.path.join(_media_dir, relative)
                             if not os.path.isfile(local_file):
                                 logger.warning('[ImagePool] File not found for NAS copy: %s', local_file)
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {'nasSyncStatus': 'failed', 'nasSyncError': 'local file missing'}},
+                                )
                                 continue
                             r = nas_mount.copy_file_to_project(local_file, _project_code)
                             if r.get('ok'):
                                 nas_photos.append(r['path'])
                                 mongo.db.pool_images.update_one(
                                     {'_id': img['_id']},
-                                    {'$set': {'nasPath': r['path']}},
+                                    {'$set': {'nasPath': r['path'], 'nasSyncStatus': 'synced'}},
+                                )
+                            else:
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {
+                                        'nasSyncStatus': 'failed',
+                                        'nasSyncError': r.get('error', 'copy failed'),
+                                    }},
                                 )
                         else:
                             r = upload_to_nas(img['imagePath'], _project_code)
@@ -224,18 +342,54 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
                                 nas_photos.append(r['nas_path'])
                                 mongo.db.pool_images.update_one(
                                     {'_id': img['_id']},
-                                    {'$set': {'nasPath': r['nas_path']}},
+                                    {'$set': {'nasPath': r['nas_path'], 'nasSyncStatus': 'synced'}},
+                                )
+                            else:
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {
+                                        'nasSyncStatus': 'failed',
+                                        'nasSyncError': r.get('error', 'upload failed'),
+                                    }},
                                 )
 
-                    if nas_photos:
-                        mongo.db.wa_records.update_one(
-                            {'_id': _record_id},
-                            {'$set': {'nasPhotos': nas_photos}},
-                        )
-                        logger.info('[ImagePool] NAS %s done: %d files',
-                                    'copy' if _use_local else 'upload', len(nas_photos))
+                    if expected == 0:
+                        sync_status = 'skipped'
+                    elif len(nas_photos) >= expected:
+                        sync_status = 'synced'
+                    elif nas_photos:
+                        sync_status = 'partial'
+                    else:
+                        sync_status = 'failed'
+
+                    update = {
+                        'nasPhotos': nas_photos,
+                        'nasSyncStatus': sync_status,
+                        'nasSyncExpected': expected,
+                        'nasSyncActual': len(nas_photos),
+                        'nasSyncUpdatedAt': datetime.utcnow(),
+                    }
+                    if sync_status == 'failed' and expected:
+                        update['nasSyncError'] = 'NAS copy/upload failed for all files'
+
+                    mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
+                    logger.info(
+                        '[ImagePool] NAS %s %s: %d/%d files',
+                        'copy' if _use_local else 'upload',
+                        sync_status,
+                        len(nas_photos),
+                        expected,
+                    )
                 except Exception:
                     logger.exception('[ImagePool] NAS background error')
+                    mongo.db.wa_records.update_one(
+                        {'_id': _record_id},
+                        {'$set': {
+                            'nasSyncStatus': 'failed',
+                            'nasSyncError': 'background task error',
+                            'nasSyncUpdatedAt': datetime.utcnow(),
+                        }},
+                    )
 
         threading.Thread(target=_bg_nas, daemon=True).start()
 
@@ -258,14 +412,8 @@ def assign_all_unassigned(phone, project, assigned_by='user'):
     count = assign_images_to_project(ids, project, assigned_by)
 
     if assigned_by == 'user' and count > 0:
-        try:
-            suffix = '' if count == 1 else 's'
-            send_message(
-                phone,
-                f'✅ {count} photo{suffix} assigned to *{project["code"]}* ({project.get("name", "")}).',
-            )
-        except Exception:
-            logger.exception('[ImagePool] Failed to send confirmation')
+        from app.services.assignment_notify_service import schedule_assignment_confirmation
+        schedule_assignment_confirmation(project, count, phone=phone)
 
     return count
 

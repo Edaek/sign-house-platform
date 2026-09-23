@@ -49,7 +49,7 @@ services:
       - uploads_data:/app/uploads
       - ${MINI_SSH_KEY:-~/.ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
     ports:
-      - "5000:5000"
+      - "5001:5000"
     depends_on:
       mongodb:
         condition: service_healthy

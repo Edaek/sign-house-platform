@@ -4,16 +4,29 @@ import { useWaStore } from '../../store/waStore'
 import { filterWaProjects } from '../../lib/waProjects'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import clsx from 'clsx'
-import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive, Search } from 'lucide-react'
+import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive, Search, RefreshCw } from 'lucide-react'
+import toast from 'react-hot-toast'
 
 export default function WaProjectsPage() {
-  const { projects, fetchProjects, loading, nasStatus, fetchNasStatus } = useWaStore()
+  const { projects, fetchProjects, loading, nasStatus, fetchNasStatus, syncNasFromDrive } = useWaStore()
   const [search, setSearch] = useState('')
+  const [syncingNas, setSyncingNas] = useState(false)
 
   useEffect(() => {
     fetchProjects()
     fetchNasStatus()
   }, [fetchProjects, fetchNasStatus])
+
+  useEffect(() => {
+    if (!nasStatus?.connected) return
+    const sec = nasStatus.autoSyncIntervalSec ?? 60
+    const ms = Math.max(30, sec) * 1000
+    const timer = window.setInterval(() => {
+      fetchProjects()
+      fetchNasStatus()
+    }, ms)
+    return () => window.clearInterval(timer)
+  }, [nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjects, fetchNasStatus])
 
   const filteredProjects = useMemo(
     () => filterWaProjects(projects, search),
@@ -21,6 +34,34 @@ export default function WaProjectsPage() {
   )
 
   const hasSearch = search.trim().length > 0
+
+  const handleNasSync = async () => {
+    setSyncingNas(true)
+    try {
+      const { created, removed, totalCreated, totalRemoved } = await syncNasFromDrive()
+      const parts = []
+      if (created.length) parts.push(`${created.length} project(s) created`)
+      if (removed?.length) parts.push(`${removed.length} project(s) removed (NAS folder deleted)`)
+      if (totalCreated) parts.push(`${totalCreated} NAS photo(s) imported`)
+      if (totalRemoved) parts.push(`${totalRemoved} record(s) removed (NAS file deleted)`)
+      toast.success(parts.length ? parts.join('; ') : 'NAS is already in sync')
+      await fetchNasStatus()
+    } catch (err: unknown) {
+      const ax = err as { response?: { status?: number; data?: { error?: string; message?: string } }; code?: string }
+      const msg = ax.response?.data?.error || ax.response?.data?.message
+      if (ax.response?.status === 404) {
+        toast.error('NAS sync API missing — restart the backend (PORT=5001), then try again.')
+      } else if (ax.code === 'ECONNABORTED') {
+        toast.error('NAS sync timed out. It may still be running — refresh in a minute.')
+      } else if (ax.response?.status === 502 || ax.response?.status === 503) {
+        toast.error(msg || 'Backend unavailable during sync. Restart backend and remount NAS if needed.')
+      } else {
+        toast.error(msg || 'NAS sync failed. Check mount and that backend runs on port 5001.')
+      }
+    } finally {
+      setSyncingNas(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -83,10 +124,21 @@ export default function WaProjectsPage() {
                 {nasStatus.connected && nasStatus.foldersFound > 0 && (
                   <span className="ml-2">· {nasStatus.foldersFound} folder{nasStatus.foldersFound !== 1 ? 's' : ''} · {nasStatus.filesFound} image{nasStatus.filesFound !== 1 ? 's' : ''}</span>
                 )}
+                {nasStatus.connected && (nasStatus.autoSyncIntervalSec ?? 0) > 0 && (
+                  <span className="ml-2">· Auto-sync every {nasStatus.autoSyncIntervalSec}s (NAS → web)</span>
+                )}
               </p>
             </div>
             {nasStatus.connected && (
-              <p className="text-xs text-slate-500 dark:text-slate-400">Auto-creates folder on shared drive when creating projects</p>
+              <button
+                type="button"
+                onClick={handleNasSync}
+                disabled={syncingNas}
+                className="btn btn-secondary text-xs px-3 py-1.5 inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className={clsx('h-3.5 w-3.5', syncingNas && 'animate-spin')} />
+                {syncingNas ? 'Syncing…' : 'Sync NAS'}
+              </button>
             )}
           </div>
         </div>
@@ -130,9 +182,9 @@ export default function WaProjectsPage() {
                     <Calendar className="h-3 w-3" />+{project.todayRecords} today
                   </span>
                 )}
-                {(project.nasFileCount ?? 0) > 0 && (
-                  <span className="flex items-center gap-1">
-                    <HardDrive className="h-3 w-3" />{project.nasFileCount} NAS
+                {nasStatus?.connected && (project.nasFileCount ?? 0) > 0 && (
+                  <span className="flex items-center gap-1 text-amber-700 dark:text-amber-400">
+                    <HardDrive className="h-3 w-3" />{project.nasFileCount} on NAS
                   </span>
                 )}
               </div>

@@ -97,6 +97,10 @@ def void_record(record_id):
     if record['status'] == 'voided':
         return jsonify({'error': 'Record is already voided'}), 400
 
+    from app.services.nas_sync_service import remove_nas_files_for_record
+
+    remove_nas_files_for_record(record)
+
     old_status = record['status']
     mongo.db.wa_records.update_one(
         {'_id': ObjectId(record_id)},

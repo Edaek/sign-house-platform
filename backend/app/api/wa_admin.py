@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from datetime import datetime
 from app import mongo
 from app.models import serialize_doc
@@ -79,16 +80,33 @@ def create_template():
 def create_project():
     from flask_jwt_extended import get_jwt_identity
     data = request.get_json()
-    code = data.get('code', '').upper().strip()
-    
-    existing = mongo.db.wa_projects.find_one({'code': code})
-    if existing:
-        return jsonify({'error': f'Project code {code} already exists'}), 409
-    
+    from app.services.wa_project_validation import (
+        normalize_code,
+        normalize_name,
+        assert_code_available,
+        assert_name_available,
+    )
+
+    code = normalize_code(data.get('code'))
+    name = normalize_name(data.get('name'))
+    if not code:
+        return jsonify({'error': 'Project code is required'}), 400
+    if not name:
+        return jsonify({'error': 'Project name is required'}), 400
+
+    code_err = assert_code_available(code)
+    if code_err:
+        return jsonify({'error': code_err}), 409
+
+    name_err = assert_name_available(name)
+    if name_err:
+        return jsonify({'error': name_err}), 409
+
     now = datetime.utcnow()
     doc = {
         'code': code,
-        'name': data['name'],
+        'name': name,
+        'nameNormalized': name.casefold(),
         'location': data.get('location', ''),
         'owner': ObjectId(get_jwt_identity()),
         'stage': data.get('stage', 'active'),
@@ -97,12 +115,26 @@ def create_project():
         'createdAt': now,
         'updatedAt': now,
     }
-    mongo.db.wa_projects.insert_one(doc)
+    try:
+        insert = mongo.db.wa_projects.insert_one(doc)
+    except DuplicateKeyError as exc:
+        detail = getattr(exc, 'details', {}) or {}
+        key = detail.get('keyPattern') or {}
+        if 'code' in key:
+            return jsonify({'error': f'Project code {code} already exists'}), 409
+        if 'nameNormalized' in key:
+            return jsonify({'error': f'Project name "{name}" already exists'}), 409
+        return jsonify({'error': 'Project code or name already exists'}), 409
+    doc['_id'] = insert.inserted_id
 
     from app.services.nas_watcher_service import nas_mount
     if nas_mount.is_available():
         nas_result = nas_mount.create_folder(code)
         if nas_result.get('ok'):
+            mongo.db.wa_projects.update_one(
+                {'_id': insert.inserted_id},
+                {'$set': {'nasFolder': nas_result['path']}},
+            )
             doc['nasFolder'] = nas_result['path']
 
     return jsonify(serialize_doc(doc)), 201
@@ -118,27 +150,14 @@ def delete_project(project_id):
         return jsonify({'error': 'Project not found'}), 404
 
     data = request.get_json(silent=True) or {}
-    delete_nas_folder = data.get('deleteNasFolder', False)
+    from app.services.nas_sync_service import delete_web_project
+    from app.services.nas_watcher_service import nas_mount
 
-    if delete_nas_folder:
-        from app.services.nas_watcher_service import nas_mount
-        if nas_mount.is_available():
-            watch_dir = nas_mount._watch_dir()
-            import os
-            folder = os.path.join(watch_dir, project['code'])
-            if os.path.isdir(folder):
-                try:
-                    shutil.rmtree(folder)
-                except OSError:
-                    pass
+    delete_nas_folder = data.get('deleteNasFolder')
+    if delete_nas_folder is None:
+        delete_nas_folder = nas_mount.is_available()
 
-    mongo.db.wa_records.delete_many({'projectId': project['_id']})
-    mongo.db.pool_images.update_many(
-        {'projectId': project['_id']},
-        {'$unset': {'projectId': '', 'projectCode': '', 'projectName': '',
-                    'assignedBy': '', 'assignedAt': '', 'recordId': ''}},
-    )
-    mongo.db.wa_projects.delete_one({'_id': project['_id']})
+    delete_web_project(project, remove_nas_folder=bool(delete_nas_folder))
 
     return jsonify({'message': 'Project deleted', 'code': project['code']})
 
@@ -164,11 +183,24 @@ def system_infra():
     except Exception:
         mongo_status = 'error'
     
+    ollama_url = current_app.config.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+    ollama_text_model = current_app.config.get('OLLAMA_TEXT_MODEL', 'gemma3:4b')
+    ollama_vision_model = current_app.config.get('OLLAMA_VISION_MODEL', 'llava:latest')
+    ollama_error = None
     try:
-        ollama_url = current_app.config.get('OLLAMA_BASE_URL', 'http://localhost:11434')
-        r = req.get(f'{ollama_url}/api/tags', timeout=3)
+        r = req.get(f'{ollama_url.rstrip("/")}/api/tags', timeout=10)
         ollama_status = 'ok' if r.ok else 'error'
-    except Exception:
+        if not r.ok:
+            ollama_error = f'HTTP {r.status_code}'
+    except Exception as exc:
         ollama_status = 'error'
-    
-    return jsonify({'mongo': mongo_status, 'ollama': ollama_status})
+        ollama_error = str(exc)[:200]
+
+    return jsonify({
+        'mongo': mongo_status,
+        'ollama': ollama_status,
+        'ollamaBaseUrl': ollama_url,
+        'ollamaTextModel': ollama_text_model,
+        'ollamaVisionModel': ollama_vision_model,
+        'ollamaError': ollama_error,
+    })

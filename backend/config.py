@@ -81,8 +81,15 @@ class Config:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'wa-media'),
     )
 
-    # Group reminder interval (ms) — how often to check for uncategorized group images
+    # Group @mention reminders for uncategorized images (off when using Media Pool manual assign)
+    GROUP_REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
     GROUP_REMINDER_INTERVAL_MS = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000))
+
+    # Private-chat pool reminder after unassigned media (30s timer)
+    POOL_REMINDER_ENABLED = os.environ.get('POOL_REMINDER_ENABLED', 'false').lower() == 'true'
+
+    # Poll NAS mount for new folders/files → web projects/records (0 = disabled)
+    NAS_SYNC_INTERVAL_S = int(os.environ.get('NAS_SYNC_INTERVAL_S', 60))
 
     # Stale job recovery — jobs with no worker progress beyond this are auto-failed
     JOB_STALE_MINUTES = int(os.environ.get('JOB_STALE_MINUTES', 30))

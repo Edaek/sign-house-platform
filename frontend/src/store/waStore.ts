@@ -62,6 +62,9 @@ export interface NasStatus {
   watchDir: string
   foldersFound: number
   filesFound: number
+  lastAutoSyncAt?: string
+  lastRecordsImported?: number
+  autoSyncIntervalSec?: number
 }
 
 export interface PoolImage {
@@ -69,6 +72,9 @@ export interface PoolImage {
   phone: string
   senderName?: string
   imagePath?: string
+  fileName?: string
+  mediaType?: 'image' | 'document' | 'video' | 'file' | string
+  mimeType?: string
   downloadFailed?: boolean
   caption?: string
   messageId: string
@@ -126,6 +132,10 @@ export interface SystemStatus {
 export interface InfraStatus {
   mongo: 'ok' | 'error' | 'checking'
   ollama: 'ok' | 'error' | 'checking'
+  ollamaBaseUrl?: string
+  ollamaTextModel?: string
+  ollamaVisionModel?: string
+  ollamaError?: string | null
 }
 
 interface WaStore {
@@ -159,6 +169,12 @@ interface WaStore {
   fetchSystemStatus: () => Promise<void>
   fetchInfraStatus: () => Promise<void>
   fetchNasStatus: () => Promise<void>
+  syncNasFromDrive: () => Promise<{
+    created: string[]
+    removed: string[]
+    totalCreated: number
+    totalRemoved: number
+  }>
   createProject: (data: { code: string; name: string; location?: string; stage: string }) => Promise<void>
   deleteProject: (id: string, deleteNasFolder?: boolean) => Promise<void>
   confirmRecord: (id: string) => Promise<void>
@@ -205,7 +221,7 @@ export const useWaStore = create<WaStore>((set) => ({
   },
 
   fetchProjectRecords: async (projectId, params = {}) => {
-    set({ loading: true })
+    set({ loading: true, records: [] })
     try {
       const { data } = await api.get(`/wa/projects/${projectId}/records`, { params })
       set({ records: data.records || data })
@@ -298,8 +314,40 @@ export const useWaStore = create<WaStore>((set) => ({
     }
   },
 
+  syncNasFromDrive: async () => {
+    const syncTimeout = { timeout: 300000 }
+    let data: {
+      projectsCreated?: string[]
+      projectsRemoved?: string[]
+      recordsImported?: number
+      recordsRemoved?: number
+      totalCreated?: number
+    }
+    try {
+      ;({ data } = await api.post('/wa/nas/sync-bidirectional', {}, syncTimeout))
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status !== 404) throw err
+      await api.post('/wa/nas/sync-projects', {}, syncTimeout)
+      ;({ data } = await api.post('/wa/nas/import-all', {}, syncTimeout))
+    }
+    try {
+      const { data: projects } = await api.get('/wa/projects')
+      set({ projects })
+    } catch {
+      // Sync may have succeeded even if list refresh fails (slow NAS / backend restart)
+    }
+    return {
+      created: data.projectsCreated || [],
+      removed: data.projectsRemoved || [],
+      totalCreated: data.recordsImported ?? data.totalCreated ?? 0,
+      totalRemoved: data.recordsRemoved ?? 0,
+    }
+  },
+
   createProject: async (projData) => {
-    await api.post('/wa/admin/projects', projData)
+    const { data } = await api.post('/wa/admin/projects', projData)
+    return data
   },
 
   deleteProject: async (id, deleteNasFolder = false) => {

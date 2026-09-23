@@ -133,20 +133,72 @@ class NasMountService:
             })
         return folders
 
-    def list_folder_files(self, project_code):
-        """List image files in a specific project subfolder."""
+    def _resolve_project_folder(self, project_code):
         watch_dir = self._watch_dir()
         if not watch_dir:
-            return []
-
+            return None
         folder = Path(watch_dir) / project_code
-        if not folder.is_dir():
-            for d in Path(watch_dir).iterdir():
-                if d.is_dir() and d.name.upper() == project_code.upper():
-                    folder = d
-                    break
+        if folder.is_dir():
+            return folder
+        for d in Path(watch_dir).iterdir():
+            if d.is_dir() and d.name.upper() == project_code.upper():
+                return d
+        return None
+
+    def folder_stats(self, project_code):
+        """Stats for one project folder only (fast — no full NAS scan)."""
+        folder = self._resolve_project_folder(project_code)
+        if not folder:
+            return None
+        file_count = 0
+        latest_mtime = 0
+        for f in folder.iterdir():
+            if f.is_file() and _is_image(f.name):
+                file_count += 1
+                mt = f.stat().st_mtime
+                if mt > latest_mtime:
+                    latest_mtime = mt
+        from datetime import datetime
+        return {
+            'code': folder.name.upper(),
+            'folderName': folder.name,
+            'fileCount': file_count,
+            'latestModified': datetime.utcfromtimestamp(latest_mtime).isoformat() if latest_mtime else None,
+        }
+
+    def delete_path(self, path):
+        """Delete a file or folder under NAS_WATCH_DIR (no-op if already missing)."""
+        watch_dir = self._watch_dir()
+        if not watch_dir or not path:
+            return {'ok': False, 'error': 'NAS not configured'}
+        try:
+            watch = Path(watch_dir).resolve()
+            target = Path(path).resolve()
+            if not str(target).startswith(str(watch)):
+                return {'ok': False, 'error': 'Path outside NAS watch directory'}
+            if not target.exists():
+                return {'ok': True, 'missing': True}
+            if target.is_dir():
+                shutil.rmtree(target)
             else:
-                return []
+                target.unlink()
+            logger.info('[NAS] Deleted %s', target)
+            return {'ok': True}
+        except OSError as e:
+            logger.warning('[NAS] Delete failed %s: %s', path, e)
+            return {'ok': False, 'error': str(e)}
+
+    def delete_project_folder(self, project_code):
+        folder = self._resolve_project_folder(project_code)
+        if not folder:
+            return {'ok': True, 'missing': True}
+        return self.delete_path(str(folder))
+
+    def list_folder_files(self, project_code):
+        """List image files in a specific project subfolder."""
+        folder = self._resolve_project_folder(project_code)
+        if not folder:
+            return []
 
         from datetime import datetime
         files = []
