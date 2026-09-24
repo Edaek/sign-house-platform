@@ -96,4 +96,6 @@ def is_command(text):
     lower = re.sub(r'^[\/!]', '', text.strip().lower())
     lower = re.sub(r'[!?.,]$', '', lower)
     commands = {'help': 'help', 'keywords': 'keywords', 'projects': 'projects'}
+    if lower.startswith('move'):
+        return 'move'
     return commands.get(lower)

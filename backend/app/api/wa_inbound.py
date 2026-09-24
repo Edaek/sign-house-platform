@@ -13,7 +13,8 @@ from app import mongo
 from app.services.message_parser_service import is_command
 from app.services.wa_send_service import send_message, send_group_message, download_media
 from app.services.image_pool_service import (
-    save_to_pool, match_project, assign_all_unassigned, assign_images_to_project,
+    save_to_pool, match_project, match_project_ext, assign_all_unassigned,
+    assign_images_to_project, move_images_to_project, MatchResult,
 )
 from app.services.extraction_runner_service import run_extraction
 from app.services.followup_service import handle_follow_up_reply, send_follow_up
@@ -141,6 +142,76 @@ def _get_burst_project(group_id, sender, max_age_s=90):
     if age > max_age_s:
         return None
     return mongo.db.wa_projects.find_one({'_id': doc['projectId'], 'status': 'active'})
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-choice pending state — when user gets a numbered list of candidates
+# ---------------------------------------------------------------------------
+
+_FUZZY_CHOICE_TTL = 120  # seconds
+
+
+def _fuzzy_choice_key(group_id, sender):
+    prefix = f'g:{group_id}:' if group_id else 'p:'
+    return f'wa_fuzzy_choice:{prefix}{sender}'
+
+
+def _set_fuzzy_choice(group_id, sender, candidates):
+    """Store candidate list so the user can reply with a number."""
+    choices = [
+        {'code': p['code'], 'name': p.get('name', ''), 'id': str(p['_id'])}
+        for p, _score in candidates[:5]
+    ]
+    mongo.db.wa_system.update_one(
+        {'_id': _fuzzy_choice_key(group_id, sender)},
+        {'$set': {'choices': choices, 'at': datetime.utcnow()}},
+        upsert=True,
+    )
+
+
+def _pop_fuzzy_choice(group_id, sender, selection):
+    """Resolve a numeric selection (1-based). Returns project doc or None."""
+    key = _fuzzy_choice_key(group_id, sender)
+    doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
+    if not doc or not doc.get('choices'):
+        return None
+    age = (datetime.utcnow() - doc['at']).total_seconds()
+    if age > _FUZZY_CHOICE_TTL:
+        return None
+    idx = selection - 1
+    if idx < 0 or idx >= len(doc['choices']):
+        return None
+    choice = doc['choices'][idx]
+    return mongo.db.wa_projects.find_one({'_id': ObjectId(choice['id']), 'status': 'active'})
+
+
+def _clear_fuzzy_choice(group_id, sender):
+    mongo.db.wa_system.delete_one({'_id': _fuzzy_choice_key(group_id, sender)})
+
+
+def _format_fuzzy_candidates(candidates):
+    """Build a numbered list string for bot reply."""
+    lines = []
+    for i, (proj, score) in enumerate(candidates[:5], 1):
+        lines.append(f'{i}. {proj["code"]} - {proj.get("name", "")}')
+    return '\n'.join(lines)
+
+
+def _send_fuzzy_prompt(to, label, candidates, *, group_id=None, sender=None):
+    """Send a disambiguation prompt and cache choices."""
+    body = (
+        f'🔍 找到多個相似專案（輸入「{label}」）：\n'
+        f'{_format_fuzzy_candidates(candidates)}\n\n'
+        f'回覆數字選擇，或發送完整專案編碼。'
+    )
+    _set_fuzzy_choice(group_id, sender or to, candidates)
+    if group_id:
+        try:
+            send_group_message(group_id, body)
+        except Exception:
+            pass
+    else:
+        _safe_send(to, body)
 
 
 def _resolve_media_project(data, sender, group_id=None):
@@ -342,11 +413,22 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
 
             if caption and not project:
                 _clear_burst_project(None, sender)
-                _safe_send(
-                    sender,
-                    f'⚠️ 找不到專案「{caption}」。檔案已進入 Media Pool，請在網頁手動歸類，'
-                    f'或回覆正確的專案編碼/名稱。',
-                )
+                ext_result = match_project_ext(caption)
+                if ext_result.candidates:
+                    _safe_send(
+                        sender,
+                        f'📷 檔案已進入 Media Pool。\n\n'
+                        f'🔍 找到多個相似專案（輸入「{caption}」）：\n'
+                        f'{_format_fuzzy_candidates(ext_result.candidates)}\n\n'
+                        f'回覆數字選擇，或發送完整專案編碼。',
+                    )
+                    _set_fuzzy_choice(None, sender, ext_result.candidates)
+                else:
+                    _safe_send(
+                        sender,
+                        f'⚠️ 找不到專案「{caption}」。檔案已進入 Media Pool，請在網頁手動歸類，'
+                        f'或回覆正確的專案編碼/名稱。',
+                    )
 
             if multi:
                 from app.services.image_pool_service import schedule_reminder
@@ -360,24 +442,45 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             })
 
     if is_text:
+        trimmed_text = text.strip()
+
+        # Check if user is replying with a number to a fuzzy-choice prompt
+        if trimmed_text.isdigit():
+            move_intent = _pop_move_intent(None, sender)
+            choice_project = _pop_fuzzy_choice(None, sender, int(trimmed_text))
+            if choice_project:
+                if move_intent:
+                    return _execute_move(sender, choice_project, move_intent)
+                has_unassigned = mongo.db.pool_images.count_documents({
+                    'phone': sender, 'projectId': {'$exists': False},
+                }) > 0
+                if has_unassigned:
+                    assign_all_unassigned(sender, choice_project, 'user')
+                    return jsonify({'handled': True, 'type': 'pool_assigned'})
+                _safe_send(sender, f'✅ 已選擇專案 *{choice_project["code"]}*，但目前沒有未歸類的照片。')
+                return jsonify({'handled': True, 'type': 'fuzzy_choice_no_pool'})
+
         has_unassigned = mongo.db.pool_images.count_documents({
             'phone': sender, 'projectId': {'$exists': False},
         }) > 0
         if has_unassigned:
-            project = match_project(text)
-            if project and project.get('status') == 'active':
-                assign_all_unassigned(sender, project, 'user')
+            result = match_project_ext(text)
+            if result.project and result.project.get('status') == 'active':
+                _clear_fuzzy_choice(None, sender)
+                assign_all_unassigned(sender, result.project, 'user')
                 return jsonify({'handled': True, 'type': 'pool_assigned'})
+            if result.candidates:
+                _send_fuzzy_prompt(sender, trimmed_text, result.candidates, sender=sender)
+                return jsonify({'handled': True, 'type': 'pool_fuzzy_candidates'})
             _clear_burst_project(None, sender)
             _safe_send(
                 sender,
-                f'⚠️ 找不到符合「{text.strip()}」的專案。\n'
+                f'⚠️ 找不到符合「{trimmed_text}」的專案。\n'
                 f'請回覆專案編碼（例如 P-001）或專案名稱。\n發送 *projects* 查看專案列表。',
             )
             return jsonify({'handled': True, 'type': 'pool_no_match'})
 
-        trimmed = text.strip()
-        if trimmed and not is_command(trimmed) and not match_project(trimmed):
+        if trimmed_text and not is_command(trimmed_text) and not match_project(trimmed_text):
             _clear_burst_project(None, sender)
 
     active = list(mongo.db.wa_records.find({
@@ -409,8 +512,8 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
 
         cmd = is_command(text)
         if cmd:
-            _handle_command(cmd, sender)
-            return jsonify({'handled': True, 'type': 'command'})
+            resp = _handle_command(cmd, sender, text=text, data=data)
+            return resp or jsonify({'handled': True, 'type': 'command'})
 
         handle_follow_up_reply(str(active_record['_id']), text)
         _safe_send(sender, '✅ 已收到資訊，處理中…')
@@ -420,8 +523,8 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
 
     cmd = is_command(text)
     if cmd:
-        _handle_command(cmd, sender)
-        return jsonify({'handled': True, 'type': 'command'})
+        resp = _handle_command(cmd, sender, text=text, data=data)
+        return resp or jsonify({'handled': True, 'type': 'command'})
 
     if text.strip():
         _safe_send(sender, '💡 請傳送照片開始使用，或輸入 *help* 查看指令說明。')
@@ -461,14 +564,41 @@ def _handle_group(data, sender, from_name, group_id):
                 pass
             return jsonify({'handled': True, 'type': 'group_command'})
 
+        # Move command in group
+        cmd = is_command(trimmed)
+        if cmd == 'move':
+            return _handle_move(trimmed, sender, data, group_id=group_id)
+
         has_quoted = data.get('hasQuotedMsg', False)
         pending = _group_pending_for_sender(group_id, sender)
+
+        # Numeric fuzzy-choice reply in group
+        if trimmed.isdigit() and (pending or has_quoted):
+            move_intent = _pop_move_intent(group_id, sender)
+            choice_project = _pop_fuzzy_choice(group_id, sender, int(trimmed))
+            if choice_project:
+                if move_intent:
+                    return _execute_move(sender, choice_project, move_intent, group_id=group_id)
+                return _categorize_group_image(pending, choice_project, group_id, data, sender)
+
         project = _lookup_active_project(trimmed)
 
-        # Manual assign via Media Pool — only categorize in-group when user sends a valid project label
-        # or explicitly quotes a bot reminder. Do not spam warnings on casual chat (e.g. "1").
         if project and (pending or has_quoted):
+            _clear_fuzzy_choice(group_id, sender)
             return _categorize_group_image(pending, project, group_id, data, sender)
+
+        # Fuzzy matching — only engage when there are pending images or a quoted msg
+        if not project and not is_command(trimmed) and (pending or has_quoted):
+            ext_result = match_project_ext(trimmed, active_only=True)
+            if ext_result.project:
+                _clear_fuzzy_choice(group_id, sender)
+                return _categorize_group_image(pending, ext_result.project, group_id, data, sender)
+            if ext_result.candidates:
+                _send_fuzzy_prompt(None, trimmed, ext_result.candidates, group_id=group_id, sender=sender)
+                return jsonify({'handled': True, 'type': 'group_fuzzy_candidates'})
+            _warn_unknown_group_project(group_id, trimmed)
+            return jsonify({'handled': True, 'type': 'group_no_match'})
+
         if has_quoted and not project and not is_command(trimmed):
             _warn_unknown_group_project(group_id, trimmed)
             return jsonify({'handled': True, 'type': 'group_no_match'})
@@ -616,12 +746,193 @@ def _categorize_group_image(pending, project, group_id, data, sender):
     return jsonify({'handled': True, 'type': 'group_categorized'})
 
 
-def _handle_command(cmd, sender):
+def _parse_move_target(text):
+    """Extract the project label from ``move <project>`` text."""
+    m = re.match(r'^[\/!]?\s*move\s+(.+)$', (text or '').strip(), re.IGNORECASE)
+    return m.group(1).strip() if m else None
+
+
+def _find_pool_images_by_quoted_msg(quoted_msg_id, sender):
+    """Find pool_images that match a quoted messageId for a sender."""
+    if not quoted_msg_id:
+        return []
+    parts = quoted_msg_id.split('_')
+    short_id = parts[2] if len(parts) >= 3 else None
+    possible_ids = [i for i in [quoted_msg_id, short_id] if i]
+    images = list(mongo.db.pool_images.find({
+        'messageId': {'$in': possible_ids},
+        'phone': sender,
+        'projectId': {'$exists': True},
+    }))
+    if not images and short_id:
+        images = list(mongo.db.pool_images.find({
+            'messageId': {'$regex': re.escape(short_id)},
+            'phone': sender,
+            'projectId': {'$exists': True},
+        }))
+    return images
+
+
+def _find_recent_assigned_pool_images(sender, limit=20):
+    """Find the most recently assigned pool_images for this sender."""
+    return list(mongo.db.pool_images.find(
+        {'phone': sender, 'projectId': {'$exists': True}},
+    ).sort('assignedAt', -1).limit(limit))
+
+
+def _handle_move(text, sender, data, *, group_id=None):
+    """Process a 'move <project>' command. Returns a Flask response."""
+    target_label = _parse_move_target(text)
+    if not target_label:
+        msg = (
+            '📦 *搬移照片指令*\n\n'
+            '用法：回覆一張照片並輸入 *move <專案名稱>*\n'
+            '或直接輸入 *move <專案名稱>* 搬移最近歸類的照片。\n\n'
+            '範例：move P-001'
+        )
+        if group_id:
+            try:
+                send_group_message(group_id, msg)
+            except Exception:
+                pass
+        else:
+            _safe_send(sender, msg)
+        return jsonify({'handled': True, 'type': 'move_help'})
+
+    result = match_project_ext(target_label, active_only=True)
+    new_project = result.project
+
+    if not new_project and result.candidates:
+        _send_fuzzy_prompt(
+            sender, target_label, result.candidates,
+            group_id=group_id, sender=sender,
+        )
+        # Store move intent so after choosing a number, we continue the move
+        _set_move_intent(group_id, sender, data)
+        return jsonify({'handled': True, 'type': 'move_fuzzy_candidates'})
+
+    if not new_project:
+        err = f'⚠️ 找不到專案「{target_label}」，無法搬移。\n發送 *projects* 查看專案列表。'
+        if group_id:
+            try:
+                send_group_message(group_id, err)
+            except Exception:
+                pass
+        else:
+            _safe_send(sender, err)
+        return jsonify({'handled': True, 'type': 'move_no_project'})
+
+    return _execute_move(sender, new_project, data, group_id=group_id)
+
+
+def _execute_move(sender, new_project, data, *, group_id=None):
+    """Find images (from quoted msg or recent) and move them."""
+    has_quoted = data.get('hasQuotedMsg', False)
+    quoted_id = data.get('quotedMsgId')
+
+    if has_quoted and quoted_id:
+        images = _find_pool_images_by_quoted_msg(quoted_id, sender)
+    else:
+        images = _find_recent_assigned_pool_images(sender, limit=20)
+        if images:
+            last_record_id = images[0].get('recordId')
+            if last_record_id:
+                images = [img for img in images if img.get('recordId') == last_record_id]
+            else:
+                images = images[:1]
+
+    if not images:
+        err = '⚠️ 找不到可搬移的照片。請回覆要搬移的照片再試一次。'
+        if group_id:
+            try:
+                send_group_message(group_id, err)
+            except Exception:
+                pass
+        else:
+            _safe_send(sender, err)
+        return jsonify({'handled': True, 'type': 'move_no_images'})
+
+    already_target = all(img.get('projectCode') == new_project['code'] for img in images)
+    if already_target:
+        msg = f'ℹ️ 這些照片已經在專案 *{new_project["code"]}* 中，無需搬移。'
+        if group_id:
+            try:
+                send_group_message(group_id, msg)
+            except Exception:
+                pass
+        else:
+            _safe_send(sender, msg)
+        return jsonify({'handled': True, 'type': 'move_already_there'})
+
+    old_codes = list({img.get('projectCode', '?') for img in images})
+    image_ids = [str(img['_id']) for img in images]
+    result = move_images_to_project(image_ids, new_project, moved_by='user')
+
+    if result['moved'] > 0:
+        old_label = ', '.join(old_codes)
+        msg = (
+            f'✅ 已成功搬移 *{result["moved"]}* 張照片\n'
+            f'從 *{old_label}* → *{new_project["code"]}*'
+        )
+        if group_id:
+            try:
+                send_group_message(group_id, msg)
+            except Exception:
+                pass
+        else:
+            _safe_send(sender, msg)
+        return jsonify({'handled': True, 'type': 'move_success', 'moved': result['moved']})
+
+    err_detail = '；'.join(result.get('errors', []))
+    msg = f'❌ 搬移失敗：{err_detail or "未知錯誤"}' 
+    if group_id:
+        try:
+            send_group_message(group_id, msg)
+        except Exception:
+            pass
+    else:
+        _safe_send(sender, msg)
+    return jsonify({'handled': True, 'type': 'move_failed', 'errors': result.get('errors', [])})
+
+
+def _move_intent_key(group_id, sender):
+    prefix = f'g:{group_id}:' if group_id else 'p:'
+    return f'wa_move_intent:{prefix}{sender}'
+
+
+def _set_move_intent(group_id, sender, data):
+    """Cache the move intent so numeric fuzzy-choice reply continues the move."""
+    mongo.db.wa_system.update_one(
+        {'_id': _move_intent_key(group_id, sender)},
+        {'$set': {
+            'hasQuotedMsg': data.get('hasQuotedMsg', False),
+            'quotedMsgId': data.get('quotedMsgId'),
+            'at': datetime.utcnow(),
+        }},
+        upsert=True,
+    )
+
+
+def _pop_move_intent(group_id, sender):
+    """Return saved move intent data or None."""
+    key = _move_intent_key(group_id, sender)
+    doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
+    if not doc or not doc.get('at'):
+        return None
+    age = (datetime.utcnow() - doc['at']).total_seconds()
+    if age > _FUZZY_CHOICE_TTL:
+        return None
+    return doc
+
+
+def _handle_command(cmd, sender, *, text='', data=None, group_id=None):
+    """Handle bot commands. *text* is the full raw message; *data* is the
+    inbound payload dict (needed for move's quoted-message context)."""
     if cmd == 'help':
         _safe_send(sender,
             '*現場回報指南*\n\n'
             '*格式：* 專案編號 + 類型 + 說明 + 照片\n\n'
-            '*指令：* help | keywords | projects | skip（追問時可用 skip）')
+            '*指令：* help | keywords | projects | move | skip（追問時可用 skip）')
     elif cmd == 'keywords':
         keywords = list(mongo.db.wa_keywords.find({'type': 'type_keyword', 'isActive': True}))
         lines = [f'• {k["term"]}' for k in keywords]
@@ -630,3 +941,5 @@ def _handle_command(cmd, sender):
         projects = list(mongo.db.wa_projects.find({'status': 'active'}))
         lines = [f'• {p["code"]} - {p.get("name", "")}' for p in projects]
         _safe_send(sender, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
+    elif cmd == 'move':
+        return _handle_move(text, sender, data or {}, group_id=group_id)

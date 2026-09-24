@@ -30,6 +30,9 @@ requests>=2.31.0
 # File transfer (NAS via SFTP)
 paramiko>=3.4.0
 
+# Fuzzy text matching (WA project search)
+rapidfuzz>=3.0.0
+
 # Utilities
 python-dotenv==1.0.0
 Werkzeug==3.0.1
