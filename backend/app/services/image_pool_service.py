@@ -107,15 +107,65 @@ def _match_project_single(trimmed, *, active_only=True):
     return None
 
 
-def match_project(text, *, active_only=True):
-    """Match user text to a project by code or name (active projects only by default)."""
+def _fuzzy_match_projects(text, *, active_only=True, limit=5):
+    """Score all active projects against *text* using fuzzy matching.
+
+    Returns a list of ``(project_doc, score)`` tuples sorted by descending
+    score.  The score is the best of ``partial_ratio(text, code)`` and
+    ``partial_ratio(text, name)`` for each project.
+    """
+    from rapidfuzz import fuzz
+
+    query = _active_project_query() if active_only else {'status': {'$ne': 'archived'}}
+    projects = list(mongo.db.wa_projects.find(query))
+    if not projects:
+        return []
+
+    text_lower = text.lower()
+    scored = []
+    for proj in projects:
+        code_score = fuzz.partial_ratio(text_lower, (proj.get('code') or '').lower())
+        name_score = fuzz.partial_ratio(text_lower, (proj.get('name') or '').lower())
+        best = max(code_score, name_score)
+        if best >= 50:
+            scored.append((proj, best))
+
+    scored.sort(key=lambda t: t[1], reverse=True)
+    return scored[:limit]
+
+
+class MatchResult:
+    """Wrapper returned by :func:`match_project_ext` to carry fuzzy candidates."""
+
+    __slots__ = ('project', 'candidates')
+
+    def __init__(self, project=None, candidates=None):
+        self.project = project
+        self.candidates = candidates or []
+
+    def __bool__(self):
+        return self.project is not None
+
+
+FUZZY_HIGH = 80
+FUZZY_MID = 60
+
+
+def match_project_ext(text, *, active_only=True):
+    """Extended project match — returns a :class:`MatchResult`.
+
+    * ``result.project`` is set when a single confident match is found (exact
+      or high-score fuzzy).
+    * ``result.candidates`` carries up to 5 fuzzy suggestions when no single
+      confident match exists but there are mid-score hits.
+    """
     trimmed = _normalize_project_label(text)
     if not trimmed:
-        return None
+        return MatchResult()
 
     hit = _match_project_single(trimmed, active_only=active_only)
     if hit:
-        return hit
+        return MatchResult(project=hit)
 
     for sep in (' - ', ' – ', ' — ', '—'):
         if sep in trimmed:
@@ -125,8 +175,32 @@ def match_project(text, *, active_only=True):
                     continue
                 hit = _match_project_single(part, active_only=active_only)
                 if hit:
-                    return hit
-    return None
+                    return MatchResult(project=hit)
+
+    scored = _fuzzy_match_projects(trimmed, active_only=active_only)
+    if not scored:
+        return MatchResult()
+
+    top_project, top_score = scored[0]
+    high_hits = [(p, s) for p, s in scored if s >= FUZZY_HIGH]
+
+    if len(high_hits) == 1:
+        return MatchResult(project=high_hits[0][0])
+
+    mid_hits = [(p, s) for p, s in scored if s >= FUZZY_MID]
+    if mid_hits:
+        return MatchResult(candidates=mid_hits)
+
+    return MatchResult()
+
+
+def match_project(text, *, active_only=True):
+    """Match user text to a project by code or name (active projects only by default).
+
+    Backward-compatible wrapper — returns a single project dict or ``None``.
+    """
+    result = match_project_ext(text, active_only=active_only)
+    return result.project
 
 
 def infer_pool_media_meta(image_path, wa_type=None, mime_type=None):
@@ -416,6 +490,73 @@ def assign_all_unassigned(phone, project, assigned_by='user'):
         schedule_assignment_confirmation(project, count, phone=phone)
 
     return count
+
+
+def move_images_to_project(image_ids, new_project, moved_by='user'):
+    """Move already-assigned pool images to a different project.
+
+    Steps:
+    1. For each pool_image, remove it from its current wa_record (pull photo
+       from the ``photos`` array; delete the record if it becomes empty).
+    2. Reset pool_image assignment fields so it looks unassigned.
+    3. Call :func:`assign_images_to_project` to create a new wa_record under
+       *new_project* and trigger NAS copy.
+
+    Returns ``{'moved': int, 'errors': list[str]}``.
+    """
+    object_ids = [ObjectId(i) for i in image_ids]
+    images = list(mongo.db.pool_images.find({'_id': {'$in': object_ids}}))
+    if not images:
+        return {'moved': 0, 'errors': ['找不到指定的照片']}
+
+    errors = []
+    now = datetime.utcnow()
+
+    for img in images:
+        old_record_id = img.get('recordId')
+        if old_record_id:
+            img_path = img.get('imagePath')
+            if img_path:
+                mongo.db.wa_records.update_one(
+                    {'_id': old_record_id},
+                    {'$pull': {'photos': img_path, 'nasPhotos': {'$regex': re.escape(os.path.basename(img_path))}}},
+                )
+            rec = mongo.db.wa_records.find_one({'_id': old_record_id})
+            if rec and not rec.get('photos'):
+                mongo.db.wa_records.update_one(
+                    {'_id': old_record_id},
+                    {'$set': {'status': 'moved', 'updatedAt': now},
+                     '$push': {'statusHistory': {
+                         'from': rec.get('status', 'unknown'),
+                         'to': 'moved',
+                         'timestamp': now,
+                         'reason': f'All photos moved to {new_project["code"]}',
+                     }}},
+                )
+
+        mongo.db.pool_images.update_one(
+            {'_id': img['_id']},
+            {'$unset': {
+                'projectId': '',
+                'projectCode': '',
+                'projectName': '',
+                'assignedBy': '',
+                'assignedAt': '',
+                'recordId': '',
+                'nasPath': '',
+                'nasSyncStatus': '',
+                'nasSyncError': '',
+            },
+             '$set': {'updatedAt': now, 'movedFrom': img.get('projectCode', 'unknown')}},
+        )
+
+    reset_ids = [str(img['_id']) for img in images]
+    count = assign_images_to_project(reset_ids, new_project, moved_by)
+
+    if count == 0:
+        errors.append('重新歸類失敗，請檢查照片狀態')
+
+    return {'moved': count, 'errors': errors}
 
 
 def get_pool_stats():
