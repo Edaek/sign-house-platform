@@ -71,11 +71,38 @@ def _active_project_query():
     return {'status': 'active'}
 
 
+_PROJECT_NUM_RE = re.compile(r'^[Pp][#\-]?(\d{1,4})$')
+_HASH_NUM_RE = re.compile(r'^#(\d{1,4})$')
+
+
+def _expand_project_codes(num_str):
+    """Generate all possible P-xxx codes from a captured numeric string.
+
+    E.g. "1" → {"P-1", "P-01", "P-001", "P-0001"}
+    """
+    codes = set()
+    for width in range(len(num_str), 5):
+        codes.add(f'P-{num_str.zfill(width)}')
+    codes.add(f'P-{num_str}')
+    return codes
+
+
+def _find_projects_by_codes(codes, query):
+    """Find all projects whose code matches any of the given codes."""
+    regex_parts = [f'^{re.escape(c)}$' for c in codes]
+    combined = '|'.join(regex_parts)
+    return list(mongo.db.wa_projects.find({
+        **query,
+        'code': {'$regex': combined, '$options': 'i'},
+    }))
+
+
 def _match_project_single(trimmed, *, active_only=True):
     if not trimmed:
         return None
     query = _active_project_query() if active_only else {'status': {'$ne': 'archived'}}
 
+    # 1. Exact code match (case insensitive)
     project = mongo.db.wa_projects.find_one({
         **query,
         'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
@@ -83,12 +110,26 @@ def _match_project_single(trimmed, *, active_only=True):
     if project:
         return project
 
+    # 2. Shorthand code (P1, P01, #1 etc) — expand to all possible paddings
+    for pattern in (_PROJECT_NUM_RE, _HASH_NUM_RE):
+        m = pattern.match(trimmed)
+        if m:
+            codes = _expand_project_codes(m.group(1))
+            matches = _find_projects_by_codes(codes, query)
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                return None  # ambiguous — let caller handle as candidates
+            break
+
+    # 3. Legacy extract_project_code (handles other patterns)
     code = extract_project_code(trimmed)
     if code:
         project = mongo.db.wa_projects.find_one({**query, 'code': code})
         if project:
             return project
 
+    # 4. Exact name match
     exact_name = list(mongo.db.wa_projects.find({
         **query,
         'name': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
@@ -98,6 +139,7 @@ def _match_project_single(trimmed, *, active_only=True):
     if len(exact_name) > 1:
         return None
 
+    # 5. Partial name match (unique only)
     partial = list(mongo.db.wa_projects.find({
         **query,
         'name': {'$regex': re.escape(trimmed), '$options': 'i'},
@@ -105,6 +147,19 @@ def _match_project_single(trimmed, *, active_only=True):
     if len(partial) == 1:
         return partial[0]
     return None
+
+
+def _match_project_code_candidates(trimmed, *, active_only=True):
+    """Return multiple projects matching ambiguous shorthand codes like 'P1'."""
+    query = _active_project_query() if active_only else {'status': {'$ne': 'archived'}}
+    for pattern in (_PROJECT_NUM_RE, _HASH_NUM_RE):
+        m = pattern.match(trimmed)
+        if m:
+            codes = _expand_project_codes(m.group(1))
+            matches = _find_projects_by_codes(codes, query)
+            if len(matches) > 1:
+                return [(p, 100) for p in matches]
+    return []
 
 
 def _fuzzy_match_projects(text, *, active_only=True, limit=5):
@@ -166,6 +221,11 @@ def match_project_ext(text, *, active_only=True):
     hit = _match_project_single(trimmed, active_only=active_only)
     if hit:
         return MatchResult(project=hit)
+
+    # Ambiguous shorthand codes like "P1" matching both P-001 and P-0001
+    code_candidates = _match_project_code_candidates(trimmed, active_only=active_only)
+    if code_candidates:
+        return MatchResult(candidates=code_candidates)
 
     for sep in (' - ', ' – ', ' — ', '—'):
         if sep in trimmed:
