@@ -430,6 +430,14 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                         f'或回覆正確的專案編碼/名稱。',
                     )
 
+            # No caption at all — confirm receipt and ask for project
+            if not caption:
+                _safe_send(
+                    sender,
+                    f'📷 收到 *{len(pool_ids)}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
+                    f'發送 *projects* 查看專案列表。',
+                )
+
             if multi:
                 from app.services.image_pool_service import schedule_reminder
                 schedule_reminder(sender)
@@ -662,10 +670,44 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos):
             wa_type=data.get('type'), mime_type=data.get('mimeType'),
         )
 
+    # Always reply in group when photos are received
+    count = len(photo_paths)
+    if caption and not project:
+        ext_result = match_project_ext(caption)
+        if ext_result.candidates:
+            body = (
+                f'📷 收到 *{count}* 張照片。\n\n'
+                f'🔍 找到多個相似專案（輸入「{caption}」）：\n'
+                f'{_format_fuzzy_candidates(ext_result.candidates)}\n\n'
+                f'回覆數字選擇，或發送完整專案編碼。'
+            )
+            _set_fuzzy_choice(group_id, sender, ext_result.candidates)
+            try:
+                send_group_message(group_id, body)
+            except Exception:
+                pass
+        else:
+            try:
+                send_group_message(
+                    group_id,
+                    f'📷 收到 *{count}* 張照片，但找不到專案「{caption}」。\n'
+                    f'請回覆正確的專案編碼或名稱。\n發送 *projects* 查看專案列表。',
+                )
+            except Exception:
+                pass
+    else:
+        try:
+            send_group_message(
+                group_id,
+                f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。',
+            )
+        except Exception:
+            pass
+
     return jsonify({
         'handled': True,
         'type': 'group_pending_image',
-        'count': len(photo_paths),
+        'count': count,
     })
 
 
