@@ -134,7 +134,7 @@ def _clear_burst_project(group_id, sender):
     mongo.db.wa_system.delete_one({'_id': _burst_cache_id(group_id, sender)})
 
 
-def _get_burst_project(group_id, sender, max_age_s=90):
+def _get_burst_project(group_id, sender, max_age_s=15):
     doc = mongo.db.wa_system.find_one({'_id': _burst_cache_id(group_id, sender)})
     if not doc or not doc.get('projectId') or not doc.get('at'):
         return None
@@ -197,6 +197,41 @@ def _format_fuzzy_candidates(candidates):
     return '\n'.join(lines)
 
 
+def _quoted_id_variants(quoted_id):
+    """Return full + short stanza forms of a WhatsApp message ID."""
+    if not quoted_id:
+        return []
+    raw = str(quoted_id)
+    parts = raw.split('_')
+    short_id = parts[2] if len(parts) >= 3 else None
+    return [i for i in [raw, short_id] if i]
+
+
+def _record_bot_prompt_msg(group_id, sender, send_resp):
+    """Remember outbound bot message IDs so quoting the bot finds pending photos."""
+    if not group_id or not sender or not isinstance(send_resp, dict):
+        return
+    msg_id = send_resp.get('messageId') or send_resp.get('id') or ''
+    if not msg_id:
+        return
+    variants = _quoted_id_variants(msg_id)
+    if variants:
+        mongo.db.group_pending_images.update_many(
+            {'groupId': group_id, 'senderPhone': sender, 'categorized': False},
+            {'$push': {'botReminderMsgIds': {'$each': variants}}},
+        )
+
+
+def _send_group_prompt(group_id, sender, body):
+    """Send a group message and register the response ID on pending photos."""
+    try:
+        resp = send_group_message(group_id, body)
+        _record_bot_prompt_msg(group_id, sender, resp)
+        return resp
+    except Exception:
+        return None
+
+
 def _send_fuzzy_prompt(to, label, candidates, *, group_id=None, sender=None):
     """Send a disambiguation prompt and cache choices."""
     body = (
@@ -206,10 +241,7 @@ def _send_fuzzy_prompt(to, label, candidates, *, group_id=None, sender=None):
     )
     _set_fuzzy_choice(group_id, sender or to, candidates)
     if group_id:
-        try:
-            send_group_message(group_id, body)
-        except Exception:
-            pass
+        _send_group_prompt(group_id, sender or to, body)
     else:
         _safe_send(to, body)
 
@@ -682,27 +714,18 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos):
                 f'回覆數字選擇，或發送完整專案編碼。'
             )
             _set_fuzzy_choice(group_id, sender, ext_result.candidates)
-            try:
-                send_group_message(group_id, body)
-            except Exception:
-                pass
+            _send_group_prompt(group_id, sender, body)
         else:
-            try:
-                send_group_message(
-                    group_id,
-                    f'📷 收到 *{count}* 張照片，但找不到專案「{caption}」。\n'
-                    f'請回覆正確的專案編碼或名稱。\n發送 *projects* 查看專案列表。',
-                )
-            except Exception:
-                pass
-    else:
-        try:
-            send_group_message(
-                group_id,
-                f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。',
+            _send_group_prompt(
+                group_id, sender,
+                f'📷 收到 *{count}* 張照片，但找不到專案「{caption}」。\n'
+                f'請回覆正確的專案編碼或名稱。\n發送 *projects* 查看專案列表。',
             )
-        except Exception:
-            pass
+    else:
+        _send_group_prompt(
+            group_id, sender,
+            f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。',
+        )
 
     return jsonify({
         'handled': True,
@@ -724,17 +747,29 @@ def _categorize_group_image(pending, project, group_id, data, sender):
     quoted_id = data.get('quotedMsgId')
     has_quoted = data.get('hasQuotedMsg', False)
 
+    sender_fallback = {
+        'groupId': group_id,
+        'senderPhone': (pending or {}).get('senderPhone') or sender,
+        'categorized': False,
+    }
+
+    claim_filter = sender_fallback  # default: all pending for this sender
+
     if has_quoted and quoted_id:
-        parts = quoted_id.split('_')
-        short_id = parts[2] if len(parts) >= 3 else None
-        possible_ids = [i for i in [quoted_id, short_id] if i]
-        claim_filter = {'botReminderMsgIds': {'$in': possible_ids}, 'categorized': False}
-    else:
-        claim_filter = {
+        variants = _quoted_id_variants(quoted_id)
+        # Try botReminderMsgIds first, then photo's own messageId
+        quote_filter = {
             'groupId': group_id,
-            'senderPhone': (pending or {}).get('senderPhone') or sender,
+            'senderPhone': sender,
             'categorized': False,
+            '$or': [
+                {'botReminderMsgIds': {'$in': variants}},
+                {'messageId': {'$in': variants}},
+            ],
         }
+        if mongo.db.group_pending_images.count_documents(quote_filter) > 0:
+            claim_filter = quote_filter
+        # else: quote didn't match any known photo/prompt → fall back to sender's batch
 
     now = datetime.utcnow()
     result = mongo.db.group_pending_images.update_many(
@@ -798,20 +833,21 @@ def _find_pool_images_by_quoted_msg(quoted_msg_id, sender):
     """Find pool_images that match a quoted messageId for a sender."""
     if not quoted_msg_id:
         return []
-    parts = quoted_msg_id.split('_')
-    short_id = parts[2] if len(parts) >= 3 else None
-    possible_ids = [i for i in [quoted_msg_id, short_id] if i]
+    possible_ids = _quoted_id_variants(quoted_msg_id)
     images = list(mongo.db.pool_images.find({
         'messageId': {'$in': possible_ids},
         'phone': sender,
         'projectId': {'$exists': True},
     }))
-    if not images and short_id:
-        images = list(mongo.db.pool_images.find({
-            'messageId': {'$regex': re.escape(short_id)},
-            'phone': sender,
-            'projectId': {'$exists': True},
-        }))
+    if not images:
+        for qid in possible_ids:
+            images = list(mongo.db.pool_images.find({
+                'messageId': {'$regex': re.escape(qid)},
+                'phone': sender,
+                'projectId': {'$exists': True},
+            }))
+            if images:
+                break
     return images
 
 
