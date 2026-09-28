@@ -81,6 +81,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    environment:
+      # Host-native backend (run.py --all on :5001) while frontend runs in Docker
+      VITE_DEV_API_PROXY: ${VITE_DEV_API_PROXY:-http://host.docker.internal:5001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./frontend:/app
       - /app/node_modules
