@@ -74,8 +74,9 @@ class PoolReminderScheduler:
             for row in pending:
                 phone = row.get('phone') or ''
                 digits = re.sub(r'\D', '', phone)
-                key = digits or phone
-                if not key:
+                batch = row.get('batchId') or str(row.get('_id'))
+                key = f'{digits or phone}:{batch}'
+                if not (digits or phone):
                     continue
                 by_phone.setdefault(key, []).append(row)
 
@@ -106,6 +107,7 @@ class PoolReminderScheduler:
 
                 count = len(images)
                 quote_id = newest.get('messageId') or images[0].get('messageId')
+                batch_id = newest.get('batchId')
                 body = format_pool_receipt_body(count)
 
                 try:
@@ -119,7 +121,7 @@ class PoolReminderScheduler:
                     self._failed_until[key] = now_ts + cooldown
                     continue
 
-                mark_pool_images_reminded(phone, resp)
+                mark_pool_images_reminded(phone, resp, batch_id)
                 self._failed_until.pop(key, None)
                 logger.info('[PoolReminder] Sent reminder to %s (%d file(s))', key, count)
         except Exception:

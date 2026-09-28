@@ -300,6 +300,7 @@ def save_to_pool(
     defer_reminder=False,
     wa_type=None,
     mime_type=None,
+    batch_id=None,
 ):
     """Save media to the pool. Auto-assigns if caption matches project code or name."""
     now = datetime.utcnow()
@@ -317,6 +318,8 @@ def save_to_pool(
         'createdAt': now,
         'updatedAt': now,
     }
+    if batch_id:
+        doc['batchId'] = batch_id
     result = mongo.db.pool_images.insert_one(doc)
     pool_id = str(result.inserted_id)
 

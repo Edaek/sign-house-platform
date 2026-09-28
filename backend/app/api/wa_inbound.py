@@ -264,6 +264,7 @@ def _schedule_pool_receipt(
     group_id=None,
     group_sender=None,
     quote_msg_id=None,
+    batch_id=None,
     on_sent=None,
 ):
     from app.services.pool_receipt_notify_service import schedule_pool_receipt_prompt
@@ -274,6 +275,7 @@ def _schedule_pool_receipt(
         group_id=group_id,
         group_sender=group_sender,
         quote_msg_id=quote_msg_id,
+        batch_id=batch_id,
         on_sent=on_sent,
     )
 
@@ -480,6 +482,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
 
             caption, project = _resolve_media_project(data, sender, group_id=None)
             base_msg_id = data.get('messageId', '') or ''
+            inbound_batch_id = _quote_msg_id(data) or base_msg_id
             pool_ids = []
             multi = len(photo_paths) > 1
 
@@ -493,6 +496,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     from_name,
                     defer_assign=bool(project),
                     defer_reminder=True,
+                    batch_id=inbound_batch_id or None,
                     **_pool_media_kwargs(data),
                 )
                 pool_ids.append(result['pool_id'])
@@ -538,6 +542,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     _pool_receipt_body(),
                     phone=sender,
                     quote_msg_id=_quote_msg_id(data),
+                    batch_id=inbound_batch_id or None,
                     on_sent=lambda resp: _record_private_pool_prompt(sender, resp),
                 )
 
@@ -785,7 +790,7 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
             _set_fuzzy_choice(group_id, sender, ext_result.candidates)
             _schedule_pool_receipt(
                 count, body, group_id=group_id, group_sender=sender,
-                quote_msg_id=quote_id, on_sent=on_sent,
+                quote_msg_id=quote_id, batch_id=batch_id, on_sent=on_sent,
             )
         else:
             _schedule_pool_receipt(
@@ -793,14 +798,14 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
                 f'📷 收到 *{{count}}* 張照片，但找不到專案「{caption}」。\n'
                 f'請回覆正確的專案編碼或名稱。\n發送 *projects* 查看專案列表。',
                 group_id=group_id, group_sender=sender,
-                quote_msg_id=quote_id, on_sent=on_sent,
+                quote_msg_id=quote_id, batch_id=batch_id, on_sent=on_sent,
             )
     else:
         _schedule_pool_receipt(
             count,
             _pool_receipt_body(),
             group_id=group_id, group_sender=sender,
-            quote_msg_id=quote_id, on_sent=on_sent,
+            quote_msg_id=quote_id, batch_id=batch_id, on_sent=on_sent,
         )
 
     return jsonify({

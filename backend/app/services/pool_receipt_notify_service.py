@@ -1,4 +1,5 @@
 """Coalesce \"received N photos\" prompts (album bursts → one reply)."""
+import hashlib
 import logging
 import os
 import re
@@ -57,15 +58,33 @@ def latest_sender_name_for_phone(phone: str) -> Optional[str]:
     return name.strip() if isinstance(name, str) and name.strip() else None
 
 
-def latest_group_quote_id(group_id: str, group_sender: str) -> Optional[str]:
+def _batch_key_part(batch_id: Optional[str]) -> str:
+    if not batch_id:
+        return ''
+    raw = str(batch_id).strip()
+    if not raw:
+        return ''
+    if len(raw) > 96:
+        return hashlib.sha256(raw.encode()).hexdigest()[:24]
+    return re.sub(r'[^\w@.-]', '_', raw)
+
+
+def latest_group_quote_id(
+    group_id: str,
+    group_sender: str,
+    batch_id: Optional[str] = None,
+) -> Optional[str]:
     from app import mongo
 
+    query = {
+        'groupId': group_id,
+        'senderPhone': group_sender,
+        'categorized': False,
+    }
+    if batch_id:
+        query['batchId'] = batch_id
     doc = mongo.db.group_pending_images.find_one(
-        {
-            'groupId': group_id,
-            'senderPhone': group_sender,
-            'categorized': False,
-        },
+        query,
         sort=[('createdAt', -1)],
         projection={'messageId': 1},
     )
@@ -73,11 +92,14 @@ def latest_group_quote_id(group_id: str, group_sender: str) -> Optional[str]:
     return str(mid) if mid else None
 
 
-def latest_pool_quote_id(phone: str) -> Optional[str]:
+def latest_pool_quote_id(phone: str, batch_id: Optional[str] = None) -> Optional[str]:
     from app import mongo
 
+    query = {'projectId': {'$exists': False}, **phone_match_query(phone)}
+    if batch_id:
+        query['batchId'] = batch_id
     doc = mongo.db.pool_images.find_one(
-        {'projectId': {'$exists': False}, **phone_match_query(phone)},
+        query,
         sort=[('createdAt', -1)],
         projection={'messageId': 1},
     )
@@ -85,7 +107,11 @@ def latest_pool_quote_id(phone: str) -> Optional[str]:
     return str(mid) if mid else None
 
 
-def mark_pool_images_reminded(phone: str, send_resp: Optional[dict]) -> None:
+def mark_pool_images_reminded(
+    phone: str,
+    send_resp: Optional[dict],
+    batch_id: Optional[str] = None,
+) -> None:
     from app import mongo
 
     now = datetime.utcnow()
@@ -95,10 +121,10 @@ def mark_pool_images_reminded(phone: str, send_resp: Optional[dict]) -> None:
         variants = _quoted_id_variants(msg_id)
         if variants:
             update['$push'] = {'botReminderMsgIds': {'$each': variants}}
-    mongo.db.pool_images.update_many(
-        {'projectId': {'$exists': False}, **phone_match_query(phone)},
-        update,
-    )
+    query = {'projectId': {'$exists': False}, **phone_match_query(phone)}
+    if batch_id:
+        query['batchId'] = batch_id
+    mongo.db.pool_images.update_many(query, update)
 
 
 def _strip_jid(jid: Optional[str]) -> str:
@@ -130,25 +156,36 @@ def _record_prompt_after_send(entry: dict, resp: dict) -> None:
     if not variants:
         return
     if entry.get('group_id') and entry.get('group_sender'):
+        q = {
+            'groupId': entry['group_id'],
+            'senderPhone': entry['group_sender'],
+            'categorized': False,
+        }
+        if entry.get('batch_id'):
+            q['batchId'] = entry['batch_id']
         mongo.db.group_pending_images.update_many(
-            {
-                'groupId': entry['group_id'],
-                'senderPhone': entry['group_sender'],
-                'categorized': False,
-            },
+            q,
             {'$push': {'botReminderMsgIds': {'$each': variants}}},
         )
     elif entry.get('phone'):
         mark_pool_images_reminded(entry['phone'], resp)
 
 
-def _pending_key(*, phone=None, group_id=None, group_sender=None) -> Optional[str]:
+def _pending_key(
+    *,
+    phone=None,
+    group_id=None,
+    group_sender=None,
+    batch_id=None,
+) -> Optional[str]:
+    batch_part = _batch_key_part(batch_id)
     if group_id:
-        return f'g:{group_id}:{_normalize_phone(group_sender)}'
+        base = f'g:{group_id}:{_normalize_phone(group_sender)}'
+        return f'{base}:{batch_part}' if batch_part else base
     if phone:
         digits = _normalize_phone(phone)
         if digits:
-            return f'p:{digits}'
+            return f'p:{digits}:{batch_part}' if batch_part else f'p:{digits}'
     return None
 
 
@@ -175,6 +212,7 @@ def schedule_pool_receipt_prompt(
     group_id: Optional[str] = None,
     group_sender: Optional[str] = None,
     quote_msg_id: Optional[str] = None,
+    batch_id: Optional[str] = None,
     on_sent: Optional[Callable[[dict], None]] = None,
 ) -> None:
     """Merge receipt prompts for the same chat; flush after DEBOUNCE_S quiet period."""
@@ -182,7 +220,9 @@ def schedule_pool_receipt_prompt(
     if file_count <= 0 or not body.strip():
         return
 
-    key = _pending_key(phone=phone, group_id=group_id, group_sender=group_sender)
+    key = _pending_key(
+        phone=phone, group_id=group_id, group_sender=group_sender, batch_id=batch_id,
+    )
     if not key:
         return
 
@@ -207,6 +247,7 @@ def schedule_pool_receipt_prompt(
                     'group_id': group_id,
                     'group_sender': group_sender,
                     'quote_msg_id': quote_msg_id,
+                    'batch_id': batch_id,
                     'flushAt': flush_at,
                     'updatedAt': now,
                 },
@@ -343,8 +384,6 @@ def _flush(key: str) -> None:
 
             count = int(entry.get('fileCount') or 0)
             if count <= 0:
-                count = _resolve_count(entry)
-            if count <= 0:
                 return
 
             if _duplicate_send(key, count):
@@ -364,10 +403,13 @@ def _flush(key: str) -> None:
                     body = body.format(count=count)
 
             quote = entry.get('quote_msg_id')
+            batch_id = entry.get('batch_id')
             if not quote and entry.get('phone'):
-                quote = latest_pool_quote_id(entry['phone'])
+                quote = latest_pool_quote_id(entry['phone'], batch_id)
             if not quote and entry.get('group_id') and entry.get('group_sender'):
-                quote = latest_group_quote_id(entry['group_id'], entry['group_sender'])
+                quote = latest_group_quote_id(
+                    entry['group_id'], entry['group_sender'], batch_id,
+                )
             if entry.get('group_id'):
                 resp = send_group_message(entry['group_id'], body, quoted_msg_id=quote)
             elif entry.get('phone'):

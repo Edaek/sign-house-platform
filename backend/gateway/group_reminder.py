@@ -102,7 +102,8 @@ class GroupReminderScheduler:
 
             by_sender = {}  # type: dict
             for img in pending:
-                key = f"{img['groupId']}::{img['senderPhone']}"
+                batch = img.get('batchId') or str(img.get('_id'))
+                key = f"{img['groupId']}::{img['senderPhone']}::{batch}"
                 by_sender.setdefault(key, []).append(img)
 
             from datetime import datetime, timezone
