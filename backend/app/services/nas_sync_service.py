@@ -179,13 +179,31 @@ def get_last_nas_sync_status():
     return doc if doc else {}
 
 
+def _nas_paths_on_record(record) -> set:
+    paths = set()
+    sp = record.get('nasSourcePath')
+    if sp:
+        paths.add(sp)
+    for p in record.get('nasPhotos') or []:
+        if p:
+            paths.add(p)
+    return paths
+
+
+def _record_query_nas_linked(project_id):
+    return {
+        'projectId': project_id,
+        '$or': [
+            {'nasSourcePath': {'$exists': True, '$nin': [None, '']}},
+            {'nasPhotos.0': {'$exists': True}},
+        ],
+    }
+
+
 def _project_linked_to_nas(project):
     if project.get('nasImportedAt') or project.get('nasFolder'):
         return True
-    return mongo.db.wa_records.count_documents({
-        'projectId': project['_id'],
-        'nasSourcePath': {'$exists': True, '$nin': [None, '']},
-    }) > 0
+    return mongo.db.wa_records.count_documents(_record_query_nas_linked(project['_id'])) > 0
 
 
 def _media_dir():
@@ -280,12 +298,11 @@ def reconcile_deletions_from_nas(media_dir=None):
         if folder is None:
             continue
 
-        for rec in mongo.db.wa_records.find({
-            'projectId': project['_id'],
-            'nasSourcePath': {'$exists': True, '$nin': [None, '']},
-        }):
-            nas_path = rec['nasSourcePath']
-            if os.path.isfile(nas_path):
+        for rec in mongo.db.wa_records.find(_record_query_nas_linked(project['_id'])):
+            paths = _nas_paths_on_record(rec)
+            if not paths:
+                continue
+            if any(os.path.isfile(p) for p in paths):
                 continue
             ref = rec.get('referenceNumber', str(rec['_id']))
             delete_web_record(rec, remove_nas=False, media_dir=media_dir)

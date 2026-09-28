@@ -242,6 +242,15 @@ def create_app(config_name=None):
     from app.services.nas_sync_scheduler import nas_sync_scheduler
     nas_sync_scheduler.init_app(app)
 
+    from app.services.pool_receipt_notify_service import init_app as init_pool_receipt
+    init_pool_receipt(app)
+
+    from app.services.pool_reminder_scheduler import pool_reminder_scheduler
+    pool_reminder_scheduler.init_app(app)
+
+    from app.services.group_reminder_runner import init_app as init_group_reminder, start as start_group_reminder
+    init_group_reminder(app)
+
     # Recover zombie jobs from prior crashes, then watch for stale workers
     from app.services.job_recovery import recover_stale_jobs, start_stale_job_watchdog
     with app.app_context():
@@ -251,8 +260,18 @@ def create_app(config_name=None):
                 app.logger.info('Recovered %d stale job(s) on startup', recovered)
         except Exception:
             app.logger.exception('Startup stale job recovery failed')
-    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    _run_bg = (
+        os.environ.get('DISABLE_BACKGROUND_SCHEDULERS', '').lower() != 'true'
+        and (
+            not app.debug
+            or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+            or os.environ.get('SIGNHOUSE_START_SCHEDULERS') == '1'
+        )
+    )
+    if _run_bg:
         start_stale_job_watchdog(app)
         nas_sync_scheduler.start()
+        pool_reminder_scheduler.start()
+        start_group_reminder()
 
     return app

@@ -9,9 +9,14 @@ Usage:
 import os
 import sys
 import logging
-from app import create_app
 
 logging.basicConfig(level=logging.INFO)
+
+# run.py --all uses debug=False + no reloader; schedulers must still start (see create_app).
+if '--all' in sys.argv:
+    os.environ['SIGNHOUSE_START_SCHEDULERS'] = '1'
+
+from app import create_app
 
 app = create_app(os.environ.get('FLASK_CONFIG', 'development'))
 

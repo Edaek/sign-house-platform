@@ -55,7 +55,9 @@ services:
         condition: service_healthy
     command: python run.py
 
+  # Do not run gateway alongside native `python run.py --all` (duplicate Wakka consumers).
   gateway:
+    profiles: ["docker-gateway"]
     build:
       context: ./backend
       dockerfile: Dockerfile

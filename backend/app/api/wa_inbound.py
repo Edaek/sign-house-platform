@@ -51,7 +51,12 @@ def _claim(msg_id):
 
 
 def _strip_phone(phone):
-    return re.sub(r'@(c|s)\.us$', '', phone or '')
+    """Match gateway burst keys / pool receipt pending keys (digits-only)."""
+    if not phone:
+        return ''
+    base = re.sub(r'@(c\.us|s\.whatsapp\.net|lid)$', '', phone, flags=re.I)
+    digits = re.sub(r'\D', '', base)
+    return digits or base
 
 
 def _safe_send(to, text):
@@ -222,10 +227,61 @@ def _record_bot_prompt_msg(group_id, sender, send_resp):
         )
 
 
-def _send_group_prompt(group_id, sender, body):
-    """Send a group message and register the response ID on pending photos."""
+def _record_private_pool_prompt(phone, send_resp):
+    """Register bot prompt IDs on unassigned pool rows (private chat quote-to-classify)."""
+    if not phone:
+        return
+    from app.services.pool_receipt_notify_service import mark_pool_images_reminded
+
+    mark_pool_images_reminded(phone, send_resp if isinstance(send_resp, dict) else None)
+
+
+def _pool_msg_id(data, idx, base_msg_id):
+    ids = data.get('messageIds') or []
+    if idx < len(ids):
+        return ids[idx]
+    return base_msg_id if idx == 0 else f'{base_msg_id}#{idx}'
+
+
+def _quote_msg_id(data):
+    ids = data.get('messageIds') or []
+    if ids:
+        return ids[0]
+    return data.get('messageId')
+
+
+def _pool_receipt_body():
+    from app.services.pool_receipt_notify_service import format_pool_receipt_template
+
+    return format_pool_receipt_template()
+
+
+def _schedule_pool_receipt(
+    file_count,
+    body,
+    *,
+    phone=None,
+    group_id=None,
+    group_sender=None,
+    quote_msg_id=None,
+    on_sent=None,
+):
+    from app.services.pool_receipt_notify_service import schedule_pool_receipt_prompt
+    schedule_pool_receipt_prompt(
+        file_count,
+        body,
+        phone=phone,
+        group_id=group_id,
+        group_sender=group_sender,
+        quote_msg_id=quote_msg_id,
+        on_sent=on_sent,
+    )
+
+
+def _send_group_prompt(group_id, sender, body, quote_msg_id=None):
+    """Send a group message immediately (non-batched flows)."""
     try:
-        resp = send_group_message(group_id, body)
+        resp = send_group_message(group_id, body, quoted_msg_id=quote_msg_id)
         _record_bot_prompt_msg(group_id, sender, resp)
         return resp
     except Exception:
@@ -271,12 +327,16 @@ def _resolve_media_project(data, sender, group_id=None):
     return None, None
 
 
-def _insert_group_pending_image(group_id, sender, from_name, message_id, image_path, caption, batch_id, now, wa_type=None, mime_type=None):
+def _insert_group_pending_image(
+    group_id, sender, from_name, message_id, image_path, caption, batch_id, now,
+    wa_type=None, mime_type=None, sender_jid=None,
+):
     from app.services.image_pool_service import infer_pool_media_meta
     media_type, file_name = infer_pool_media_meta(image_path, wa_type=wa_type, mime_type=mime_type)
     mongo.db.group_pending_images.insert_one({
         'groupId': group_id,
         'senderPhone': sender,
+        'senderJid': sender_jid,
         'senderName': from_name,
         'messageId': message_id,
         'imagePath': image_path,
@@ -366,16 +426,22 @@ def handle_inbound():
     photos = data.get('photos', [])
     from_name = data.get('fromName')
     has_media = data.get('hasMedia', False)
-    sender = _strip_phone(data.get('from', ''))
+    raw_from = (data.get('from') or '').strip()
     is_group = data.get('isGroup', False)
     group_id = data.get('groupId')
+    sender_jid = raw_from if is_group and '@' in raw_from else None
+    sender = _strip_phone(raw_from)
+    if is_group and not sender_jid and data.get('author'):
+        author = str(data.get('author')).strip()
+        if '@' in author:
+            sender_jid = author
 
     if not sender:
         return jsonify({'handled': True, 'type': 'invalid_sender'})
 
     try:
         if is_group and group_id:
-            return _handle_group(data, sender, from_name, group_id)
+            return _handle_group(data, sender, from_name, group_id, sender_jid=sender_jid)
         return _handle_private(data, sender, from_name, text, photos, has_media)
     except Exception as e:
         logger.exception('[Inbound] Unhandled error')
@@ -395,8 +461,12 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
         except Exception as e:
             logger.error('[Inbound] Media download failed: %s', e)
 
+    msg_type = data.get('type') or ''
+    if msg_type == 'other' and not final_photos:
+        return jsonify({'handled': True, 'type': 'album_shell_skipped'})
+
     is_media = has_media and (
-        data.get('type') in ('image', 'video', 'document')
+        msg_type in ('image', 'video', 'document')
         or len(final_photos) > 0
     )
     is_text = not is_media and text.strip()
@@ -414,7 +484,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             multi = len(photo_paths) > 1
 
             for idx, image_path in enumerate(photo_paths):
-                msg_id = base_msg_id if idx == 0 else f'{base_msg_id}#{idx}'
+                msg_id = _pool_msg_id(data, idx, base_msg_id)
                 result = save_to_pool(
                     sender,
                     image_path,
@@ -422,7 +492,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     msg_id,
                     from_name,
                     defer_assign=bool(project),
-                    defer_reminder=bool(project or multi),
+                    defer_reminder=True,
                     **_pool_media_kwargs(data),
                 )
                 pool_ids.append(result['pool_id'])
@@ -462,17 +532,14 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                         f'或回覆正確的專案編碼/名稱。',
                     )
 
-            # No caption at all — confirm receipt and ask for project
-            if not caption:
-                _safe_send(
-                    sender,
-                    f'📷 收到 *{len(pool_ids)}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
-                    f'發送 *projects* 查看專案列表。',
+            if not caption and not project:
+                _schedule_pool_receipt(
+                    len(pool_ids),
+                    _pool_receipt_body(),
+                    phone=sender,
+                    quote_msg_id=_quote_msg_id(data),
+                    on_sent=lambda resp: _record_private_pool_prompt(sender, resp),
                 )
-
-            if multi:
-                from app.services.image_pool_service import schedule_reminder
-                schedule_reminder(sender)
 
             return jsonify({
                 'handled': True,
@@ -495,7 +562,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     'phone': sender, 'projectId': {'$exists': False},
                 }) > 0
                 if has_unassigned:
-                    assign_all_unassigned(sender, choice_project, 'user')
+                    _assign_unassigned_for_reply(sender, choice_project, data)
                     return jsonify({'handled': True, 'type': 'pool_assigned'})
                 _safe_send(sender, f'✅ 已選擇專案 *{choice_project["code"]}*，但目前沒有未歸類的照片。')
                 return jsonify({'handled': True, 'type': 'fuzzy_choice_no_pool'})
@@ -507,7 +574,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             result = match_project_ext(text)
             if result.project and result.project.get('status') == 'active':
                 _clear_fuzzy_choice(None, sender)
-                assign_all_unassigned(sender, result.project, 'user')
+                _assign_unassigned_for_reply(sender, result.project, data)
                 return jsonify({'handled': True, 'type': 'pool_assigned'})
             if result.candidates:
                 _send_fuzzy_prompt(sender, trimmed_text, result.candidates, sender=sender)
@@ -572,7 +639,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
     return jsonify({'handled': True, 'type': 'unrecognized'})
 
 
-def _handle_group(data, sender, from_name, group_id):
+def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
     text = data.get('text', '')
     photos = data.get('photos', [])
     has_media = data.get('hasMedia', False)
@@ -648,13 +715,13 @@ def _handle_group(data, sender, from_name, group_id):
     if is_media:
         with _media_lock(f'g:{group_id}:{sender}'):
             return _handle_group_media(
-                data, sender, from_name, group_id, final_photos,
+                data, sender, from_name, group_id, final_photos, sender_jid=sender_jid,
             )
 
     return jsonify({'handled': True, 'type': 'group_ignored'})
 
 
-def _handle_group_media(data, sender, from_name, group_id, final_photos):
+def _handle_group_media(data, sender, from_name, group_id, final_photos, *, sender_jid=None):
     caption, project = _resolve_media_project(data, sender, group_id=group_id)
     base_msg_id = data.get('messageId', '')
     photo_paths = [p for p in final_photos if p]
@@ -662,7 +729,7 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos):
     if project and photo_paths:
         pool_ids = []
         for idx, image_path in enumerate(photo_paths):
-            msg_id = base_msg_id if idx == 0 else f'{base_msg_id}#{idx}'
+            msg_id = _pool_msg_id(data, idx, base_msg_id)
             result = save_to_pool(
                 sender,
                 image_path,
@@ -696,35 +763,44 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos):
     batch_id = _group_batch_id(group_id, sender, now)
     pending_caption = caption if caption and project is None and not _looks_like_filename(caption or '') else None
     for idx, image_path in enumerate(photo_paths):
-        msg_id = base_msg_id if idx == 0 else f'{base_msg_id}#{idx}'
+        msg_id = _pool_msg_id(data, idx, base_msg_id)
         _insert_group_pending_image(
             group_id, sender, from_name, msg_id, image_path, pending_caption, batch_id, now,
-            wa_type=data.get('type'), mime_type=data.get('mimeType'),
+            wa_type=data.get('type'), mime_type=data.get('mimeType'), sender_jid=sender_jid,
         )
 
-    # Always reply in group when photos are received
     count = len(photo_paths)
+    quote_id = _quote_msg_id(data)
+    on_sent = lambda resp: _record_bot_prompt_msg(group_id, sender, resp)
+
     if caption and not project:
         ext_result = match_project_ext(caption)
         if ext_result.candidates:
             body = (
-                f'📷 收到 *{count}* 張照片。\n\n'
+                f'📷 收到 *{{count}}* 張照片。\n\n'
                 f'🔍 找到多個相似專案（輸入「{caption}」）：\n'
                 f'{_format_fuzzy_candidates(ext_result.candidates)}\n\n'
                 f'回覆數字選擇，或發送完整專案編碼。'
             )
             _set_fuzzy_choice(group_id, sender, ext_result.candidates)
-            _send_group_prompt(group_id, sender, body)
+            _schedule_pool_receipt(
+                count, body, group_id=group_id, group_sender=sender,
+                quote_msg_id=quote_id, on_sent=on_sent,
+            )
         else:
-            _send_group_prompt(
-                group_id, sender,
-                f'📷 收到 *{count}* 張照片，但找不到專案「{caption}」。\n'
+            _schedule_pool_receipt(
+                count,
+                f'📷 收到 *{{count}}* 張照片，但找不到專案「{caption}」。\n'
                 f'請回覆正確的專案編碼或名稱。\n發送 *projects* 查看專案列表。',
+                group_id=group_id, group_sender=sender,
+                quote_msg_id=quote_id, on_sent=on_sent,
             )
     else:
-        _send_group_prompt(
-            group_id, sender,
-            f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。',
+        _schedule_pool_receipt(
+            count,
+            _pool_receipt_body(),
+            group_id=group_id, group_sender=sender,
+            quote_msg_id=quote_id, on_sent=on_sent,
         )
 
     return jsonify({
@@ -827,6 +903,45 @@ def _parse_move_target(text):
     """Extract the project label from ``move <project>`` text."""
     m = re.match(r'^[\/!]?\s*move\s+(.+)$', (text or '').strip(), re.IGNORECASE)
     return m.group(1).strip() if m else None
+
+
+def _assign_unassigned_for_reply(sender, project, data):
+    """Assign pool files; if user quoted the bot receipt, only that batch."""
+    quoted = data.get('quotedMsgId') if data.get('hasQuotedMsg') else None
+    if quoted:
+        ids = _find_unassigned_pool_ids_by_quote(quoted, sender)
+        if ids:
+            n = assign_images_to_project(ids, project, 'user')
+            if n > 0:
+                from app.services.assignment_notify_service import schedule_assignment_confirmation
+                schedule_assignment_confirmation(project, n, phone=sender)
+            return n
+    return assign_all_unassigned(sender, project, 'user')
+
+
+def _find_unassigned_pool_ids_by_quote(quoted_msg_id, sender):
+    """Unassigned pool image ids when user quotes the bot's receipt (or their media msg)."""
+    if not quoted_msg_id:
+        return []
+    variants = _quoted_id_variants(quoted_msg_id)
+    docs = list(mongo.db.pool_images.find({
+        'phone': sender,
+        'projectId': {'$exists': False},
+        '$or': [
+            {'messageId': {'$in': variants}},
+            {'botReminderMsgIds': {'$in': variants}},
+        ],
+    }))
+    if not docs:
+        for qid in variants:
+            docs = list(mongo.db.pool_images.find({
+                'phone': sender,
+                'projectId': {'$exists': False},
+                'messageId': {'$regex': re.escape(qid)},
+            }))
+            if docs:
+                break
+    return [str(d['_id']) for d in docs]
 
 
 def _find_pool_images_by_quoted_msg(quoted_msg_id, sender):

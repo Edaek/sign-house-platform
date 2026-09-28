@@ -121,6 +121,9 @@ export default function WaProjectsPage() {
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                 {nasStatus.watchDir}
+                {!nasStatus.connected && nasStatus.mountHint && (
+                  <span className="block mt-1 text-amber-700 dark:text-amber-400">{nasStatus.mountHint}</span>
+                )}
                 {nasStatus.connected && nasStatus.foldersFound > 0 && (
                   <span className="ml-2">· {nasStatus.foldersFound} folder{nasStatus.foldersFound !== 1 ? 's' : ''} · {nasStatus.filesFound} image{nasStatus.filesFound !== 1 ? 's' : ''}</span>
                 )}

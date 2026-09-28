@@ -20,7 +20,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / '.env')
 
 from gateway.wakka_client import WakkaClient, WAMessage, TYPE_MAP
 from gateway.media_handler import handle_media_message
-from gateway.group_reminder import GroupReminderScheduler
+from gateway.burst_coalesce import MediaBurstCoalescer
+from gateway import consumer_lease
 
 logging.basicConfig(
     level=logging.INFO,
@@ -62,7 +63,7 @@ class LRUSet:
 
 recent_ids = LRUSet(MSG_DEDUP_MAX)
 
-reminder: Optional[GroupReminderScheduler] = None
+_burst_coalescer: Optional[MediaBurstCoalescer] = None
 
 _ALBUM_LIST_KEYS = (
     'albumItems', 'mediaItems', 'attachments', 'messages', 'files', 'items', 'mediaList', 'media',
@@ -131,13 +132,19 @@ def _media_parts_from_message(msg: WAMessage) -> list:
     return parts
 
 
-def forward_to_app(msg: WAMessage, photos: List[str], has_media: bool):
+def forward_to_app(
+    msg: WAMessage,
+    photos: List[str],
+    has_media: bool,
+    message_ids: Optional[List[str]] = None,
+):
     is_group = msg.from_jid.endswith('@g.us')
     actual_sender = (msg.author if is_group and msg.author else msg.from_jid)
 
     payload = {
         'messageId': msg.id,
         'from': actual_sender,
+        'author': msg.author if is_group else None,
         'fromName': msg.from_name,
         'timestamp': msg.timestamp,
         'type': msg.type,
@@ -151,6 +158,8 @@ def forward_to_app(msg: WAMessage, photos: List[str], has_media: bool):
         'hasQuotedMsg': msg.has_quoted_msg or False,
         'quotedMsgId': msg.quoted_msg_id,
     }
+    if message_ids:
+        payload['messageIds'] = message_ids
 
     try:
         resp = requests.post(
@@ -168,12 +177,21 @@ def forward_to_app(msg: WAMessage, photos: List[str], has_media: bool):
 
 
 def on_message(msg: WAMessage):
+    if not consumer_lease.may_consume():
+        return
+
     if recent_ids.contains(msg.id):
         logger.debug('[Gateway] Skipping duplicate %s', msg.id)
         return
 
     recent_ids.add(msg.id)
+    global _burst_coalescer
     logger.info('[Gateway] %s from %s: %s', msg.type, msg.from_jid, (msg.text or '(media)')[:80])
+
+    # WhatsApp album container — real images arrive as separate image messages.
+    if msg.type in ('other', 'unknown', 'album'):
+        logger.info('[Gateway] Skip container message %s (type=%s)', msg.id, msg.type)
+        return
 
     photos: List[str] = []
     media_failed = False
@@ -197,20 +215,19 @@ def on_message(msg: WAMessage):
     if msg.has_media and len(photos) > 1:
         logger.info('[Gateway] Downloaded %d media file(s) for message %s', len(photos), msg.id)
 
-    forward_to_app(msg, photos, msg.has_media)
+    if msg.has_media and not photos:
+        logger.info('[Gateway] Skip media message %s (download produced no files)', msg.id)
+        return
 
-    if (
-        msg.has_media
-        and msg.from_jid.endswith('@g.us')
-        and msg.author
-        and reminder
-        and os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
-    ):
-        reminder.trigger(msg.from_jid, msg.author)
-
+    if msg.has_media and photos and _burst_coalescer:
+        _burst_coalescer.submit(msg, photos, True)
+    elif msg.has_media and photos:
+        forward_to_app(msg, photos, True)
+    elif not msg.has_media or msg.type in ('chat', 'text'):
+        forward_to_app(msg, photos, msg.has_media)
 
 def main():
-    global reminder
+    global _burst_coalescer
 
     if not WAKKA_API_KEY:
         logger.error('[Gateway] WAKKA_API_KEY is required. Set it in .env')
@@ -231,16 +248,12 @@ def main():
     client.on_message(on_message)
     client.on_ready(lambda phone: logger.info('[Gateway] WhatsApp ready. Phone: %s', phone))
 
-    reminder = GroupReminderScheduler(
-        mongo_uri=MONGO_URI,
-        wakka_url=WAKKA_API_URL,
-        wakka_key=WAKKA_API_KEY,
-        media_dir=MEDIA_DIR,
-    )
+    _burst_coalescer = MediaBurstCoalescer(forward_to_app)
+    if not consumer_lease.start():
+        sys.exit(1)
 
     def shutdown(sig, frame):
         logger.info('[Gateway] Shutting down...')
-        reminder.stop()
         client.disconnect()
         sys.exit(0)
 
@@ -248,7 +261,6 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     client.connect()
-    reminder.start()
 
     try:
         while True:

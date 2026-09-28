@@ -22,6 +22,13 @@ class NasMountService:
 
     def init_app(self, app):
         self._app = app
+        if not self.is_available():
+            watch = self._watch_dir()
+            logger.warning(
+                '[NAS] Local mount not found: %s — run backend/scripts/mount_nas_share.sh '
+                '(use --via-tunnel on MacBook away from LAN)',
+                watch or '(NAS_WATCH_DIR empty)',
+            )
 
     def _watch_dir(self):
         return self._app.config.get('NAS_WATCH_DIR', '') if self._app else ''
@@ -45,13 +52,20 @@ class NasMountService:
                                 file_count += 1
             except OSError:
                 pass
-        return {
+        out = {
             'enabled': bool(watch_dir),
             'connected': available,
             'watchDir': watch_dir,
             'foldersFound': folder_count,
             'filesFound': file_count,
         }
+        if watch_dir and not available:
+            out['disconnectReason'] = 'mount_missing'
+            out['mountHint'] = (
+                'Mount the SMB share so this folder exists (Mac Mini: Finder; '
+                'MacBook: ./scripts/mount_nas_share.sh --via-tunnel).'
+            )
+        return out
 
     def create_folder(self, project_code):
         """Create a project folder on the NAS mount. Returns the folder path."""

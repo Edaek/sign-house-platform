@@ -81,12 +81,19 @@ class Config:
         os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads', 'wa-media'),
     )
 
-    # Group @mention reminders for uncategorized images (off when using Media Pool manual assign)
-    GROUP_REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
+    # Group periodic reminders for uncategorized images
+    GROUP_REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'true').lower() == 'true'
     GROUP_REMINDER_INTERVAL_MS = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000))
+    GROUP_REMINDER_COOLDOWN_S = int(os.environ.get('GROUP_REMINDER_COOLDOWN_S', '40'))
+    GROUP_REMINDER_ATTACH_COMPOSITE = (
+        os.environ.get('GROUP_REMINDER_ATTACH_COMPOSITE', 'false').lower() == 'true'
+    )
 
-    # Private-chat pool reminder after unassigned media (30s timer)
-    POOL_REMINDER_ENABLED = os.environ.get('POOL_REMINDER_ENABLED', 'false').lower() == 'true'
+    # Private-chat: poll Media Pool for unassigned images (like group @ reminders)
+    POOL_REMINDER_ENABLED = os.environ.get('POOL_REMINDER_ENABLED', 'true').lower() == 'true'
+    POOL_REMINDER_INTERVAL_MS = int(os.environ.get('POOL_REMINDER_INTERVAL_MS', '40000'))
+    POOL_REMINDER_COOLDOWN_S = int(os.environ.get('POOL_REMINDER_COOLDOWN_S', '50'))
+    POOL_REMINDER_BATCH_GRACE_S = int(os.environ.get('POOL_REMINDER_BATCH_GRACE_S', '5'))
 
     # Poll NAS mount for new folders/files → web projects/records (0 = disabled)
     NAS_SYNC_INTERVAL_S = int(os.environ.get('NAS_SYNC_INTERVAL_S', 60))

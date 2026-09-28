@@ -14,11 +14,12 @@ from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
-REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'false').lower() == 'true'
+REMINDER_ENABLED = os.environ.get('GROUP_REMINDER_ENABLED', 'true').lower() == 'true'
 REMINDER_INTERVAL = int(os.environ.get('GROUP_REMINDER_INTERVAL_MS', 40000)) / 1000
-REMINDER_COOLDOWN = 50   # 50s between reminders per sender
-FAILED_COOLDOWN = 50     # 50s after send failure
-BATCH_GRACE = 5         # seconds
+REMINDER_COOLDOWN = int(os.environ.get('GROUP_REMINDER_COOLDOWN_S', '40'))
+FAILED_COOLDOWN = 40
+BATCH_GRACE = int(os.environ.get('GROUP_REMINDER_BATCH_GRACE_S', '5'))
+ATTACH_COMPOSITE = os.environ.get('GROUP_REMINDER_ATTACH_COMPOSITE', 'false').lower() == 'true'
 MAX_SEND_BYTES = 512 * 1024   # cap reminder attachment size for Wakka/WhatsApp
 THUMB_SIZE = 400
 SINGLE_THUMB_MAX = 800
@@ -34,6 +35,7 @@ class GroupReminderScheduler:
         self._running = False
         self._failed_cooldowns = {}   # type: dict
         self._trigger_timers = {}    # type: dict
+        self._last_sent_at = {}      # sender_key -> unix ts
         self._client: Optional[MongoClient] = None
 
     @property
@@ -130,19 +132,36 @@ class GroupReminderScheduler:
                 if now_ts < failed_until:
                     continue
 
+                last_local = self._last_sent_at.get(sender_key, 0)
+                if now_ts - last_local < REMINDER_COOLDOWN:
+                    continue
+
                 count = len(images)
-                if count == 1:
-                    message = f'📷 @{sender_name} 有 1 張圖片待歸類，請*引用此訊息*回覆專案編碼（如 P-001）或專案名稱。'
-                else:
-                    message = f'📷 @{sender_name} 有 *{count}* 張圖片待歸類，請*引用此訊息*回覆專案編碼或專案名稱即可歸類全部圖片。'
+                try:
+                    from app.services.pool_receipt_notify_service import format_pool_receipt_body
+                    message = format_pool_receipt_body(count)
+                except Exception:
+                    if count == 1:
+                        message = (
+                            '📷 有 1 張圖片待歸類，請*引用此訊息*回覆專案編碼（如 P-001）或專案名稱。'
+                        )
+                    else:
+                        message = (
+                            f'📷 有 *{count}* 張圖片待歸類，請*引用此訊息*回覆專案編碼或專案名稱即可歸類全部圖片。'
+                        )
 
-                composite = self._build_composite(images[:9])
-                if composite:
-                    logger.info('[GroupReminder] Composite built (%d bytes)', len(composite))
-                else:
-                    logger.warning('[GroupReminder] No composite image available for %s', sender_key)
+                composite = None
+                if ATTACH_COMPOSITE:
+                    composite = self._build_composite(images[:9])
+                    if composite:
+                        logger.info('[GroupReminder] Composite built (%d bytes)', len(composite))
+                    else:
+                        logger.warning('[GroupReminder] No composite image available for %s', sender_key)
 
-                resp = self._send_to_group(group_id, message, composite)
+                quote_id = newest.get('messageId') or images[0].get('messageId')
+                resp = self._send_to_group(
+                    group_id, message, composite, quoted_msg_id=quote_id,
+                )
 
                 now_dt = datetime.now(timezone.utc)
                 if resp:
@@ -158,6 +177,7 @@ class GroupReminderScheduler:
                             '$push': {'botReminderMsgIds': msg_id},
                         })
                     self._failed_cooldowns.pop(sender_key, None)
+                    self._last_sent_at[sender_key] = now_ts
                     logger.info('[GroupReminder] Sent reminder for %s (%d images)', sender_key, count)
                 else:
                     self._failed_cooldowns[sender_key] = now_ts + FAILED_COOLDOWN
@@ -176,13 +196,16 @@ class GroupReminderScheduler:
         message: str,
         media_data_uri: Optional[str] = None,
         *,
+        quoted_msg_id: Optional[str] = None,
         _retry_without_media: bool = False,
     ) -> Optional[dict]:
         try:
             group_url = f'{self.wakka_url}/api/v1/groups/{url_quote(group_id, safe="")}'
             body = {'message': message}
-            if media_data_uri:
+            if media_data_uri and not _retry_without_media:
                 body['mediaUrl'] = media_data_uri
+            if quoted_msg_id:
+                body['quotedMessageId'] = quoted_msg_id
 
             resp = requests.post(
                 f'{group_url}/send',
@@ -192,11 +215,15 @@ class GroupReminderScheduler:
             )
 
             if not resp.ok:
-                logger.error('[GroupReminder] Wakka send failed (%d): %s', resp.status_code, resp.text[:200])
+                logger.error(
+                    '[GroupReminder] Wakka send failed (%d): %s',
+                    resp.status_code, resp.text[:200],
+                )
                 if media_data_uri and not _retry_without_media:
                     logger.info('[GroupReminder] Retrying without media attachment')
                     return self._send_to_group(
-                        group_id, message, media_data_uri=None, _retry_without_media=True,
+                        group_id, message, media_data_uri=None,
+                        quoted_msg_id=quoted_msg_id, _retry_without_media=True,
                     )
                 return None
             return resp.json()

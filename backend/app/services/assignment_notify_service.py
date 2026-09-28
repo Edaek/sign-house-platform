@@ -34,10 +34,11 @@ def schedule_assignment_confirmation(
     if count <= 0 or not project:
         return
 
+    proj_key = str(project.get('_id') or project.get('code', ''))
     if group_id:
-        key = f'g:{group_id}:{project.get("code", "")}'
+        key = f'g:{group_id}:{proj_key}'
     elif phone:
-        key = f'p:{phone}:{project.get("code", "")}'
+        key = f'p:{phone}:{proj_key}'
     else:
         return
 

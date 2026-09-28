@@ -26,8 +26,11 @@ def normalize_phone(phone):
     digits = ''.join(c for c in phone if c.isdigit())
     return f'{digits}@c.us'
 
-def send_message(to, text):
-    return _wakka_request('/api/v1/messages/send', 'POST', {'to': normalize_phone(to), 'message': text})
+def send_message(to, text, quoted_msg_id=None):
+    body = {'to': normalize_phone(to), 'message': text}
+    if quoted_msg_id:
+        body['quotedMessageId'] = quoted_msg_id
+    return _wakka_request('/api/v1/messages/send', 'POST', body)
 
 def send_media(to, media_url, caption=None, filename=None):
     body = {'to': normalize_phone(to), 'mediaUrl': media_url}
@@ -37,8 +40,10 @@ def send_media(to, media_url, caption=None, filename=None):
 
 def send_group_message(group_id, text, media_data_uri=None, quoted_msg_id=None):
     body = {'message': text}
-    if media_data_uri: body['mediaUrl'] = media_data_uri
-    if quoted_msg_id: body['quotedMessageId'] = quoted_msg_id
+    if media_data_uri:
+        body['mediaUrl'] = media_data_uri
+    if quoted_msg_id:
+        body['quotedMessageId'] = quoted_msg_id
     return _wakka_request(f'/api/v1/groups/{requests.utils.quote(group_id, safe="")}/send', 'POST', body)
 
 def get_token_usage():

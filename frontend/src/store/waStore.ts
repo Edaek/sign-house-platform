@@ -62,6 +62,8 @@ export interface NasStatus {
   watchDir: string
   foldersFound: number
   filesFound: number
+  disconnectReason?: string
+  mountHint?: string
   lastAutoSyncAt?: string
   lastRecordsImported?: number
   autoSyncIntervalSec?: number
