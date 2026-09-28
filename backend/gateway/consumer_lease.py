@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 from datetime import datetime, timedelta
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +15,7 @@ TTL_S = int(os.environ.get('GATEWAY_LEASE_TTL_S', '45'))
 RENEW_S = int(os.environ.get('GATEWAY_LEASE_RENEW_S', '15'))
 
 _stop = threading.Event()
-_renew_thread: threading.Thread | None = None
+_renew_thread: Optional[threading.Thread] = None
 _cached_active = False
 _cached_at = 0.0
 _CACHE_S = 3.0

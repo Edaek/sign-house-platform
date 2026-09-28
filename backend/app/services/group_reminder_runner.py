@@ -1,12 +1,13 @@
 """Run group uncategorized-image reminders inside the Flask process."""
 import logging
 import os
+from typing import Optional
 
 from gateway.group_reminder import GroupReminderScheduler
 
 logger = logging.getLogger(__name__)
 
-_runner: GroupReminderScheduler | None = None
+_runner: Optional[GroupReminderScheduler] = None
 
 
 def init_app(app) -> None:
