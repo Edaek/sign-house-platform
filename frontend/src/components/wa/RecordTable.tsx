@@ -4,6 +4,7 @@ import WaConfidenceBadge from './ConfidenceBadge'
 import RecordDetailDrawer from './RecordDetailDrawer'
 import { FileText, Image, Paperclip } from 'lucide-react'
 import type { WaRecord, ConfidenceLevel } from '../../store/waStore'
+import { recordRemarkDisplay, recordRemarkText } from '../../lib/waRecordRemark'
 
 function completionPercent(record: WaRecord): number {
   if (record.extractedFields.length === 0) return 0
@@ -76,7 +77,7 @@ export default function WaRecordTable({ records }: RecordTableProps) {
               <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Sender</th>
-              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Message</th>
+              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 min-w-[140px]">Remark</th>
               <th className="px-4 py-2.5 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Media</th>
               <th className="px-4 py-2.5 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Fields</th>
               <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</th>
@@ -108,7 +109,14 @@ export default function WaRecordTable({ records }: RecordTableProps) {
                     </td>
                     <td className="px-4 py-2.5"><WaStatusBadge status={record.status} size="sm" /></td>
                     <td className="px-4 py-2.5 text-slate-600 dark:text-slate-400">{record.senderName || record.senderPhone}</td>
-                    <td className="px-4 py-2.5 max-w-[180px] truncate text-slate-600 dark:text-slate-400">{record.rawMessage}</td>
+                    <td
+                      className="px-4 py-2.5 max-w-[220px] text-slate-600 dark:text-slate-400"
+                      title={recordRemarkText(record) || undefined}
+                    >
+                      <span className="line-clamp-2 text-sm leading-snug break-words">
+                        {recordRemarkDisplay(record)}
+                      </span>
+                    </td>
                     <td className="px-4 py-2.5 text-center"><MediaCell record={record} /></td>
                     <td className="px-4 py-2.5 text-center">
                       {record.extractedFields.length > 0 ? (

@@ -30,6 +30,8 @@ export interface WaRecord {
   status: WaRecordStatus
   type: string
   rawMessage: string
+  /** WhatsApp classify trailing note (API may fill when rawMessage is [Pool media]) */
+  remark?: string
   senderPhone: string
   senderName?: string
   photos: string[]

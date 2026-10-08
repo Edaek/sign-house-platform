@@ -348,6 +348,79 @@ def _record_send(key: str, count: int) -> None:
     )
 
 
+def _cancel_receipt_key(key: str) -> None:
+    """Drop pending receipt timer/doc for one coalesce key."""
+    if not key:
+        return
+    with _lock:
+        existing = _timers.pop(key, None)
+        if existing:
+            existing.cancel()
+    try:
+        from app import mongo
+
+        mongo.db.wa_system.delete_one({'_id': _pending_doc_id(key)})
+    except Exception:
+        logger.exception('[PoolReceipt] Failed to delete pending receipt %s', key)
+
+
+def cancel_pool_receipt_prompt(
+    *,
+    phone: Optional[str] = None,
+    group_id: Optional[str] = None,
+    group_sender: Optional[str] = None,
+    batch_id: Optional[str] = None,
+) -> None:
+    key = _pending_key(
+        phone=phone, group_id=group_id, group_sender=group_sender, batch_id=batch_id,
+    )
+    if key:
+        _cancel_receipt_key(key)
+
+
+def cancel_pool_receipt_for_group_sender(
+    group_id: str,
+    group_sender: str,
+    batch_id: Optional[str] = None,
+) -> None:
+    """Cancel scheduled receipt(s) for a group sender (optional batch)."""
+    if batch_id:
+        cancel_pool_receipt_prompt(
+            group_id=group_id, group_sender=group_sender, batch_id=batch_id,
+        )
+    try:
+        from app import mongo
+
+        digits = _normalize_phone(group_sender)
+        prefix = f'pool_receipt_pending:g:{group_id}:{digits}'
+        for doc in mongo.db.wa_system.find({'_id': {'$regex': f'^{re.escape(prefix)}'}}):
+            k = doc.get('key')
+            if not k and doc['_id'].startswith('pool_receipt_pending:'):
+                k = doc['_id'][len('pool_receipt_pending:'):]
+            if k:
+                _cancel_receipt_key(k)
+    except Exception:
+        logger.exception('[PoolReceipt] Failed to cancel group receipts for %s', group_id)
+
+
+def cancel_pool_receipt_for_phone(phone: str, batch_id: Optional[str] = None) -> None:
+    if batch_id:
+        cancel_pool_receipt_prompt(phone=phone, batch_id=batch_id)
+    try:
+        from app import mongo
+
+        digits = _normalize_phone(phone)
+        prefix = f'pool_receipt_pending:p:{digits}'
+        for doc in mongo.db.wa_system.find({'_id': {'$regex': f'^{re.escape(prefix)}'}}):
+            k = doc.get('key')
+            if not k and doc['_id'].startswith('pool_receipt_pending:'):
+                k = doc['_id'][len('pool_receipt_pending:'):]
+            if k:
+                _cancel_receipt_key(k)
+    except Exception:
+        logger.exception('[PoolReceipt] Failed to cancel private receipts for %s', phone)
+
+
 def _flush(key: str) -> None:
     if not _flask_app:
         logger.warning('[PoolReceipt] Flask app not initialized')
@@ -379,11 +452,12 @@ def _flush(key: str) -> None:
                 return
 
             entry = mongo.db.wa_system.find_one_and_delete({'_id': doc_id})
-            if not entry or int(entry.get('fileCount') or 0) <= 0:
+            if not entry:
                 return
 
-            count = int(entry.get('fileCount') or 0)
+            count = _resolve_count(entry)
             if count <= 0:
+                logger.info('[PoolReceipt] Skip send — nothing left to classify for %s', key)
                 return
 
             if _duplicate_send(key, count):

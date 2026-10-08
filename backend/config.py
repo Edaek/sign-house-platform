@@ -95,6 +95,9 @@ class Config:
     POOL_REMINDER_COOLDOWN_S = int(os.environ.get('POOL_REMINDER_COOLDOWN_S', '50'))
     POOL_REMINDER_BATCH_GRACE_S = int(os.environ.get('POOL_REMINDER_BATCH_GRACE_S', '5'))
 
+    # Burst project hint after user sends classify text before photos arrive
+    WA_BURST_PROJECT_TTL_S = int(os.environ.get('WA_BURST_PROJECT_TTL_S', '120'))
+
     # Poll NAS mount for new folders/files → web projects/records (0 = disabled)
     NAS_SYNC_INTERVAL_S = int(os.environ.get('NAS_SYNC_INTERVAL_S', 60))
 

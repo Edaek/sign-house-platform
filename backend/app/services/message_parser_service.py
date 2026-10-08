@@ -10,6 +10,63 @@ PROJECT_PATTERNS = [
     re.compile(r'^#(\d{1,4})\b'),
 ]
 
+# Leading project number + free-text remark, e.g. "2899 carpark sign"
+LEADING_PROJECT_NUM_RE = re.compile(r'^(\d{1,6})(?:\s+(.*))?$', re.DOTALL)
+
+
+def split_classify_label_and_remark(text):
+    """Split user classify line into project label and trailing remark.
+
+    Examples:
+        "2899 carpark sign" -> ("2899", "carpark sign")
+        "P-001 lobby"       -> ("1", "lobby")  # numeric part for code expansion
+        "Sunrise Tower"     -> ("Sunrise Tower", "")
+    """
+    trimmed = ' '.join((text or '').strip().split())
+    if not trimmed:
+        return '', ''
+
+    for pattern in PROJECT_PATTERNS:
+        m = pattern.match(trimmed)
+        if m:
+            return m.group(1), trimmed[m.end():].strip()
+
+    m = LEADING_PROJECT_NUM_RE.match(trimmed)
+    if m and m.group(2) is not None and str(m.group(2)).strip():
+        return m.group(1), str(m.group(2)).strip()
+
+    parts = trimmed.split(None, 1)
+    if len(parts) == 2:
+        first, rest = parts[0].strip(), parts[1].strip()
+        if rest and _first_token_is_classify_code(first):
+            return first, rest
+
+    return trimmed, ''
+
+
+def _first_token_is_classify_code(token):
+    """First word is a project code token (not a multi-word project name)."""
+    if not token:
+        return False
+    if token.isdigit():
+        return True
+    for pattern in PROJECT_PATTERNS:
+        if pattern.match(token):
+            return True
+    # Uppercase codes like TEST (not "Sunrise" style names)
+    if len(token) >= 2 and re.match(r'^[A-Z0-9#_-]+$', token):
+        return True
+    try:
+        if mongo.db and mongo.db.wa_projects.find_one({
+            'status': 'active',
+            'code': {'$regex': f'^{re.escape(token)}$', '$options': 'i'},
+        }):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def extract_project_code(text):
     trimmed = text.strip()
     for pattern in PROJECT_PATTERNS:
@@ -25,6 +82,9 @@ def extract_project_code(text):
     return None
 
 def remove_project_code(text):
+    _label, remark = split_classify_label_and_remark(text)
+    if remark:
+        return remark
     return re.sub(r'^[Pp]?[#\-]?\d{1,4}\s*', '', text).strip()
 
 def parse_message(text):

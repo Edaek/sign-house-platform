@@ -86,8 +86,15 @@ def get_project_records(project_id):
     total = mongo.db.wa_records.count_documents(query)
     skip = (page - 1) * limit
     records = list(mongo.db.wa_records.find(query).sort('createdAt', -1).skip(skip).limit(limit))
+    from app.services.image_pool_service import resolve_record_remark
+
+    out = []
+    for r in records:
+        d = serialize_doc(r)
+        d['remark'] = resolve_record_remark(r)
+        out.append(d)
     return jsonify({
-        'records': [serialize_doc(r) for r in records],
+        'records': out,
         'pagination': {
             'page': page,
             'limit': limit,

@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import WaStatusBadge from './StatusBadge'
 import WaConfidenceBadge from './ConfidenceBadge'
 import { useWaStore, type WaRecord, type ConfidenceLevel } from '../../store/waStore'
+import { recordRemarkDisplay } from '../../lib/waRecordRemark'
 import toast from 'react-hot-toast'
 import {
   CheckCircle2,
@@ -111,8 +113,8 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
     }
   }
 
-  return (
-    <>
+  const drawerLayer =
+    typeof document !== 'undefined' ? (
       <AnimatePresence>
         {open && (
           <>
@@ -120,15 +122,18 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 z-50 bg-black/50"
+              className="fixed inset-0 z-[10040] bg-black/50"
               onClick={onClose}
+              aria-hidden
             />
             <motion.div
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="fixed right-0 top-0 bottom-0 z-50 w-[500px] sm:w-[600px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 overflow-y-auto"
+              className="fixed inset-y-0 right-0 z-[10041] w-[500px] sm:w-[600px] bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-700 overflow-y-auto shadow-2xl"
+              role="dialog"
+              aria-modal
             >
               {/* Header */}
               <div className="sticky top-0 z-10 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700 px-6 py-4">
@@ -186,11 +191,13 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                   </div>
                 )}
 
-                {/* Original Message */}
+                {/* Classify remark from WhatsApp (编号后的备注) */}
                 <section>
-                  <SectionHeader>Original Message</SectionHeader>
+                  <SectionHeader>Remark</SectionHeader>
                   <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30 p-3">
-                    <p className="text-sm leading-relaxed text-slate-700 dark:text-slate-300">{record.rawMessage}</p>
+                    <p className="text-sm leading-relaxed text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words">
+                      {recordRemarkDisplay(record)}
+                    </p>
                   </div>
                 </section>
 
@@ -316,13 +323,22 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
           </>
         )}
       </AnimatePresence>
+    ) : null
 
-      {/* Image preview overlay */}
-      {previewImage && (
-        <div className="fixed inset-0 z-[60] bg-black/80 flex items-center justify-center cursor-pointer" onClick={() => setPreviewImage(null)}>
-          <img src={previewImage} alt="Preview" className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
-        </div>
-      )}
+  return (
+    <>
+      {drawerLayer && createPortal(drawerLayer, document.body)}
+
+      {previewImage &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10050] bg-black/80 flex items-center justify-center cursor-pointer"
+            onClick={() => setPreviewImage(null)}
+          >
+            <img src={previewImage} alt="Preview" className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+          </div>,
+          document.body,
+        )}
     </>
   )
 }

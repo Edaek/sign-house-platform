@@ -11,7 +11,7 @@ from app import mongo
 from app.services.wa_send_service import send_message
 from app.services.reference_number_service import generate_reference_number
 from app.services.nas_upload_service import upload_to_nas, is_nas_enabled
-from app.services.message_parser_service import extract_project_code
+from app.services.message_parser_service import extract_project_code, split_classify_label_and_remark
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,18 @@ def _match_project_single(trimmed, *, active_only=True):
     }))
     if len(partial) == 1:
         return partial[0]
+    # Bare leading number used as project code (e.g. "2899" from "2899 carpark sign")
+    if trimmed.isdigit():
+        project = mongo.db.wa_projects.find_one({
+            **query,
+            'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
+        })
+        if project:
+            return project
+        codes = _expand_project_codes(trimmed)
+        matches = _find_projects_by_codes(codes, query)
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -192,11 +204,12 @@ def _fuzzy_match_projects(text, *, active_only=True, limit=5):
 class MatchResult:
     """Wrapper returned by :func:`match_project_ext` to carry fuzzy candidates."""
 
-    __slots__ = ('project', 'candidates')
+    __slots__ = ('project', 'candidates', 'remark')
 
-    def __init__(self, project=None, candidates=None):
+    def __init__(self, project=None, candidates=None, remark=None):
         self.project = project
         self.candidates = candidates or []
+        self.remark = remark
 
     def __bool__(self):
         return self.project is not None
@@ -213,31 +226,42 @@ def match_project_ext(text, *, active_only=True):
       or high-score fuzzy).
     * ``result.candidates`` carries up to 5 fuzzy suggestions when no single
       confident match exists but there are mid-score hits.
+    * ``result.remark`` is set when input is ``<project label> <remark>`` (e.g.
+      ``2899 carpark sign`` → match on ``2899``, remark ``carpark sign``).
     """
     trimmed = _normalize_project_label(text)
     if not trimmed:
         return MatchResult()
 
-    hit = _match_project_single(trimmed, active_only=active_only)
+    label, remark = split_classify_label_and_remark(trimmed)
+    match_key = label or trimmed
+    label_only = bool(remark)
+
+    def _result(project=None, candidates=None):
+        return MatchResult(project=project, candidates=candidates, remark=remark or None)
+
+    hit = _match_project_single(match_key, active_only=active_only)
     if hit:
-        return MatchResult(project=hit)
+        return _result(project=hit)
 
     # Ambiguous shorthand codes like "P1" matching both P-001 and P-0001
-    code_candidates = _match_project_code_candidates(trimmed, active_only=active_only)
+    code_candidates = _match_project_code_candidates(match_key, active_only=active_only)
     if code_candidates:
-        return MatchResult(candidates=code_candidates)
+        return _result(candidates=code_candidates)
 
-    for sep in (' - ', ' – ', ' — ', '—'):
-        if sep in trimmed:
-            left, _, right = trimmed.partition(sep)
-            for part in (left.strip(), right.strip()):
-                if not part:
-                    continue
-                hit = _match_project_single(part, active_only=active_only)
-                if hit:
-                    return MatchResult(project=hit)
+    if not label_only:
+        for sep in (' - ', ' – ', ' — ', '—'):
+            if sep in trimmed:
+                left, _, right = trimmed.partition(sep)
+                for part in (left.strip(), right.strip()):
+                    if not part:
+                        continue
+                    hit = _match_project_single(part, active_only=active_only)
+                    if hit:
+                        return _result(project=hit)
 
-    scored = _fuzzy_match_projects(trimmed, active_only=active_only)
+    fuzzy_text = match_key if label_only else trimmed
+    scored = _fuzzy_match_projects(fuzzy_text, active_only=active_only)
     if not scored:
         return MatchResult()
 
@@ -245,11 +269,11 @@ def match_project_ext(text, *, active_only=True):
     high_hits = [(p, s) for p, s in scored if s >= FUZZY_HIGH]
 
     if len(high_hits) == 1:
-        return MatchResult(project=high_hits[0][0])
+        return _result(project=high_hits[0][0])
 
     mid_hits = [(p, s) for p, s in scored if s >= FUZZY_MID]
     if mid_hits:
-        return MatchResult(candidates=mid_hits)
+        return _result(candidates=mid_hits)
 
     return MatchResult()
 
@@ -334,7 +358,30 @@ def save_to_pool(
     return {'auto_assigned': False, 'pool_id': pool_id}
 
 
-def assign_images_to_project(image_ids, project, assigned_by='operator'):
+_POOL_MEDIA_PLACEHOLDER = '[Pool media]'
+
+
+def resolve_record_remark(record):
+    """Display remark for UI: rawMessage or pool image caption (WhatsApp classify note)."""
+    msg = (record.get('rawMessage') or '').strip()
+    if msg and msg.lower() != _POOL_MEDIA_PLACEHOLDER.lower():
+        return msg
+    rid = record.get('_id')
+    if rid:
+        img = mongo.db.pool_images.find_one(
+            {
+                'recordId': rid,
+                'caption': {'$exists': True, '$nin': [None, '']},
+            },
+            projection={'caption': 1},
+        )
+        cap = (img or {}).get('caption')
+        if cap and str(cap).strip():
+            return str(cap).strip()
+    return msg or ''
+
+
+def assign_images_to_project(image_ids, project, assigned_by='operator', *, remark=None):
     """Assign pool images to a project. Creates a WA record with all photos."""
     object_ids = [ObjectId(i) for i in image_ids]
     images = list(mongo.db.pool_images.find({
@@ -345,8 +392,20 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
     if not images:
         return 0
 
+    remark = (remark or '').strip() or None
+    if remark:
+        mongo.db.pool_images.update_many(
+            {'_id': {'$in': object_ids}},
+            {'$set': {'caption': remark, 'updatedAt': datetime.utcnow()}},
+        )
+        for img in images:
+            img['caption'] = remark
+
     photos = [img['imagePath'] for img in images if img.get('imagePath')]
-    caption = next((img['caption'] for img in images if img.get('caption')), '[Pool media]')
+    caption = remark or next(
+        (img['caption'] for img in images if img.get('caption')),
+        _POOL_MEDIA_PLACEHOLDER,
+    )
     kinds = {img.get('mediaType') or infer_pool_media_meta(img.get('imagePath'))[0] for img in images}
     if kinds <= {'image'}:
         rec_type, rec_media = 'photo', 'image'
@@ -533,7 +592,7 @@ def assign_images_to_project(image_ids, project, assigned_by='operator'):
     return len(images)
 
 
-def assign_all_unassigned(phone, project, assigned_by='user'):
+def assign_all_unassigned(phone, project, assigned_by='user', *, remark=None):
     """Assign all unassigned pool images from a phone to a project."""
     cancel_reminder(phone)
 
@@ -546,7 +605,7 @@ def assign_all_unassigned(phone, project, assigned_by='user'):
         return 0
 
     ids = [str(img['_id']) for img in unassigned]
-    count = assign_images_to_project(ids, project, assigned_by)
+    count = assign_images_to_project(ids, project, assigned_by, remark=remark)
 
     if assigned_by == 'user' and count > 0:
         from app.services.assignment_notify_service import schedule_assignment_confirmation
