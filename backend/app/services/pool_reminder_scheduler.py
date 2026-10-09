@@ -9,6 +9,7 @@ from app.services.pool_receipt_notify_service import (
     format_pool_receipt_body,
     mark_pool_images_reminded,
     phone_match_query,
+    should_skip_receipt_after_classify_reply,
 )
 from app.services.wa_send_service import send_message
 
@@ -63,9 +64,10 @@ class PoolReminderScheduler:
             now_ts = time.time()
 
             # Group uploads also mirror into pool_images; those use group_reminder instead.
+            # Private uploads always have batchId; group rows use group_reminder instead.
             pending = list(mongo.db.pool_images.find({
                 'projectId': {'$exists': False},
-                'batchId': {'$exists': False},
+                'groupId': {'$exists': False},
             }))
             if not pending:
                 return
@@ -84,6 +86,11 @@ class PoolReminderScheduler:
                 images.sort(key=lambda x: x.get('createdAt') or datetime.min)
                 newest = images[-1]
                 phone = newest.get('phone') or key
+                digits = re.sub(r'\D', '', phone or '')
+                if digits and mongo.db.wa_system.find_one({'_id': f'wa_ai_confirm:p:{digits}'}):
+                    continue
+                if digits and mongo.db.wa_system.find_one({'_id': f'wa_fuzzy_choice:p:{digits}'}):
+                    continue
 
                 created = newest.get('createdAt')
                 if created:
@@ -105,13 +112,26 @@ class PoolReminderScheduler:
                 if now_ts < self._failed_until.get(key, 0):
                     continue
 
+                if should_skip_receipt_after_classify_reply(
+                    phone, newest.get('batchId'),
+                ):
+                    continue
+
                 count = len(images)
                 quote_id = newest.get('messageId') or images[0].get('messageId')
                 batch_id = newest.get('batchId')
                 body = format_pool_receipt_body(count)
 
                 try:
-                    resp = send_message(phone, body, quoted_msg_id=quote_id)
+                    from app.services.wa_pool_nudge_service import send_private_classify_nudge
+
+                    resp = send_private_classify_nudge(
+                        phone,
+                        body,
+                        quote_msg_id=quote_id,
+                        image_path=newest.get('imagePath'),
+                        quoted_payload=newest.get('waMessageRaw'),
+                    )
                 except Exception:
                     logger.exception('[PoolReminder] Send failed for %s', key)
                     self._failed_until[key] = now_ts + cooldown

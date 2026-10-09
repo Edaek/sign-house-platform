@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { useWaStore, type PoolImage } from '../../store/waStore'
 import toast from 'react-hot-toast'
 import {
@@ -23,6 +24,7 @@ import {
   poolIsPreviewableImage,
   poolFileExtension,
 } from '../../lib/waPoolMedia'
+import { formatWaProjectLabel } from '../../lib/waProjects'
 
 function formatPhone(phone: string, name?: string) {
   if (name) return `${name} (${phone})`
@@ -326,9 +328,11 @@ export default function WaImagePoolPage() {
                           <Clock className="h-3 w-3" />{timeAgo(img.createdAt)}
                         </div>
                         {img.caption && <p className="text-xs text-slate-800 dark:text-slate-200 truncate">{img.caption}</p>}
-                        {img.projectName && (
+                        {img.projectCode && (
                           <p className="text-[11px] text-sign-600 dark:text-sign-400 font-medium truncate">
-                            {img.projectCode} - {img.projectName}
+                            {img.projectName && img.projectName.toLowerCase() !== img.projectCode.toLowerCase()
+                              ? `${img.projectCode} - ${img.projectName}`
+                              : img.projectCode}
                           </p>
                         )}
                       </div>
@@ -341,73 +345,93 @@ export default function WaImagePoolPage() {
         </div>
       )}
 
-      {/* Assign dialog */}
-      {assignDialogOpen && (
-        <div className="fixed inset-0 z-[10040] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 pt-20 sm:pt-4">
-          <div className="card p-6 w-full max-w-md max-h-[min(90vh,calc(100vh-5rem))] overflow-y-auto space-y-4 shadow-xl">
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-              Assign {assignImageIds.length} file{assignImageIds.length === 1 ? '' : 's'} to project
-            </h2>
-            <select
-              value={assigningProjectId}
-              onChange={(e) => setAssigningProjectId(e.target.value)}
-              className="input w-full"
+      {/* Assign dialog — portal to body so mask covers full viewport (no layout offset) */}
+      {assignDialogOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10040] flex items-center justify-center bg-black/50 p-4"
+            role="presentation"
+            onClick={() => {
+              setAssignDialogOpen(false)
+              setAssignImageIds([])
+            }}
+            onKeyDown={(e) => e.key === 'Escape' && setAssignDialogOpen(false)}
+          >
+            <div
+              className="card p-6 w-full max-w-md max-h-[min(90vh,calc(100vh-2rem))] overflow-y-auto space-y-4 shadow-xl"
+              role="dialog"
+              aria-modal
+              onClick={(e) => e.stopPropagation()}
             >
-              <option value="">Select a project...</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
-              ))}
-            </select>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setAssignDialogOpen(false)
-                  setAssignImageIds([])
-                }}
-                className="btn btn-secondary"
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                Assign {assignImageIds.length} file{assignImageIds.length === 1 ? '' : 's'} to project
+              </h2>
+              <select
+                value={assigningProjectId}
+                onChange={(e) => setAssigningProjectId(e.target.value)}
+                className="input w-full"
               >
-                Cancel
-              </button>
-              <button onClick={handleAssign} disabled={!assigningProjectId || assigning} className="btn btn-primary">
-                {assigning ? 'Assigning...' : 'Assign'}
-              </button>
+                <option value="">Select a project...</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {formatWaProjectLabel(p)}
+                  </option>
+                ))}
+              </select>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAssignDialogOpen(false)
+                    setAssignImageIds([])
+                  }}
+                  className="btn btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button type="button" onClick={handleAssign} disabled={!assigningProjectId || assigning} className="btn btn-primary">
+                  {assigning ? 'Assigning...' : 'Assign'}
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
 
       {/* Preview */}
-      {previewItem?.imagePath && (
-        <div
-          className="fixed inset-0 z-[10040] bg-black/80 flex items-center justify-center p-4 pt-20 sm:pt-4"
-          onClick={() => setPreviewItem(null)}
-          onKeyDown={(e) => e.key === 'Escape' && setPreviewItem(null)}
-          role="presentation"
-        >
-          <div className="max-h-[90vh] max-w-[90vw] w-full flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
-            {poolMediaKind(previewItem) === 'document' && poolDisplayName(previewItem).toLowerCase().endsWith('.pdf') ? (
-              <iframe
-                title={poolDisplayName(previewItem)}
-                src={poolFileSrc(previewItem.imagePath)}
-                className="w-full h-[85vh] rounded-lg bg-white"
-              />
-            ) : poolIsPreviewableImage(previewItem) ? (
-              <img src={poolFileSrc(previewItem.imagePath)} alt={poolDisplayName(previewItem)} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
-            ) : (
-              <div className="card p-6 text-center space-y-3">
-                <FileText className="h-12 w-12 mx-auto text-sign-500" />
-                <p className="text-sm text-slate-700 dark:text-slate-200">{poolDisplayName(previewItem)}</p>
-                <a href={poolFileSrc(previewItem.imagePath)} target="_blank" rel="noopener noreferrer" className="btn btn-primary text-sm">
-                  Open / Download
-                </a>
-              </div>
-            )}
-            <button type="button" className="mt-3 text-sm text-white/80 hover:text-white" onClick={() => setPreviewItem(null)}>
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      {previewItem?.imagePath &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[10040] bg-black/80 flex items-center justify-center p-4"
+            onClick={() => setPreviewItem(null)}
+            onKeyDown={(e) => e.key === 'Escape' && setPreviewItem(null)}
+            role="presentation"
+          >
+            <div className="max-h-[90vh] max-w-[90vw] w-full flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+              {poolMediaKind(previewItem) === 'document' && poolDisplayName(previewItem).toLowerCase().endsWith('.pdf') ? (
+                <iframe
+                  title={poolDisplayName(previewItem)}
+                  src={poolFileSrc(previewItem.imagePath)}
+                  className="w-full h-[85vh] rounded-lg bg-white"
+                />
+              ) : poolIsPreviewableImage(previewItem) ? (
+                <img src={poolFileSrc(previewItem.imagePath)} alt={poolDisplayName(previewItem)} className="max-h-[90vh] max-w-[90vw] object-contain rounded-lg" />
+              ) : (
+                <div className="card p-6 text-center space-y-3">
+                  <FileText className="h-12 w-12 mx-auto text-sign-500" />
+                  <p className="text-sm text-slate-700 dark:text-slate-200">{poolDisplayName(previewItem)}</p>
+                  <a href={poolFileSrc(previewItem.imagePath)} target="_blank" rel="noopener noreferrer" className="btn btn-primary text-sm">
+                    Open / Download
+                  </a>
+                </div>
+              )}
+              <button type="button" className="mt-3 text-sm text-white/80 hover:text-white" onClick={() => setPreviewItem(null)}>
+                Close
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

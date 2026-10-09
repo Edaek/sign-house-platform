@@ -22,6 +22,85 @@ def init_app(app) -> None:
     _flask_app = app
 
 
+def _classify_reply_sent_key(phone: str, batch_id: Optional[str] = None) -> str:
+    digits = _normalize_phone(phone)
+    part = _batch_key_part(batch_id) if batch_id else 'any'
+    return f'pool_classify_reply_sent:p:{digits}:{part}'
+
+
+def _classify_reply_sent_key_group(
+    group_id: str,
+    group_sender: str,
+    batch_id: Optional[str] = None,
+) -> str:
+    digits = _normalize_phone(group_sender)
+    part = _batch_key_part(batch_id) if batch_id else 'any'
+    gid = re.sub(r'[^\w@.-]', '_', str(group_id).strip())
+    return f'pool_classify_reply_sent:g:{gid}:{digits}:{part}'
+
+
+def mark_private_classify_reply_sent(phone: str, batch_id: Optional[str] = None) -> None:
+    from app import mongo
+
+    now = datetime.utcnow()
+    mongo.db.wa_system.update_one(
+        {'_id': _classify_reply_sent_key(phone, batch_id)},
+        {'$set': {'at': now, 'phone': phone, 'batchId': batch_id}},
+        upsert=True,
+    )
+
+
+def mark_group_classify_reply_sent(
+    group_id: str,
+    group_sender: str,
+    batch_id: Optional[str] = None,
+) -> None:
+    from app import mongo
+
+    now = datetime.utcnow()
+    mongo.db.wa_system.update_one(
+        {'_id': _classify_reply_sent_key_group(group_id, group_sender, batch_id)},
+        {
+            '$set': {
+                'at': now,
+                'groupId': group_id,
+                'groupSender': group_sender,
+                'batchId': batch_id,
+            },
+        },
+        upsert=True,
+    )
+
+
+def should_skip_receipt_after_classify_reply(
+    phone: Optional[str] = None,
+    batch_id: Optional[str] = None,
+    within_s: float = 90.0,
+    *,
+    group_id: Optional[str] = None,
+    group_sender: Optional[str] = None,
+) -> bool:
+    from app import mongo
+
+    now = datetime.utcnow()
+    keys = []
+    if phone:
+        keys.append(_classify_reply_sent_key(phone, batch_id))
+        if batch_id:
+            keys.append(_classify_reply_sent_key(phone, None))
+    if group_id and group_sender:
+        keys.append(_classify_reply_sent_key_group(group_id, group_sender, batch_id))
+        if batch_id:
+            keys.append(_classify_reply_sent_key_group(group_id, group_sender, None))
+    for key in keys:
+        doc = mongo.db.wa_system.find_one({'_id': key})
+        if not doc or not doc.get('at'):
+            continue
+        if (now - doc['at']).total_seconds() <= within_s:
+            return True
+    return False
+
+
 def format_pool_receipt_body(count: int) -> str:
     return (
         f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
@@ -464,8 +543,41 @@ def _flush(key: str) -> None:
                 return
 
             if entry.get('phone') and not entry.get('group_id'):
+                phone = entry['phone']
+                if should_skip_receipt_after_classify_reply(
+                    phone, entry.get('batch_id'),
+                ):
+                    logger.info(
+                        '[PoolReceipt] Skip receipt — classify reply just sent for %s',
+                        phone,
+                    )
+                    return
+                digits = _normalize_phone(phone)
+                skip_ids = (
+                    f'wa_classify_intent:p:{digits}',
+                    f'wa_ai_confirm:p:{digits}',
+                    f'wa_fuzzy_choice:p:{digits}',
+                )
+                if any(mongo.db.wa_system.find_one({'_id': sid}) for sid in skip_ids):
+                    logger.info(
+                        '[PoolReceipt] Skip generic receipt — classify in progress for %s',
+                        digits,
+                    )
+                    return
                 body = format_pool_receipt_body(count)
             elif entry.get('group_id'):
+                gid = entry['group_id']
+                gs = entry.get('group_sender') or ''
+                if should_skip_receipt_after_classify_reply(
+                    batch_id=entry.get('batch_id'),
+                    group_id=gid,
+                    group_sender=gs,
+                ):
+                    logger.info(
+                        '[PoolReceipt] Skip group receipt — classify reply just sent for %s',
+                        gid,
+                    )
+                    return
                 custom = entry.get('body') or ''
                 if '相似專案' in custom or '找不到專案' in custom:
                     body = custom.format(count=count) if '{count}' in custom else custom
@@ -485,9 +597,40 @@ def _flush(key: str) -> None:
                     entry['group_id'], entry['group_sender'], batch_id,
                 )
             if entry.get('group_id'):
-                resp = send_group_message(entry['group_id'], body, quoted_msg_id=quote)
+                img_doc = mongo.db.group_pending_images.find_one(
+                    {
+                        'groupId': entry['group_id'],
+                        'senderPhone': entry.get('group_sender'),
+                        'categorized': False,
+                        **({'batchId': batch_id} if batch_id else {}),
+                    },
+                    sort=[('createdAt', -1)],
+                    projection={'waMessageRaw': 1},
+                )
+                resp = send_group_message(
+                    entry['group_id'],
+                    body,
+                    quoted_msg_id=quote,
+                    quoted_payload=(img_doc or {}).get('waMessageRaw'),
+                )
             elif entry.get('phone'):
-                resp = send_message(entry['phone'], body, quoted_msg_id=quote)
+                from app.services.wa_pool_nudge_service import send_private_classify_nudge
+
+                phone = entry['phone']
+                img_doc = mongo.db.pool_images.find_one(
+                    {'projectId': {'$exists': False}, **phone_match_query(phone), **(
+                        {'batchId': batch_id} if batch_id else {}
+                    )},
+                    sort=[('createdAt', -1)],
+                    projection={'imagePath': 1, 'waMessageRaw': 1},
+                )
+                resp = send_private_classify_nudge(
+                    phone,
+                    body,
+                    quote_msg_id=quote,
+                    image_path=(img_doc or {}).get('imagePath'),
+                    quoted_payload=(img_doc or {}).get('waMessageRaw'),
+                )
             else:
                 return
 

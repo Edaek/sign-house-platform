@@ -87,6 +87,18 @@ class SplitClassifyLabelTests(unittest.TestCase):
         self.assertEqual(label, 'TEST')
         self.assertEqual(remark, '这是备注文本 111')
 
+    def test_numeric_code_and_long_remark(self):
+        from app.services.message_parser_service import (
+            split_classify_label_and_remark,
+            trailing_classify_remark,
+        )
+
+        label, remark = split_classify_label_and_remark('3026 123123123123')
+        self.assertEqual(label, '3026')
+        self.assertEqual(remark, '123123123123')
+        self.assertEqual(trailing_classify_remark('3027 这是备注'), '这是备注')
+        self.assertIsNone(trailing_classify_remark('3027'))
+
 
 if __name__ == '__main__':
     unittest.main()

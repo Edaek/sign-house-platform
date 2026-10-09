@@ -44,6 +44,23 @@ def nas_folder_index(*, force_refresh=False):
     return index
 
 
+def _nas_entry_for_code(nas_index, code):
+    """Resolve NAS folder stats by project code (exact or prefix e.g. LIGHT → LIGHT-high)."""
+    if not code or not nas_index:
+        return {}
+    key = (code or '').upper()
+    if key in nas_index:
+        return nas_index[key]
+    for entry in nas_index.values():
+        folder = (entry.get('folderName') or entry.get('code') or '').strip()
+        if not folder:
+            continue
+        fu = folder.upper()
+        if fu == key or fu.startswith(f'{key}-') or fu.startswith(f'{key}_'):
+            return entry
+    return {}
+
+
 def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False):
     """Add NAS fields to a serialized project dict."""
     code = (project_doc.get('code') or '').upper()
@@ -56,7 +73,7 @@ def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False):
         return project_doc
     if nas_index is None:
         nas_index = nas_folder_index()
-    nas = nas_index.get(code, {})
+    nas = _nas_entry_for_code(nas_index, code)
     project_doc['nasFileCount'] = nas.get('fileCount', 0)
     project_doc['nasLastModified'] = nas.get('latestModified')
     project_doc['nasSyncedAt'] = nas.get('nasSyncedAt')

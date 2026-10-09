@@ -11,7 +11,16 @@ from app import mongo
 from app.services.wa_send_service import send_message
 from app.services.reference_number_service import generate_reference_number
 from app.services.nas_upload_service import upload_to_nas, is_nas_enabled
-from app.services.message_parser_service import extract_project_code, split_classify_label_and_remark
+from app.services.message_parser_service import (
+    extract_project_code,
+    split_classify_label_and_remark,
+    trailing_classify_remark,
+)
+from app.services.project_number_match_service import (
+    is_range_folder_code,
+    match_projects_by_site_number,
+    primary_site_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +198,16 @@ def _fuzzy_match_projects(text, *, active_only=True, limit=5):
         return []
 
     text_lower = text.lower()
+    numeric_query = bool(
+        text_lower.isdigit()
+        or re.match(r'^pj[-]?\d+$', text_lower)
+    )
     scored = []
     for proj in projects:
-        code_score = fuzz.partial_ratio(text_lower, (proj.get('code') or '').lower())
+        code = (proj.get('code') or '').lower()
+        if numeric_query and is_range_folder_code(proj.get('code')):
+            continue
+        code_score = fuzz.partial_ratio(text_lower, code)
         name_score = fuzz.partial_ratio(text_lower, (proj.get('name') or '').lower())
         best = max(code_score, name_score)
         if best >= 50:
@@ -248,6 +264,12 @@ def match_project_ext(text, *, active_only=True):
     code_candidates = _match_project_code_candidates(match_key, active_only=active_only)
     if code_candidates:
         return _result(candidates=code_candidates)
+
+    site_num = primary_site_number(match_key)
+    if site_num:
+        range_hits = match_projects_by_site_number(site_num, active_only=active_only)
+        if range_hits:
+            return _result(candidates=[(p, score) for p, score, _ in range_hits])
 
     if not label_only:
         for sep in (' - ', ' – ', ' — ', '—'):
@@ -325,6 +347,8 @@ def save_to_pool(
     wa_type=None,
     mime_type=None,
     batch_id=None,
+    chat_jid=None,
+    wa_message_raw=None,
 ):
     """Save media to the pool. Auto-assigns if caption matches project code or name."""
     now = datetime.utcnow()
@@ -344,6 +368,10 @@ def save_to_pool(
     }
     if batch_id:
         doc['batchId'] = batch_id
+    if chat_jid and '@' in str(chat_jid):
+        doc['chatJid'] = str(chat_jid).strip()
+    if isinstance(wa_message_raw, dict) and wa_message_raw:
+        doc['waMessageRaw'] = wa_message_raw
     result = mongo.db.pool_images.insert_one(doc)
     pool_id = str(result.inserted_id)
 
@@ -365,6 +393,15 @@ def resolve_record_remark(record):
     """Display remark for UI: rawMessage or pool image caption (WhatsApp classify note)."""
     msg = (record.get('rawMessage') or '').strip()
     if msg and msg.lower() != _POOL_MEDIA_PLACEHOLDER.lower():
+        remark = trailing_classify_remark(msg)
+        if remark:
+            return remark
+        label, _ = split_classify_label_and_remark(msg)
+        if label and msg == label:
+            from app.services.message_parser_service import _first_token_is_classify_code
+
+            if _first_token_is_classify_code(label.split()[0] if label else ''):
+                return ''
         return msg
     rid = record.get('_id')
     if rid:
@@ -377,7 +414,17 @@ def resolve_record_remark(record):
         )
         cap = (img or {}).get('caption')
         if cap and str(cap).strip():
-            return str(cap).strip()
+            cap_s = str(cap).strip()
+            remark = trailing_classify_remark(cap_s)
+            if remark:
+                return remark
+            label, _ = split_classify_label_and_remark(cap_s)
+            if label and cap_s == label:
+                from app.services.message_parser_service import _first_token_is_classify_code
+
+                if _first_token_is_classify_code(label.split()[0] if label else ''):
+                    return ''
+            return cap_s
     return msg or ''
 
 
@@ -394,6 +441,16 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
 
     remark = (remark or '').strip() or None
     if remark:
+        remark = trailing_classify_remark(remark) or remark.strip() or None
+    if not remark:
+        for img in images:
+            cap = (img.get('caption') or '').strip()
+            if cap:
+                remark = trailing_classify_remark(cap)
+                if remark:
+                    break
+    remark = (remark or '').strip() or None
+    if remark:
         mongo.db.pool_images.update_many(
             {'_id': {'$in': object_ids}},
             {'$set': {'caption': remark, 'updatedAt': datetime.utcnow()}},
@@ -402,10 +459,7 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
             img['caption'] = remark
 
     photos = [img['imagePath'] for img in images if img.get('imagePath')]
-    caption = remark or next(
-        (img['caption'] for img in images if img.get('caption')),
-        _POOL_MEDIA_PLACEHOLDER,
-    )
+    caption = remark or _POOL_MEDIA_PLACEHOLDER
     kinds = {img.get('mediaType') or infer_pool_media_meta(img.get('imagePath'))[0] for img in images}
     if kinds <= {'image'}:
         rec_type, rec_media = 'photo', 'image'
@@ -589,7 +643,32 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
 
         threading.Thread(target=_bg_nas, daemon=True).start()
 
+    _schedule_record_extraction(record_id)
+
     return len(images)
+
+
+def _schedule_record_extraction(record_id):
+    """Run Ollama field extraction after pool assign (background)."""
+    if not record_id:
+        return
+    try:
+        from flask import current_app
+        app = current_app._get_current_object()
+    except RuntimeError:
+        return
+
+    rid = str(record_id)
+
+    def _run():
+        with app.app_context():
+            try:
+                from app.services.extraction_runner_service import run_extraction
+                run_extraction(rid)
+            except Exception:
+                logger.exception('[ImagePool] Post-assign extraction failed for %s', rid)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def assign_all_unassigned(phone, project, assigned_by='user', *, remark=None):

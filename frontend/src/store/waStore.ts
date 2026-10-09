@@ -56,6 +56,7 @@ export interface WaProject {
   nasFileCount?: number
   nasLastModified?: string
   nasSyncedAt?: string
+  nasFolderName?: string
 }
 
 export interface NasStatus {

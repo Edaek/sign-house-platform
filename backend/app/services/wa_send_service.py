@@ -1,5 +1,7 @@
 """Wakka WhatsApp REST API client."""
+import json
 import logging
+import re
 import time
 import requests
 from flask import current_app
@@ -26,24 +28,99 @@ def normalize_phone(phone):
     digits = ''.join(c for c in phone if c.isdigit())
     return f'{digits}@c.us'
 
-def send_message(to, text, quoted_msg_id=None):
-    body = {'to': normalize_phone(to), 'message': text}
-    if quoted_msg_id:
-        body['quotedMessageId'] = quoted_msg_id
+
+def normalize_recipient(to):
+    """Preserve @lid JIDs; digits-only values become @c.us."""
+    if not to:
+        return to
+    s = str(to).strip()
+    if '@' in s:
+        return s
+    return normalize_phone(s)
+
+
+def quote_ids_for_send(quoted_msg_id):
+    """Wakka/Green-style APIs expect stanza id; full serialized id is fallback."""
+    if not quoted_msg_id:
+        return []
+    raw = str(quoted_msg_id).strip()
+    if not raw:
+        return []
+    parts = raw.split('_')
+    stanza = parts[-1] if len(parts) >= 3 else None
+    out = []
+    if stanza and stanza != raw:
+        out.append(stanza)
+    if raw not in out:
+        out.append(raw)
+    return out
+
+
+def chat_jid_from_message_id(message_id):
+    if not message_id:
+        return None
+    m = re.search(r'_(\d+@(?:lid|c\.us))_', str(message_id), flags=re.I)
+    return m.group(1) if m else None
+
+
+def wakka_private_recipient(phone):
+    """Wakka /messages/send only accepts @c.us (sending to @lid returns 500)."""
+    if not phone:
+        return normalize_phone('')
+    s = str(phone).strip()
+    if s.endswith('@c.us'):
+        return s
+    if s.endswith('@lid'):
+        digits = re.sub(r'\D', '', s.split('@')[0])
+        return f'{digits}@c.us' if digits else normalize_phone(s)
+    digits = re.sub(r'\D', '', s)
+    return f'{digits}@c.us' if digits else normalize_phone(s)
+
+
+def _quote_body_fields(quoted_msg_id, quoted_payload=None):
+    fields = {}
+    if quoted_payload is not None:
+        if isinstance(quoted_payload, str):
+            fields['quotedMsgPayload'] = quoted_payload
+        else:
+            fields['quotedMsgPayload'] = json.dumps(
+                quoted_payload, ensure_ascii=False, default=str,
+            )
+    if not quoted_msg_id:
+        return fields
+    raw = str(quoted_msg_id).strip()
+    parts = raw.split('_')
+    stanza = parts[-1] if len(parts) >= 3 else raw
+    fields['quotedMsg'] = raw
+    # Wakka/WPP: full serialized id; Green-style APIs often use stanza — send both.
+    fields['quotedMessageId'] = raw
+    fields['quotedStanzaId'] = stanza
+    return fields
+
+
+def send_message(to, text, quoted_msg_id=None, quoted_payload=None):
+    recipient = wakka_private_recipient(to)
+    body = {'to': recipient, 'message': text}
+    body.update(_quote_body_fields(quoted_msg_id, quoted_payload))
     return _wakka_request('/api/v1/messages/send', 'POST', body)
 
 def send_media(to, media_url, caption=None, filename=None):
-    body = {'to': normalize_phone(to), 'mediaUrl': media_url}
+    body = {'to': wakka_private_recipient(to), 'mediaUrl': media_url}
     if caption: body['caption'] = caption
     if filename: body['filename'] = filename
     return _wakka_request('/api/v1/messages/send-media', 'POST', body)
 
-def send_group_message(group_id, text, media_data_uri=None, quoted_msg_id=None):
+def send_group_message(
+    group_id,
+    text,
+    media_data_uri=None,
+    quoted_msg_id=None,
+    quoted_payload=None,
+):
     body = {'message': text}
     if media_data_uri:
         body['mediaUrl'] = media_data_uri
-    if quoted_msg_id:
-        body['quotedMessageId'] = quoted_msg_id
+    body.update(_quote_body_fields(quoted_msg_id, quoted_payload))
     return _wakka_request(f'/api/v1/groups/{requests.utils.quote(group_id, safe="")}/send', 'POST', body)
 
 def get_token_usage():

@@ -138,8 +138,18 @@ class GroupReminderScheduler:
                     continue
 
                 count = len(images)
+                batch_id = newest.get('batchId')
                 try:
-                    from app.services.pool_receipt_notify_service import format_pool_receipt_body
+                    from app.services.pool_receipt_notify_service import (
+                        format_pool_receipt_body,
+                        should_skip_receipt_after_classify_reply,
+                    )
+                    if should_skip_receipt_after_classify_reply(
+                        batch_id=batch_id,
+                        group_id=group_id,
+                        group_sender=images[0]['senderPhone'],
+                    ):
+                        continue
                     message = format_pool_receipt_body(count)
                 except Exception:
                     if count == 1:
@@ -160,8 +170,13 @@ class GroupReminderScheduler:
                         logger.warning('[GroupReminder] No composite image available for %s', sender_key)
 
                 quote_id = newest.get('messageId') or images[0].get('messageId')
+                wa_raw = newest.get('waMessageRaw')
                 resp = self._send_to_group(
-                    group_id, message, composite, quoted_msg_id=quote_id,
+                    group_id,
+                    message,
+                    composite,
+                    quoted_msg_id=quote_id,
+                    quoted_payload=wa_raw,
                 )
 
                 now_dt = datetime.now(timezone.utc)
@@ -198,6 +213,7 @@ class GroupReminderScheduler:
         media_data_uri: Optional[str] = None,
         *,
         quoted_msg_id: Optional[str] = None,
+        quoted_payload=None,
         _retry_without_media: bool = False,
     ) -> Optional[dict]:
         try:
@@ -206,7 +222,20 @@ class GroupReminderScheduler:
             if media_data_uri and not _retry_without_media:
                 body['mediaUrl'] = media_data_uri
             if quoted_msg_id:
-                body['quotedMessageId'] = quoted_msg_id
+                raw = str(quoted_msg_id).strip()
+                parts = raw.split('_')
+                stanza = parts[-1] if len(parts) >= 3 else raw
+                body['quotedMsg'] = raw
+                body['quotedMessageId'] = raw
+                body['quotedStanzaId'] = stanza
+            if quoted_payload is not None:
+                import json
+                if isinstance(quoted_payload, str):
+                    body['quotedMsgPayload'] = quoted_payload
+                else:
+                    body['quotedMsgPayload'] = json.dumps(
+                        quoted_payload, ensure_ascii=False, default=str,
+                    )
 
             resp = requests.post(
                 f'{group_url}/send',
@@ -223,8 +252,12 @@ class GroupReminderScheduler:
                 if media_data_uri and not _retry_without_media:
                     logger.info('[GroupReminder] Retrying without media attachment')
                     return self._send_to_group(
-                        group_id, message, media_data_uri=None,
-                        quoted_msg_id=quoted_msg_id, _retry_without_media=True,
+                        group_id,
+                        message,
+                        media_data_uri=None,
+                        quoted_msg_id=quoted_msg_id,
+                        quoted_payload=quoted_payload,
+                        _retry_without_media=True,
                     )
                 return None
             return resp.json()

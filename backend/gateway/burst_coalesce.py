@@ -42,7 +42,7 @@ class MediaBurstCoalescer:
         with self._lock:
             buf = self._bufs.get(key)
             if not buf:
-                buf = {'items': [], 'timer': None}
+                buf = {'items': [], 'timer': None, 'classify_text': ''}
                 self._bufs[key] = buf
             buf['items'].append({'msg': msg, 'photos': list(photos)})
             if buf['timer']:
@@ -55,6 +55,20 @@ class MediaBurstCoalescer:
                 '[Gateway] Burst buffer %s: +%d file(s), waiting %.1fs',
                 key, len(photos), BURST_GRACE_S,
             )
+
+    def attach_classify_text(self, msg: 'WAMessage') -> bool:
+        """If a media burst is open, attach follow-up project code text (e.g. 3026)."""
+        text = (msg.text or msg.caption or '').strip()
+        if not text or text.lower() in ('projects', 'help', 'skip'):
+            return False
+        key = self._key(msg)
+        with self._lock:
+            buf = self._bufs.get(key)
+            if not buf or not buf.get('items'):
+                return False
+            buf['classify_text'] = text
+            logger.info('[Gateway] Attached classify text to burst %s: %s', key, text[:40])
+            return True
 
     def _flush(self, key: str) -> None:
         with self._lock:
@@ -75,4 +89,9 @@ class MediaBurstCoalescer:
             '[Gateway] Burst flush %s: %d message(s) → %d file(s), quote %s',
             key, len(buf['items']), len(all_photos), primary.id,
         )
-        self._forward(primary, all_photos, True, message_ids=all_msg_ids)
+        classify_text = (buf.get('classify_text') or '').strip()
+        self._forward(
+            primary, all_photos, True,
+            message_ids=all_msg_ids,
+            classify_text=classify_text or None,
+        )

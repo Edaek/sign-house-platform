@@ -132,11 +132,28 @@ def _media_parts_from_message(msg: WAMessage) -> list:
     return parts
 
 
+def _compact_wa_raw(raw: Optional[dict]) -> Optional[dict]:
+    if not isinstance(raw, dict):
+        return None
+    out = dict(raw)
+    out.pop('mediaData', None)
+    out.pop('data', None)
+    data = raw.get('_data')
+    if isinstance(data, dict):
+        slim = dict(data)
+        for k in ('mediaData', 'data', 'body'):
+            slim.pop(k, None)
+        if slim:
+            out['_data'] = slim
+    return out
+
+
 def forward_to_app(
     msg: WAMessage,
     photos: List[str],
     has_media: bool,
     message_ids: Optional[List[str]] = None,
+    classify_text: Optional[str] = None,
 ):
     is_group = msg.from_jid.endswith('@g.us')
     actual_sender = (msg.author if is_group and msg.author else msg.from_jid)
@@ -148,8 +165,9 @@ def forward_to_app(
         'fromName': msg.from_name,
         'timestamp': msg.timestamp,
         'type': msg.type,
-        'text': msg.text or msg.caption or '',
+        'text': msg.text or msg.caption or classify_text or '',
         'caption': msg.caption or '',
+        'classifyText': classify_text or '',
         'photos': photos,
         'hasMedia': has_media,
         'mimeType': msg.mime_type,
@@ -157,6 +175,7 @@ def forward_to_app(
         'groupId': msg.from_jid if is_group else None,
         'hasQuotedMsg': msg.has_quoted_msg or False,
         'quotedMsgId': msg.quoted_msg_id,
+        'waRaw': _compact_wa_raw(msg.raw),
     }
     if message_ids:
         payload['messageIds'] = message_ids
@@ -219,11 +238,16 @@ def on_message(msg: WAMessage):
         logger.info('[Gateway] Skip media message %s (download produced no files)', msg.id)
         return
 
-    if msg.has_media and photos and _burst_coalescer:
-        _burst_coalescer.submit(msg, photos, True)
-    elif msg.has_media and photos:
-        forward_to_app(msg, photos, True)
+    is_group = msg.from_jid.endswith('@g.us')
+    if msg.has_media and photos:
+        # Private chat: one WhatsApp message → one inbound (do not merge spaced sends).
+        if is_group and _burst_coalescer:
+            _burst_coalescer.submit(msg, photos, True)
+        else:
+            forward_to_app(msg, photos, True)
     elif not msg.has_media or msg.type in ('chat', 'text'):
+        if is_group and _burst_coalescer and _burst_coalescer.attach_classify_text(msg):
+            return
         forward_to_app(msg, photos, msg.has_media)
 
 def main():

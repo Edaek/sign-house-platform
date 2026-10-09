@@ -154,8 +154,12 @@ class NasMountService:
         folder = Path(watch_dir) / project_code
         if folder.is_dir():
             return folder
+        code_u = project_code.upper()
         for d in Path(watch_dir).iterdir():
-            if d.is_dir() and d.name.upper() == project_code.upper():
+            if not d.is_dir():
+                continue
+            du = d.name.upper()
+            if du == code_u or du.startswith(f'{code_u}-') or du.startswith(f'{code_u}_'):
                 return d
         return None
 

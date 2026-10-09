@@ -44,6 +44,21 @@ def split_classify_label_and_remark(text):
     return trimmed, ''
 
 
+def trailing_classify_remark(text):
+    """User-facing remark only — drop leading project code (e.g. ``3027 备注`` → ``备注``)."""
+    trimmed = ' '.join((text or '').strip().split())
+    if not trimmed:
+        return None
+    label, remark = split_classify_label_and_remark(trimmed)
+    if remark:
+        return remark
+    if _first_token_is_classify_code(label) and trimmed == label:
+        return None
+    if _first_token_is_classify_code(label) and trimmed.startswith(label + ' '):
+        return trimmed[len(label) :].strip() or None
+    return None
+
+
 def _first_token_is_classify_code(token):
     """First word is a project code token (not a multi-word project name)."""
     if not token:
