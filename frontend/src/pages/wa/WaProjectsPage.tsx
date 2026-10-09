@@ -8,7 +8,7 @@ import { FolderOpen, ArrowRight, Calendar, Inbox, HardDrive, Search, RefreshCw }
 import toast from 'react-hot-toast'
 
 export default function WaProjectsPage() {
-  const { projects, fetchProjects, loading, nasStatus, fetchNasStatus, syncNasFromDrive } = useWaStore()
+  const { projects, fetchProjects, loading, nasStatus, nasStatusLoading, fetchNasStatus, syncNasFromDrive } = useWaStore()
   const [search, setSearch] = useState('')
   const [syncingNas, setSyncingNas] = useState(false)
 
@@ -91,48 +91,52 @@ export default function WaProjectsPage() {
       </div>
 
       {/* NAS Connection Status */}
-      {nasStatus?.enabled && (
+      {(nasStatusLoading || nasStatus?.enabled) && (
         <div className="card p-4">
           <div className="flex items-center gap-3">
             <div className={clsx(
               'p-2 rounded-lg',
-              nasStatus.connected ? 'bg-sign-100 dark:bg-sign-900/30' : 'bg-slate-100 dark:bg-slate-800'
+              nasStatus?.connected ? 'bg-sign-100 dark:bg-sign-900/30' : 'bg-slate-100 dark:bg-slate-800'
             )}>
               <HardDrive className={clsx(
                 'h-5 w-5',
-                nasStatus.connected ? 'text-sign-600 dark:text-sign-400' : 'text-slate-400'
+                nasStatus?.connected ? 'text-sign-600 dark:text-sign-400' : 'text-slate-400'
               )} />
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <h2 className="font-semibold text-slate-900 dark:text-white text-sm">NAS Shared Drive</h2>
-                <span className={clsx(
-                  'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full',
-                  nasStatus.connected
-                    ? 'bg-sign-100 text-sign-700 dark:bg-sign-900/30 dark:text-sign-400'
-                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-                )}>
+                {nasStatusLoading ? (
+                  <span className="text-xs text-slate-500">Checking…</span>
+                ) : (
                   <span className={clsx(
-                    'inline-block h-1.5 w-1.5 rounded-full',
-                    nasStatus.connected ? 'bg-sign-500' : 'bg-slate-400'
-                  )} />
-                  {nasStatus.connected ? 'Connected' : 'Disconnected'}
-                </span>
+                    'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full',
+                    nasStatus?.connected
+                      ? 'bg-sign-100 text-sign-700 dark:bg-sign-900/30 dark:text-sign-400'
+                      : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                  )}>
+                    <span className={clsx(
+                      'inline-block h-1.5 w-1.5 rounded-full',
+                      nasStatus?.connected ? 'bg-sign-500' : 'bg-slate-400'
+                    )} />
+                    {nasStatus?.connected ? 'Connected' : 'Disconnected'}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                {nasStatus.watchDir}
-                {!nasStatus.connected && nasStatus.mountHint && (
+                {nasStatus?.watchDir || (nasStatusLoading ? '…' : '—')}
+                {!nasStatusLoading && !nasStatus?.connected && nasStatus?.mountHint && (
                   <span className="block mt-1 text-amber-700 dark:text-amber-400">{nasStatus.mountHint}</span>
                 )}
-                {nasStatus.connected && nasStatus.foldersFound > 0 && (
-                  <span className="ml-2">· {nasStatus.foldersFound} folder{nasStatus.foldersFound !== 1 ? 's' : ''} · {nasStatus.filesFound} image{nasStatus.filesFound !== 1 ? 's' : ''}</span>
+                {!nasStatusLoading && nasStatus?.connected && nasStatus.foldersFound > 0 && (
+                  <span className="ml-2">· {nasStatus.foldersFound} folder{nasStatus.foldersFound !== 1 ? 's' : ''}</span>
                 )}
-                {nasStatus.connected && (nasStatus.autoSyncIntervalSec ?? 0) > 0 && (
+                {!nasStatusLoading && nasStatus?.connected && (nasStatus.autoSyncIntervalSec ?? 0) > 0 && (
                   <span className="ml-2">· Auto-sync every {nasStatus.autoSyncIntervalSec}s (NAS → web)</span>
                 )}
               </p>
             </div>
-            {nasStatus.connected && (
+            {!nasStatusLoading && nasStatus?.connected && (
               <button
                 type="button"
                 onClick={handleNasSync}

@@ -155,6 +155,7 @@ interface WaStore {
   systemStatus: SystemStatus | null
   infraStatus: InfraStatus
   nasStatus: NasStatus | null
+  nasStatusLoading: boolean
   loading: boolean
 
   fetchDashboard: () => Promise<void>
@@ -200,6 +201,7 @@ export const useWaStore = create<WaStore>((set) => ({
   systemStatus: null,
   infraStatus: { mongo: 'checking', ollama: 'checking' },
   nasStatus: null,
+  nasStatusLoading: false,
   loading: false,
 
   fetchDashboard: async () => {
@@ -311,11 +313,23 @@ export const useWaStore = create<WaStore>((set) => ({
   },
 
   fetchNasStatus: async () => {
+    set({ nasStatusLoading: true })
     try {
-      const { data } = await api.get('/wa/nas/status')
+      const { data } = await api.get('/wa/nas/status', { timeout: 20000 })
       set({ nasStatus: data })
     } catch {
-      set({ nasStatus: null })
+      set({
+        nasStatus: {
+          enabled: true,
+          connected: false,
+          watchDir: '',
+          foldersFound: 0,
+          filesFound: 0,
+          mountHint: '无法读取 NAS 状态（请确认 Backend 已启动且已登录）。',
+        },
+      })
+    } finally {
+      set({ nasStatusLoading: false })
     }
   },
 

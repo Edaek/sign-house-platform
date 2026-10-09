@@ -21,6 +21,18 @@ _NAS_INDEX_CACHE_AT = 0.0
 _NAS_INDEX_TTL_S = 90
 
 
+def _list_nas_folders_timed(timeout_s: float = 12.0):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(nas_mount.list_folders)
+        try:
+            return fut.result(timeout=timeout_s)
+        except FuturesTimeout:
+            logger.warning('[NAS] list_folders timed out after %ss', timeout_s)
+            return None
+
+
 def nas_folder_index(*, force_refresh=False):
     """Map upper-case project code → NAS folder stats (cached for list views)."""
     global _NAS_INDEX_CACHE, _NAS_INDEX_CACHE_AT
@@ -35,7 +47,10 @@ def nas_folder_index(*, force_refresh=False):
         return _NAS_INDEX_CACHE
     synced_at = datetime.utcnow().isoformat()
     index = {}
-    for folder in nas_mount.list_folders():
+    folders = _list_nas_folders_timed()
+    if folders is None:
+        return _NAS_INDEX_CACHE or {}
+    for folder in folders:
         code = (folder.get('code') or folder.get('folderName') or '').upper()
         if code:
             index[code] = {**folder, 'nasSyncedAt': synced_at}

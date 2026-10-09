@@ -428,7 +428,14 @@ def resolve_record_remark(record):
     return msg or ''
 
 
-def assign_images_to_project(image_ids, project, assigned_by='operator', *, remark=None):
+def assign_images_to_project(
+    image_ids,
+    project,
+    assigned_by='operator',
+    *,
+    remark=None,
+    group_id=None,
+):
     """Assign pool images to a project. Creates a WA record with all photos."""
     object_ids = [ObjectId(i) for i in image_ids]
     images = list(mongo.db.pool_images.find({
@@ -520,6 +527,17 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
 
     cancel_reminder(images[0]['phone'])
 
+    from app.services.nas_site_remark_service import (
+        hk_today_str,
+        set_site_remark_context,
+    )
+
+    assign_day = hk_today_str()
+    phone = images[0].get('phone') or ''
+    set_site_remark_context(
+        phone, project['code'], group_id=group_id, day_str=assign_day,
+    )
+
     msg_ids = [img['messageId'] for img in images if img.get('messageId')]
     if msg_ids:
         mongo.db.group_pending_images.update_many(
@@ -548,6 +566,8 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
         _project_code = project['code']
         _media_dir = current_app.config.get('WA_UPLOADS_FOLDER', 'uploads/wa-media')
         _use_local = use_local
+        _assign_day = assign_day
+        _assign_remark = remark
 
         def _bg_nas():
             with _app.app_context():
@@ -571,7 +591,9 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
                                     {'$set': {'nasSyncStatus': 'failed', 'nasSyncError': 'local file missing'}},
                                 )
                                 continue
-                            r = nas_mount.copy_file_to_project(local_file, _project_code)
+                            r = nas_mount.copy_file_to_project(
+                                local_file, _project_code, day_str=_assign_day,
+                            )
                             if r.get('ok'):
                                 nas_photos.append(r['path'])
                                 mongo.db.pool_images.update_one(
@@ -587,7 +609,9 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
                                     }},
                                 )
                         else:
-                            r = upload_to_nas(img['imagePath'], _project_code)
+                            r = upload_to_nas(
+                                img['imagePath'], _project_code, day_str=_assign_day,
+                            )
                             if r['success']:
                                 nas_photos.append(r['nas_path'])
                                 mongo.db.pool_images.update_one(
@@ -623,6 +647,12 @@ def assign_images_to_project(image_ids, project, assigned_by='operator', *, rema
                         update['nasSyncError'] = 'NAS copy/upload failed for all files'
 
                     mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
+                    if _assign_remark:
+                        from app.services.nas_site_remark_service import append_site_remark_to_nas
+
+                        append_site_remark_to_nas(
+                            _project_code, _assign_remark, day_str=_assign_day,
+                        )
                     logger.info(
                         '[ImagePool] NAS %s %s: %d/%d files',
                         'copy' if _use_local else 'upload',

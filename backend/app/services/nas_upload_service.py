@@ -56,7 +56,11 @@ def _ensure_remote_dir(sftp, dir_path):
                     sftp.mkdir(current)
 
 
-def upload_to_nas(local_web_path, project_code, media_dir=None):
+def _remote_photo_day_dir(base_dir, project_code, day_str):
+    return f"{base_dir}/{project_code}/Photo/{day_str}"
+
+
+def upload_to_nas(local_web_path, project_code, media_dir=None, *, day_str=None):
     cfg = _get_config()
     if not cfg['enabled'] or not cfg['host']:
         return {'success': False, 'error': 'NAS upload disabled'}
@@ -69,8 +73,11 @@ def upload_to_nas(local_web_path, project_code, media_dir=None):
     if not os.path.isfile(local_file):
         return {'success': False, 'error': f'File not found: {local_file}'}
 
+    from app.services.nas_site_remark_service import hk_today_str
+
     filename = os.path.basename(local_file)
-    remote_dir = f"{cfg['base_dir']}/{project_code}"
+    day = day_str or hk_today_str()
+    remote_dir = _remote_photo_day_dir(cfg['base_dir'], project_code, day)
     remote_path = f'{remote_dir}/{filename}'
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -101,7 +108,7 @@ def upload_to_nas(local_web_path, project_code, media_dir=None):
     return {'success': False, 'error': 'Exhausted retries'}
 
 
-def upload_batch_to_nas(local_web_paths, project_code, media_dir=None):
+def upload_batch_to_nas(local_web_paths, project_code, media_dir=None, *, day_str=None):
     cfg = _get_config()
     if not cfg['enabled'] or not cfg['host'] or not local_web_paths:
         return [{'success': False, 'error': 'NAS disabled'} for _ in local_web_paths]
@@ -118,7 +125,10 @@ def upload_batch_to_nas(local_web_paths, project_code, media_dir=None):
         transport.connect(username=cfg['user'], password=cfg['password'])
         sftp = paramiko.SFTPClient.from_transport(transport)
 
-        remote_dir = f"{cfg['base_dir']}/{project_code}"
+        from app.services.nas_site_remark_service import hk_today_str
+
+        day = day_str or hk_today_str()
+        remote_dir = _remote_photo_day_dir(cfg['base_dir'], project_code, day)
         _ensure_remote_dir(sftp, remote_dir)
 
         for web_path in local_web_paths:

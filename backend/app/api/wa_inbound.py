@@ -1333,8 +1333,12 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 'type': kind,
             })
 
-        # No unassigned media — treat plain text as chitchat (no「先記專案」、不回覆).
+        # No unassigned media — chitchat, or on-site remark after today's NAS filing.
         if trimmed_text and not is_command(trimmed_text) and not has_unassigned:
+            from app.services.nas_site_remark_service import try_append_followup_site_remark
+
+            if try_append_followup_site_remark(sender, trimmed_text):
+                return jsonify({'handled': True, 'type': 'site_remark_appended'})
             _clear_classify_intent(None, sender)
             _clear_burst_project(None, sender)
             return jsonify({'handled': True, 'type': 'ignored_silent'})
@@ -1486,6 +1490,10 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
             return jsonify({'handled': True, 'type': 'group_pending_silent'})
 
         if not is_command(trimmed) and not pending:
+            from app.services.nas_site_remark_service import try_append_followup_site_remark
+
+            if try_append_followup_site_remark(sender, trimmed, group_id=group_id):
+                return jsonify({'handled': True, 'type': 'group_site_remark_appended'})
             _clear_classify_intent(group_id, sender)
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
@@ -1527,7 +1535,9 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
             if stored:
                 from app.services.message_parser_service import split_classify_label_and_remark
                 _, remark = split_classify_label_and_remark(stored)
-        assign_images_to_project(pool_ids, project, 'user', remark=remark or None)
+        assign_images_to_project(
+            pool_ids, project, 'user', remark=remark or None, group_id=group_id,
+        )
         _set_burst_project(group_id, sender, project)
         _clear_classify_intent(group_id, sender)
         now = datetime.utcnow()
@@ -1693,7 +1703,9 @@ def _categorize_group_image(pending, project, group_id, data, sender):
 
     assigned = 0
     if pool_ids:
-        assigned = assign_images_to_project(pool_ids, project, 'user', remark=remark)
+        assigned = assign_images_to_project(
+            pool_ids, project, 'user', remark=remark, group_id=group_id,
+        )
 
     notify_count = assigned if assigned > 0 else len(claimed)
     if notify_count > 0:

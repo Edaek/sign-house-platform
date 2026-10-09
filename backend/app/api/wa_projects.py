@@ -21,14 +21,34 @@ def list_projects():
 
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     nas_index = nas_folder_index()
+
+    counts_by_project = {}
+    if projects:
+        pid_list = [p['_id'] for p in projects]
+        pipeline = [
+            {'$match': {
+                'projectId': {'$in': pid_list},
+                'status': {'$ne': 'voided'},
+            }},
+            {'$group': {
+                '_id': '$projectId',
+                'totalRecords': {'$sum': 1},
+                'todayRecords': {
+                    '$sum': {
+                        '$cond': [{'$gte': ['$createdAt', today]}, 1, 0],
+                    },
+                },
+            }},
+        ]
+        for row in mongo.db.wa_records.aggregate(pipeline):
+            counts_by_project[row['_id']] = row
+
     result = []
     for p in projects:
         d = serialize_doc(p)
-        d['totalRecords'] = mongo.db.wa_records.count_documents({
-            'projectId': p['_id'],
-            'status': {'$ne': 'voided'},
-        })
-        d['todayRecords'] = mongo.db.wa_records.count_documents({'projectId': p['_id'], 'createdAt': {'$gte': today}})
+        stats = counts_by_project.get(p['_id'], {})
+        d['totalRecords'] = stats.get('totalRecords', 0)
+        d['todayRecords'] = stats.get('todayRecords', 0)
         enrich_project_dict(d, nas_index)
         result.append(d)
 

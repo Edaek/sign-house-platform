@@ -19,6 +19,7 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true,
+  timeout: 60000,
 })
 
 // Response interceptor for error handling
