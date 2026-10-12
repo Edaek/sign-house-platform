@@ -20,5 +20,12 @@ def mount_wa_mcp_http(app) -> None:
 
     asgi = build_wa_mcp_asgi()
     branch = ASGIMiddleware(asgi)
+    from mcp_wa.http_asgi import bootstrap_streamable_http_on_loop
+
+    bootstrap_streamable_http_on_loop(branch.loop)
     app.wsgi_app = DispatcherMiddleware(app.wsgi_app, {MOUNT_PREFIX: branch})
-    logger.info('[MCP] WhatsApp SSE mounted at %s/sse', MOUNT_PREFIX)
+    logger.info(
+        '[MCP] WhatsApp MCP mounted at %s/mcp (Streamable HTTP) and %s/sse (SSE; single-worker only)',
+        MOUNT_PREFIX,
+        MOUNT_PREFIX,
+    )
