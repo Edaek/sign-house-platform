@@ -25,7 +25,8 @@ def _log_wa_mcp_endpoint(port: int) -> None:
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
     if isinstance(app.wsgi_app, DispatcherMiddleware):
-        print(f"WhatsApp MCP (SSE): http://127.0.0.1:{port}/api/mcp/wa/sse")
+        print(f"WhatsApp MCP (HTTP): http://127.0.0.1:{port}/api/mcp/wa/mcp")
+        print(f"WhatsApp MCP (SSE, dev only): http://127.0.0.1:{port}/api/mcp/wa/sse")
     else:
         print(
             "WhatsApp MCP (SSE): NOT mounted — pip install -r requirements.txt (a2wsgi) and restart",

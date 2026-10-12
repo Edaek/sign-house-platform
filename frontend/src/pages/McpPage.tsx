@@ -67,17 +67,17 @@ function defaultWaApiUrl(): string {
   return `${window.location.origin}/api`
 }
 
-/** SSE MCP on Flask. Prefer direct backend URL — Vite origin may not proxy /api/mcp/wa/*. */
+/** Streamable HTTP MCP (works behind Gunicorn multi-worker). Prefer direct backend URL. */
 function defaultWaMcpUrl(): string {
   const devProxy = import.meta.env.VITE_DEV_API_PROXY?.trim()
   if (devProxy) {
-    return `${devProxy.replace(/\/$/, '')}/api/mcp/wa/sse`
+    return `${devProxy.replace(/\/$/, '')}/api/mcp/wa/mcp`
   }
   const apiUrl = import.meta.env.VITE_API_URL?.trim()
   if (apiUrl) {
-    return `${apiUrl.replace(/\/$/, '')}/api/mcp/wa/sse`
+    return `${apiUrl.replace(/\/$/, '')}/api/mcp/wa/mcp`
   }
-  return 'http://127.0.0.1:5002/api/mcp/wa/sse'
+  return 'http://127.0.0.1:5002/api/mcp/wa/mcp'
 }
 
 function tokenFromBrowserSession(): string {
@@ -123,7 +123,7 @@ function applyWaPreset() {
   return {
     ...emptyForm(),
     name: 'sign-house-wa',
-    transport: 'sse' as Transport,
+    transport: 'http' as Transport,
     url: defaultWaMcpUrl(),
     command: '',
     argsText: '',

@@ -4,7 +4,7 @@ Exposes all `/api/wa/*` operations to Cursor via MCP tools, authenticated with y
 
 ## Recommended: URL (HTTP)
 
-Backend serves MCP (SSE) at **`/api/mcp/wa/sse`** (same deploy as Flask).
+Backend serves MCP at **`/api/mcp/wa/mcp`** (Streamable HTTP, stateless — use this in Cursor behind Gunicorn) and optionally **`/api/mcp/wa/sse`** (SSE only works with a single worker / sticky sessions).
 
 ```json
 "sign-house-wa": {

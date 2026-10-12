@@ -14,6 +14,7 @@ from app.services.audit_service import log_action
 mcp_bp = Blueprint('mcp', __name__)
 
 VALID_TRANSPORTS = frozenset({'sse', 'http', 'stdio'})
+WA_MCP_HTTP_PATH = '/api/mcp/wa/mcp'
 WA_MCP_SSE_PATH = '/api/mcp/wa/sse'
 _NAME_RE = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 
@@ -123,7 +124,7 @@ def _cursor_server_entry(doc: dict) -> dict:
 
 @mcp_bp.route('/hosted-wa/status', methods=['GET'])
 def wa_mcp_status():
-    """Check whether hosted WhatsApp MCP (SSE) is mounted (not under /api/mcp/wa/* — that path is SSE)."""
+    """Check whether hosted WhatsApp MCP is mounted (not under /api/mcp/wa/* — those paths are MCP ASGI)."""
     from flask import current_app
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
@@ -136,6 +137,7 @@ def wa_mcp_status():
     return jsonify({
         'mounted': mounted,
         'a2wsgiInstalled': a2wsgi_ok,
+        'streamableHttpPath': WA_MCP_HTTP_PATH,
         'ssePath': WA_MCP_SSE_PATH,
         'messagePath': '/api/mcp/wa/messages/',
     })

@@ -41,7 +41,11 @@ class Config:
     TITLE_REGION_HEIGHT = int(os.environ.get('TITLE_REGION_HEIGHT', 15))    # 15% of image height
     
     # CORS Configuration
-    ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+    ALLOWED_ORIGINS = [
+        o.strip()
+        for o in os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+        if o.strip()
+    ]
     
     # Wakka WhatsApp API
     WAKKA_API_URL = os.environ.get('WAKKA_API_URL', '')
