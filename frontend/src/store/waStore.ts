@@ -325,7 +325,7 @@ export const useWaStore = create<WaStore>((set) => ({
           watchDir: '',
           foldersFound: 0,
           filesFound: 0,
-          mountHint: '无法读取 NAS 状态（请确认 Backend 已启动且已登录）。',
+          mountHint: 'Could not read NAS status (ensure the backend is running and you are logged in).',
         },
       })
     } finally {
