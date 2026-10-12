@@ -11,6 +11,7 @@ import {
   FileText,
   Book,
   MessageCircle,
+  Plug2,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '../store/authStore'
@@ -47,6 +48,8 @@ export default function Layout() {
       { path: '/audit-logs', icon: FileText, label: 'Audit Logs' }
     )
   }
+
+  navItems.push({ path: '/mcp', icon: Plug2, label: 'MCP' })
   
   return (
     <div className="min-h-screen flex flex-col bg-[var(--color-bg)]">
