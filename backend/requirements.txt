@@ -27,10 +27,6 @@ openpyxl==3.1.2
 python-socketio[client]==5.11.1
 requests>=2.31.0
 
-# WhatsApp MCP (stdio server for Cursor)
-mcp>=1.2.0,<2
-a2wsgi>=1.10.0
-
 # File transfer (NAS via SFTP)
 paramiko>=3.4.0
 

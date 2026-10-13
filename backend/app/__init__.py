@@ -132,7 +132,6 @@ def create_app(config_name=None):
         mongo.db.audit_logs.create_index('user_id')
         mongo.db.audit_logs.create_index('timestamp')
         mongo.db.audit_logs.create_index([('user_id', 1), ('timestamp', -1)])
-        mongo.db.mcp_servers.create_index([('userId', 1), ('name', 1)], unique=True)
         # Project members indexes
         mongo.db.project_members.create_index([('project_id', 1), ('user_id', 1)], unique=True)
         mongo.db.project_members.create_index('user_id')
@@ -212,8 +211,7 @@ def create_app(config_name=None):
     from app.api.wa_inbound import wa_inbound_bp
     from app.api.wa_outbound import wa_outbound_bp
     from app.api.wa_nas import wa_nas_bp
-    from app.api.mcp_servers import mcp_bp
-    
+
     app.register_blueprint(health_bp)  # No prefix - health checks at root level
     app.register_blueprint(health_bp, url_prefix='/api', name='health_api')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -232,11 +230,7 @@ def create_app(config_name=None):
     app.register_blueprint(wa_inbound_bp, url_prefix='/api/wa')
     app.register_blueprint(wa_outbound_bp, url_prefix='/api/wa')
     app.register_blueprint(wa_nas_bp, url_prefix='/api/wa/nas')
-    app.register_blueprint(mcp_bp, url_prefix='/api/mcp')
 
-    from mcp_wa.flask_mount import mount_wa_mcp_http
-    mount_wa_mcp_http(app)
-    
     # Initialize folder watcher manager with app context
     from app.services.folder_watcher import watcher_manager
     watcher_manager.init_app(app)

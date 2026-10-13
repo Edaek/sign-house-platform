@@ -21,8 +21,6 @@ import WaTemplatesPage from './pages/wa/WaTemplatesPage'
 import WaManageProjectsPage from './pages/wa/WaManageProjectsPage'
 import WaSystemPage from './pages/wa/WaSystemPage'
 import WaUsersPage from './pages/wa/WaUsersPage'
-import McpPage from './pages/McpPage'
-
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -52,7 +50,6 @@ function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
-        <Route path="mcp" element={<McpPage />} />
 
         <Route path="wa" element={<WaLayout />}>
           <Route index element={<WaDashboardPage />} />
