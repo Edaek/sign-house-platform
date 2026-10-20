@@ -60,11 +60,23 @@ export const useAuthStore = create<AuthState>()(
           
           // Set token for future requests
           api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-        } catch (error: any) {
-          set({
-            isLoading: false,
-            error: error.response?.data?.error || 'Login failed'
-          })
+        } catch (error: unknown) {
+          const ax = error as {
+            response?: { status?: number; data?: { error?: string } }
+            code?: string
+            message?: string
+          }
+          let message = ax.response?.data?.error
+          if (!message) {
+            if (ax.response?.status === 502) {
+              message = '后端未响应 (502)。请在终端执行: cd backend && .venv/bin/python run.py'
+            } else if (!ax.response || ax.code === 'ECONNABORTED' || ax.code === 'ERR_NETWORK') {
+              message = '无法连接后端 (5002)，请确认 backend 已启动'
+            } else {
+              message = 'Login failed'
+            }
+          }
+          set({ isLoading: false, error: message })
           throw error
         }
       },

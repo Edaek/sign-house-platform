@@ -371,7 +371,7 @@ def _fuzzy_choice_key(group_id, sender):
 def _set_fuzzy_choice(group_id, sender, candidates):
     """Store candidate list so the user can reply with a number."""
     choices = [
-        {'code': p['code'], 'name': p.get('name', ''), 'id': str(p['_id'])}
+        {'code': p['code'], 'nasFolder': p.get('nasFolder') or '', 'id': str(p['_id'])}
         for p, _score in candidates[:5]
     ]
     mongo.db.wa_system.update_one(
@@ -404,8 +404,8 @@ def _clear_fuzzy_choice(group_id, sender):
 def _format_fuzzy_candidates(candidates):
     """Build a numbered list string for bot reply."""
     lines = []
-    for i, (proj, score) in enumerate(candidates[:5], 1):
-        lines.append(f'{i}. {proj["code"]} - {proj.get("name", "")}')
+    for i, (proj, _score) in enumerate(candidates[:5], 1):
+        lines.append(f'{i}. {proj["code"]}')
     return '\n'.join(lines)
 
 
@@ -762,12 +762,12 @@ def _should_store_classify_intent(text):
 
     if re.fullmatch(r'\d{3,6}', t):
         from app.services.project_number_match_service import (
-            match_projects_by_site_number,
+            match_site_projects_by_number,
             primary_site_number,
         )
 
         site = primary_site_number(t)
-        if site and match_projects_by_site_number(site, active_only=True):
+        if site and match_site_projects_by_number(site, active_only=True):
             return True
         return False
 
@@ -1418,8 +1418,9 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
     if not is_media and text.strip():
         trimmed = text.strip()
         if trimmed.lower() == 'projects':
-            projects = list(mongo.db.wa_projects.find({'status': 'active'}))
-            lines = [f'• {p["code"]} - {p.get("name", "")}' for p in projects]
+            from app.services.project_number_match_service import list_wa_classify_target_projects
+            projects = list_wa_classify_target_projects(active_only=True)
+            lines = [f'• {p["code"]}' for p in projects]
             try:
                 send_group_message(group_id, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
             except Exception:
@@ -1959,8 +1960,9 @@ def _handle_command(cmd, sender, *, text='', data=None, group_id=None):
         lines = [f'• {k["term"]}' for k in keywords]
         _safe_send(sender, ('*可用類型關鍵字：*\n' + '\n'.join(lines)) if lines else '尚未設定關鍵字。')
     elif cmd == 'projects':
-        projects = list(mongo.db.wa_projects.find({'status': 'active'}))
-        lines = [f'• {p["code"]} - {p.get("name", "")}' for p in projects]
+        from app.services.project_number_match_service import list_wa_classify_target_projects
+        projects = list_wa_classify_target_projects(active_only=True)
+        lines = [f'• {p["code"]}' for p in projects]
         _safe_send(sender, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
     elif cmd == 'move':
         return _handle_move(text, sender, data or {}, group_id=group_id)

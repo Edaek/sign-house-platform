@@ -50,11 +50,11 @@ def client(app):
 @pytest.fixture
 def sample_projects(db):
     projects = [
-        {'code': 'P-001', 'name': 'Sunrise Tower', 'status': 'active'},
-        {'code': 'P-002', 'name': 'Sunset Villas', 'status': 'active'},
-        {'code': 'P-003', 'name': 'Ocean Park Phase 2', 'status': 'active'},
-        {'code': 'P-010', 'name': 'Marina Bay Hotel', 'status': 'active'},
-        {'code': 'P-099', 'name': 'Test Archived', 'status': 'archived'},
+        {'code': 'P-001', 'nasFolder': 'Sunrise Tower', 'status': 'active'},
+        {'code': 'P-002', 'nasFolder': 'Sunset Villas', 'status': 'active'},
+        {'code': 'P-003', 'nasFolder': 'Ocean Park Phase 2', 'status': 'active'},
+        {'code': 'P-010', 'nasFolder': 'Marina Bay Hotel', 'status': 'active'},
+        {'code': 'P-099', 'nasFolder': 'Test Archived', 'status': 'archived'},
     ]
     db.wa_projects.insert_many(projects)
     return projects
@@ -82,14 +82,14 @@ class TestFuzzyMatchProjects:
             assert result.project is not None
             assert result.project['code'] == 'P-001'
 
-    def test_exact_name_returns_project(self, app, sample_projects):
+    def test_exact_nas_folder_returns_project(self, app, sample_projects):
         with app.app_context():
             from app.services.image_pool_service import match_project_ext
             result = match_project_ext('Sunrise Tower')
             assert result.project is not None
             assert result.project['code'] == 'P-001'
 
-    def test_partial_name_exact_hit(self, app, sample_projects):
+    def test_partial_nas_folder_hit(self, app, sample_projects):
         with app.app_context():
             from app.services.image_pool_service import match_project_ext
             result = match_project_ext('Marina Bay')
@@ -173,8 +173,8 @@ class TestFuzzyInbound:
         db.wa_system.insert_one({
             '_id': 'wa_fuzzy_choice:p:1234',
             'choices': [
-                {'code': 'P-001', 'name': 'Sunrise Tower', 'id': str(p001['_id'])},
-                {'code': 'P-002', 'name': 'Sunset Villas', 'id': str(p002['_id'])},
+                {'code': 'P-001', 'nasFolder': 'Sunrise Tower', 'id': str(p001['_id'])},
+                {'code': 'P-002', 'nasFolder': 'Sunset Villas', 'id': str(p002['_id'])},
             ],
             'at': datetime.utcnow(),
         })

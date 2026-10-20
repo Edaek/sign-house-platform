@@ -24,7 +24,7 @@ import {
   poolIsPreviewableImage,
   poolFileExtension,
 } from '../../lib/waPoolMedia'
-import { formatWaProjectLabel } from '../../lib/waProjects'
+import WaProjectBucketPicker from '../../components/wa/WaProjectBucketPicker'
 
 function formatPhone(phone: string, name?: string) {
   if (name) return `${name} (${phone})`
@@ -366,18 +366,15 @@ export default function WaImagePoolPage() {
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
                 Assign {assignImageIds.length} file{assignImageIds.length === 1 ? '' : 's'} to project
               </h2>
-              <select
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Choose a NAS folder, then a site project code.
+              </p>
+              <WaProjectBucketPicker
+                projects={projects}
                 value={assigningProjectId}
-                onChange={(e) => setAssigningProjectId(e.target.value)}
-                className="input w-full"
-              >
-                <option value="">Select a project...</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {formatWaProjectLabel(p)}
-                  </option>
-                ))}
-              </select>
+                onChange={setAssigningProjectId}
+                resetKey={assignDialogOpen}
+              />
               <div className="flex justify-end gap-2">
                 <button
                   type="button"

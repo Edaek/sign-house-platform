@@ -69,6 +69,13 @@ class Config:
 
     # NAS local mount (Mac Mini where NAS is mounted via SMB)
     NAS_WATCH_DIR = os.environ.get('NAS_WATCH_DIR', '/Volumes/Project Photo for Installation/Project Photo for Installation')
+    NAS_SCAN_MAX_DEPTH = int(os.environ.get('NAS_SCAN_MAX_DEPTH', 6))
+    # SMB: treat volume mounted as connected (avoid isdir/list timeouts marking "disconnected")
+    NAS_FAST_CONNECT = os.environ.get('NAS_FAST_CONNECT', 'true').lower() == 'true'
+    NAS_PROBE_TIMEOUT_S = float(os.environ.get('NAS_PROBE_TIMEOUT_S', 4))
+    NAS_FOLDER_CACHE_TTL_S = int(os.environ.get('NAS_FOLDER_CACHE_TTL_S', 600))
+    NAS_FOLDER_CACHE_REFRESH_S = int(os.environ.get('NAS_FOLDER_CACHE_REFRESH_S', 300))
+    NAS_IO_TIMEOUT_S = float(os.environ.get('NAS_IO_TIMEOUT_S', 45))
 
     # Mac Mini (SSH/SCP)
     MINI_HOST = os.environ.get('MINI_HOST', '')

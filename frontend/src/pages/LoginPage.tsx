@@ -21,7 +21,7 @@ export default function LoginPage() {
       toast.success('Welcome back!')
       navigate('/')
     } catch {
-      toast.error(error || 'Login failed')
+      toast.error(useAuthStore.getState().error || 'Login failed')
     }
   }
   

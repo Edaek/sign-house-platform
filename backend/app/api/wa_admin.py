@@ -52,9 +52,9 @@ def list_templates():
     templates = list(mongo.db.wa_templates.find().sort('typeName', 1))
     for t in templates:
         if t.get('projectId'):
-            proj = mongo.db.wa_projects.find_one({'_id': t['projectId']}, {'code': 1, 'name': 1})
+            proj = mongo.db.wa_projects.find_one({'_id': t['projectId']}, {'code': 1, 'nasFolder': 1})
             if proj:
-                t['projectId'] = {'code': proj['code'], 'name': proj['name']}
+                t['projectId'] = {'code': proj['code'], 'nasFolder': proj.get('nasFolder')}
     return jsonify([serialize_doc(t) for t in templates])
 
 @wa_admin_bp.route('/templates', methods=['POST'])
@@ -80,33 +80,19 @@ def create_template():
 def create_project():
     from flask_jwt_extended import get_jwt_identity
     data = request.get_json()
-    from app.services.wa_project_validation import (
-        normalize_code,
-        normalize_name,
-        assert_code_available,
-        assert_name_available,
-    )
+    from app.services.wa_project_validation import normalize_code, assert_code_available
 
     code = normalize_code(data.get('code'))
-    name = normalize_name(data.get('name'))
     if not code:
         return jsonify({'error': 'Project code is required'}), 400
-    if not name:
-        return jsonify({'error': 'Project name is required'}), 400
 
     code_err = assert_code_available(code)
     if code_err:
         return jsonify({'error': code_err}), 409
 
-    name_err = assert_name_available(name)
-    if name_err:
-        return jsonify({'error': name_err}), 409
-
     now = datetime.utcnow()
     doc = {
         'code': code,
-        'name': name,
-        'nameNormalized': name.casefold(),
         'location': data.get('location', ''),
         'owner': ObjectId(get_jwt_identity()),
         'stage': data.get('stage', 'active'),
@@ -122,22 +108,60 @@ def create_project():
         key = detail.get('keyPattern') or {}
         if 'code' in key:
             return jsonify({'error': f'Project code {code} already exists'}), 409
-        if 'nameNormalized' in key:
-            return jsonify({'error': f'Project name "{name}" already exists'}), 409
-        return jsonify({'error': 'Project code or name already exists'}), 409
+        return jsonify({'error': 'Project code already exists'}), 409
     doc['_id'] = insert.inserted_id
 
     from app.services.nas_watcher_service import nas_mount
-    if nas_mount.is_available():
-        nas_result = nas_mount.create_folder(code)
-        if nas_result.get('ok'):
-            mongo.db.wa_projects.update_one(
-                {'_id': insert.inserted_id},
-                {'$set': {'nasFolder': nas_result['path']}},
-            )
-            doc['nasFolder'] = nas_result['path']
+    from app.services.project_number_match_service import is_range_folder_code
+
+    parent_bucket = (data.get('parentBucketCode') or data.get('nasParentFolder') or '').strip() or None
+    if not is_range_folder_code(code):
+        if not nas_mount.is_available():
+            mongo.db.wa_projects.delete_one({'_id': insert.inserted_id})
+            return jsonify({
+                'error': 'NAS is not connected — mount the share before creating a project folder.',
+            }), 503
+        nas_result = nas_mount.create_folder(code, parent_bucket_code=parent_bucket)
+        if not nas_result.get('ok'):
+            mongo.db.wa_projects.delete_one({'_id': insert.inserted_id})
+            return jsonify({
+                'error': nas_result.get('error') or 'Failed to create NAS folder',
+            }), 503
+        nas_fields = {'nasFolder': nas_result['path']}
+        if parent_bucket:
+            nas_fields['nasParentBucket'] = parent_bucket
+        mongo.db.wa_projects.update_one({'_id': insert.inserted_id}, {'$set': nas_fields})
+        doc['nasFolder'] = nas_result['path']
+        if parent_bucket:
+            doc['nasParentBucket'] = parent_bucket
 
     return jsonify(serialize_doc(doc)), 201
+
+
+@wa_admin_bp.route('/projects/<project_id>', methods=['PATCH'])
+@jwt_required()
+@require_role('admin', 'manager')
+def update_project(project_id):
+    project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    data = request.get_json() or {}
+    sync_nas = data.get('syncNas', True)
+    if isinstance(sync_nas, str):
+        sync_nas = sync_nas.lower() not in ('0', 'false', 'no')
+
+    from app.services.nas_sync_service import update_web_project, enrich_project_dict
+
+    result = update_web_project(project, data, sync_nas=bool(sync_nas))
+    if not result.get('ok'):
+        err = result.get('error') or 'Update failed'
+        status = 409 if 'already exists' in err.lower() else 503 if 'NAS' in err else 400
+        return jsonify({'error': err}), status
+
+    doc = serialize_doc(result['project'])
+    enrich_project_dict(doc, fast_single=True)
+    return jsonify(doc)
 
 
 @wa_admin_bp.route('/projects/<project_id>', methods=['DELETE'])
@@ -153,13 +177,23 @@ def delete_project(project_id):
     from app.services.nas_sync_service import delete_web_project
     from app.services.nas_watcher_service import nas_mount
 
-    delete_nas_folder = data.get('deleteNasFolder')
-    if delete_nas_folder is None:
-        delete_nas_folder = nas_mount.is_available()
+    delete_nas_folder = bool(data.get('deleteNasFolder', False))
 
-    delete_web_project(project, remove_nas_folder=bool(delete_nas_folder))
+    result = delete_web_project(project, remove_nas_folder=bool(delete_nas_folder))
+    if not result.get('ok'):
+        err = result.get('error') or 'Delete failed'
+        status = 503 if 'NAS' in err else 400
+        return jsonify({'error': err, 'nasResult': result.get('nasResult')}), status
 
-    return jsonify({'message': 'Project deleted', 'code': project['code']})
+    nas_result = result.get('nasResult') or {}
+    body = {'message': 'Project deleted', 'code': result.get('code') or project['code']}
+    if nas_result.get('quarantined'):
+        body['nasQuarantined'] = True
+        body['message'] = (
+            'Project deleted. NAS folder was quarantined (SMB locked files); '
+            'remove the .trash-* folder in File Station if needed.'
+        )
+    return jsonify(body)
 
 
 # System status

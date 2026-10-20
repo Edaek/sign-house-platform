@@ -46,7 +46,7 @@ export interface WaRecord {
 export interface WaProject {
   id: string
   code: string
-  name: string
+  nasParentBucket?: string
   location?: string
   stage: string
   status: string
@@ -60,11 +60,14 @@ export interface WaProject {
 }
 
 export interface NasStatus {
+  degraded?: boolean
+  foldersCacheAgeSec?: number | null
   enabled: boolean
   connected: boolean
   watchDir: string
   foldersFound: number
   filesFound: number
+  rootFolderNames?: string[]
   disconnectReason?: string
   mountHint?: string
   lastAutoSyncAt?: string
@@ -175,14 +178,37 @@ interface WaStore {
   fetchSystemStatus: () => Promise<void>
   fetchInfraStatus: () => Promise<void>
   fetchNasStatus: () => Promise<void>
+  deleteNasRootFolder: (
+    folderName: string
+  ) => Promise<{ quarantined?: boolean; alreadyRemoved?: boolean; message?: string }>
   syncNasFromDrive: () => Promise<{
     created: string[]
     removed: string[]
+    foldersCreated: string[]
     totalCreated: number
     totalRemoved: number
   }>
-  createProject: (data: { code: string; name: string; location?: string; stage: string }) => Promise<void>
-  deleteProject: (id: string, deleteNasFolder?: boolean) => Promise<void>
+  createProject: (data: {
+    code: string
+    location?: string
+    stage: string
+    parentBucketCode?: string
+  }) => Promise<void>
+  deleteProject: (
+    id: string,
+    deleteNasFolder?: boolean
+  ) => Promise<{ message?: string; nasQuarantined?: boolean; code?: string }>
+  updateProject: (
+    id: string,
+    data: {
+      code?: string
+      nasFolderName?: string
+      location?: string
+      stage?: string
+      status?: string
+      syncNas?: boolean
+    }
+  ) => Promise<WaProject>
   confirmRecord: (id: string) => Promise<void>
   voidRecord: (id: string, reason: string) => Promise<void>
   requestInfo: (id: string, question: string) => Promise<void>
@@ -220,8 +246,10 @@ export const useWaStore = create<WaStore>((set) => ({
   fetchProjects: async () => {
     set({ loading: true })
     try {
-      const { data } = await api.get('/wa/projects')
+      const { data } = await api.get('/wa/projects', { timeout: 30000 })
       set({ projects: data })
+    } catch {
+      set({ projects: [] })
     } finally {
       set({ loading: false })
     }
@@ -315,9 +343,16 @@ export const useWaStore = create<WaStore>((set) => ({
   fetchNasStatus: async () => {
     set({ nasStatusLoading: true })
     try {
-      const { data } = await api.get('/wa/nas/status', { timeout: 20000 })
+      const { data } = await api.get('/wa/nas/status', { timeout: 15000 })
       set({ nasStatus: data })
-    } catch {
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 401 || status === 422) {
+        set({ nasStatus: null })
+        return
+      }
+      const timedOut =
+        (err as { code?: string })?.code === 'ECONNABORTED'
       set({
         nasStatus: {
           enabled: true,
@@ -325,7 +360,9 @@ export const useWaStore = create<WaStore>((set) => ({
           watchDir: '',
           foldersFound: 0,
           filesFound: 0,
-          mountHint: 'Could not read NAS status (ensure the backend is running and you are logged in).',
+          mountHint: timedOut
+            ? 'NAS status request timed out — backend may be scanning SMB; refresh in a moment or remount NAS.'
+            : 'Could not reach the backend at port 5002. Start: cd backend && python run.py --all',
         },
       })
     } finally {
@@ -333,11 +370,22 @@ export const useWaStore = create<WaStore>((set) => ({
     }
   },
 
+  deleteNasRootFolder: async (folderName) => {
+    const encoded = encodeURIComponent(folderName)
+    const { data } = await api.delete<{
+      quarantined?: boolean
+      alreadyRemoved?: boolean
+      message?: string
+    }>(`/wa/nas/root-folders/${encoded}`)
+    return data
+  },
+
   syncNasFromDrive: async () => {
     const syncTimeout = { timeout: 300000 }
     let data: {
       projectsCreated?: string[]
       projectsRemoved?: string[]
+      foldersCreated?: string[]
       recordsImported?: number
       recordsRemoved?: number
       totalCreated?: number
@@ -359,6 +407,7 @@ export const useWaStore = create<WaStore>((set) => ({
     return {
       created: data.projectsCreated || [],
       removed: data.projectsRemoved || [],
+      foldersCreated: data.foldersCreated || [],
       totalCreated: data.recordsImported ?? data.totalCreated ?? 0,
       totalRemoved: data.recordsRemoved ?? 0,
     }
@@ -366,11 +415,30 @@ export const useWaStore = create<WaStore>((set) => ({
 
   createProject: async (projData) => {
     const { data } = await api.post('/wa/admin/projects', projData)
+    set((state) => ({
+      projects: [data as WaProject, ...state.projects.filter((p) => p.id !== data.id)],
+    }))
     return data
   },
 
   deleteProject: async (id, deleteNasFolder = false) => {
-    await api.delete(`/wa/admin/projects/${id}`, { data: { deleteNasFolder } })
+    const { data } = await api.delete<{ message?: string; nasQuarantined?: boolean; code?: string }>(
+      `/wa/admin/projects/${id}`,
+      { data: { deleteNasFolder } }
+    )
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== id),
+    }))
+    return data
+  },
+
+  updateProject: async (id, patch) => {
+    const { data } = await api.patch(`/wa/admin/projects/${id}`, patch)
+    const updated = data as WaProject
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? updated : p)),
+    }))
+    return updated
   },
 
   confirmRecord: async (id) => {

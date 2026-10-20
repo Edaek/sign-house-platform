@@ -43,13 +43,14 @@ class NasSyncScheduler:
                     result = run_bidirectional_nas_sync()
                     if not result.get('ok'):
                         continue
+                    pushed = len(result.get('foldersCreated') or [])
                     created = len(result.get('projectsCreated') or [])
                     imported = result.get('recordsImported') or 0
                     removed = result.get('recordsRemoved') or 0
-                    if created or imported or removed:
+                    if pushed or created or imported or removed:
                         logger.info(
-                            '[NASSync] +%d project(s), +%d record(s), -%d record(s)',
-                            created, imported, removed,
+                            '[NASSync] web→NAS %d folder(s), NAS→web +%d project(s), +%d record(s), -%d record(s)',
+                            pushed, created, imported, removed,
                         )
                 except Exception:
                     logger.exception('[NASSync] Auto-sync failed')

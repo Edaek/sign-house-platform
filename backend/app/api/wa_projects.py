@@ -20,7 +20,7 @@ def list_projects():
     from app.services.nas_sync_service import nas_folder_index, enrich_project_dict
 
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    nas_index = nas_folder_index()
+    nas_index = nas_folder_index(blocking_scan=False)
 
     counts_by_project = {}
     if projects:
@@ -62,10 +62,12 @@ def get_project(project_id):
         return jsonify({'error': 'Project not found'}), 404
     from app.services.nas_sync_service import enrich_project_dict
     from app.services.nas_watcher_service import nas_mount
+    from app.services.project_number_match_service import is_range_folder_code
 
     d = serialize_doc(project)
     enrich_project_dict(d, fast_single=True)
     pid = project['_id']
+    code = (project.get('code') or '').strip()
     d['totalRecords'] = mongo.db.wa_records.count_documents({
         'projectId': pid,
         'status': {'$ne': 'voided'},
@@ -75,13 +77,33 @@ def get_project(project_id):
         'nasSourcePath': {'$exists': True, '$nin': [None, '']},
         'status': {'$ne': 'voided'},
     })
-    nas_files = d.get('nasFileCount') or 0
-    d['nasPendingImport'] = max(0, nas_files - d['nasImportedCount']) if nas_mount.is_available() else 0
-    # NAS file listing over SMB can be slow — only when explicitly requested
-    if request.args.get('includeNasFiles') == '1' and nas_mount.is_available():
-        d['nasFiles'] = nas_mount.list_folder_files(project['code'])
+    d['nasRangeBucket'] = is_range_folder_code(code)
+    d['nasFiles'] = []
+    d['nasSubfolders'] = []
+    d['nasSiteFolders'] = []
+    d['nasLooseFiles'] = []
+
+    if nas_mount.is_available():
+        if d['nasRangeBucket']:
+            d['nasChildFolders'] = nas_mount.list_bucket_child_folders(code)
+            d['nasSiteFolders'] = [
+                {'code': c['code'], 'folderName': c['folderName']}
+                for c in d['nasChildFolders']
+                if c.get('code')
+            ]
+            d['nasLooseFiles'] = nas_mount.list_loose_root_files(code)
+            d['nasSiteFolderCount'] = len(d['nasSiteFolders'])
+            d['nasPendingImport'] = 0
+            d['nasFileCount'] = 0
+        else:
+            d['nasSubfolders'] = nas_mount.list_project_subfolders(code)
+            nas_files = d.get('nasFileCount') or 0
+            d['nasPendingImport'] = max(0, nas_files - d['nasImportedCount'])
+            if request.args.get('includeNasFiles') == '1':
+                d['nasFiles'] = nas_mount.list_folder_files(code)
     else:
-        d['nasFiles'] = []
+        d['nasPendingImport'] = 0
+
     return jsonify(d)
 
 @wa_projects_bp.route('/<project_id>/records', methods=['GET'])

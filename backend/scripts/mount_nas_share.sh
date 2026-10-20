@@ -45,6 +45,12 @@ if mount | grep -F " on ${MOUNT_POINT} " >/dev/null 2>&1; then
   exit 0
 fi
 
+# Empty local folder at MOUNT_POINT makes macOS mount to "…-1" — backend will stay Disconnected.
+if [[ -d "$MOUNT_POINT" ]] && ! mount | grep -F " on ${MOUNT_POINT} " >/dev/null 2>&1; then
+  echo "Removing stale placeholder (not an SMB mount): ${MOUNT_POINT}"
+  rm -rf "$MOUNT_POINT" || sudo rm -rf "$MOUNT_POINT"
+fi
+
 if ! ping -c 1 -W 2 "$NAS_IP" >/dev/null 2>&1; then
   echo "Cannot reach NAS at ${NAS_IP}. Check Tailscale / VPN." >&2
   exit 1
@@ -80,7 +86,6 @@ APPLESCRIPT
 }
 
 if $VIA_TUNNEL; then
-  ensure_mount_point
   TUNNEL_PORT="${NAS_TUNNEL_PORT:-1445}"
   if ! pgrep -f "127.0.0.1:${TUNNEL_PORT}:192.168.123.202:445" >/dev/null 2>&1; then
     echo "Opening SSH tunnel ${MINI_USER}@${MINI_HOST} → 192.168.123.202:445 (local ${TUNNEL_PORT})..."

@@ -17,10 +17,13 @@ _pending: Dict[str, Dict[str, Any]] = {}
 
 def assignment_confirmation_text(project: dict, count: int) -> str:
     code = project.get('code', '')
-    name = project.get('name', '') or ''
+    folder = (project.get('nasFolder') or project.get('nasFolderName') or '').strip()
+    suffix = ''
+    if folder and folder.upper() != (code or '').upper():
+        suffix = f'（{folder}）'
     if count > 1:
-        return f'✅ {count} 個檔案已歸類至專案 *{code}*（{name}）。'
-    return f'✅ 檔案已歸類至專案 *{code}*（{name}）。'
+        return f'✅ {count} 個檔案已歸類至專案 *{code}*{suffix}。'
+    return f'✅ 檔案已歸類至專案 *{code}*{suffix}。'
 
 
 def schedule_assignment_confirmation(

@@ -17,8 +17,8 @@ from app.services.message_parser_service import (
     trailing_classify_remark,
 )
 from app.services.project_number_match_service import (
-    is_range_folder_code,
-    match_projects_by_site_number,
+    is_wa_classify_target,
+    match_site_projects_by_number,
     primary_site_number,
 )
 
@@ -106,6 +106,16 @@ def _find_projects_by_codes(codes, query):
     }))
 
 
+def _classify_hit(project):
+    if project and is_wa_classify_target(project):
+        return project
+    return None
+
+
+def _filter_classify_candidates(candidates):
+    return [(p, s) for p, s in candidates if is_wa_classify_target(p)]
+
+
 def _match_project_single(trimmed, *, active_only=True):
     if not trimmed:
         return None
@@ -117,7 +127,7 @@ def _match_project_single(trimmed, *, active_only=True):
         'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
     })
     if project:
-        return project
+        return _classify_hit(project)
 
     # 2. Shorthand code (P1, P01, #1 etc) — expand to all possible paddings
     for pattern in (_PROJECT_NUM_RE, _HASH_NUM_RE):
@@ -126,7 +136,7 @@ def _match_project_single(trimmed, *, active_only=True):
             codes = _expand_project_codes(m.group(1))
             matches = _find_projects_by_codes(codes, query)
             if len(matches) == 1:
-                return matches[0]
+                return _classify_hit(matches[0])
             if len(matches) > 1:
                 return None  # ambiguous — let caller handle as candidates
             break
@@ -136,37 +146,50 @@ def _match_project_single(trimmed, *, active_only=True):
     if code:
         project = mongo.db.wa_projects.find_one({**query, 'code': code})
         if project:
-            return project
+            return _classify_hit(project)
 
-    # 4. Exact name match
-    exact_name = list(mongo.db.wa_projects.find({
+    # 4. Exact NAS folder / code match (folder label on share)
+    folder_or_code = list(mongo.db.wa_projects.find({
         **query,
-        'name': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
+        '$or': [
+            {'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'}},
+            {'nasFolder': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'}},
+        ],
     }))
-    if len(exact_name) == 1:
-        return exact_name[0]
-    if len(exact_name) > 1:
+    if len(folder_or_code) == 1:
+        return _classify_hit(folder_or_code[0])
+    if len(folder_or_code) > 1:
         return None
 
-    # 5. Partial name match (unique only)
+    # 5. Partial NAS folder match (unique only)
     partial = list(mongo.db.wa_projects.find({
         **query,
-        'name': {'$regex': re.escape(trimmed), '$options': 'i'},
+        'nasFolder': {'$regex': re.escape(trimmed), '$options': 'i'},
     }))
-    if len(partial) == 1:
-        return partial[0]
+    classify_partial = [p for p in partial if is_wa_classify_target(p)]
+    if len(classify_partial) == 1:
+        return classify_partial[0]
     # Bare leading number used as project code (e.g. "2899" from "2899 carpark sign")
     if trimmed.isdigit():
         project = mongo.db.wa_projects.find_one({
             **query,
             'code': {'$regex': f'^{re.escape(trimmed)}$', '$options': 'i'},
         })
-        if project:
-            return project
+        hit = _classify_hit(project)
+        if hit:
+            return hit
+        project = mongo.db.wa_projects.find_one({
+            **query,
+            'code': {'$regex': f'^PJ-{re.escape(trimmed)}$', '$options': 'i'},
+        })
+        hit = _classify_hit(project)
+        if hit:
+            return hit
         codes = _expand_project_codes(trimmed)
         matches = _find_projects_by_codes(codes, query)
-        if len(matches) == 1:
-            return matches[0]
+        classify_matches = [p for p in matches if is_wa_classify_target(p)]
+        if len(classify_matches) == 1:
+            return classify_matches[0]
     return None
 
 
@@ -179,7 +202,7 @@ def _match_project_code_candidates(trimmed, *, active_only=True):
             codes = _expand_project_codes(m.group(1))
             matches = _find_projects_by_codes(codes, query)
             if len(matches) > 1:
-                return [(p, 100) for p in matches]
+                return _filter_classify_candidates([(p, 100) for p in matches])
     return []
 
 
@@ -188,7 +211,7 @@ def _fuzzy_match_projects(text, *, active_only=True, limit=5):
 
     Returns a list of ``(project_doc, score)`` tuples sorted by descending
     score.  The score is the best of ``partial_ratio(text, code)`` and
-    ``partial_ratio(text, name)`` for each project.
+    ``partial_ratio(text, nasFolder)`` for each project.
     """
     from rapidfuzz import fuzz
 
@@ -198,18 +221,15 @@ def _fuzzy_match_projects(text, *, active_only=True, limit=5):
         return []
 
     text_lower = text.lower()
-    numeric_query = bool(
-        text_lower.isdigit()
-        or re.match(r'^pj[-]?\d+$', text_lower)
-    )
     scored = []
     for proj in projects:
-        code = (proj.get('code') or '').lower()
-        if numeric_query and is_range_folder_code(proj.get('code')):
+        if not is_wa_classify_target(proj):
             continue
+        code = (proj.get('code') or '').lower()
+        folder = (proj.get('nasFolder') or '').lower()
         code_score = fuzz.partial_ratio(text_lower, code)
-        name_score = fuzz.partial_ratio(text_lower, (proj.get('name') or '').lower())
-        best = max(code_score, name_score)
+        folder_score = fuzz.partial_ratio(text_lower, folder) if folder else 0
+        best = max(code_score, folder_score)
         if best >= 50:
             scored.append((proj, best))
 
@@ -265,12 +285,6 @@ def match_project_ext(text, *, active_only=True):
     if code_candidates:
         return _result(candidates=code_candidates)
 
-    site_num = primary_site_number(match_key)
-    if site_num:
-        range_hits = match_projects_by_site_number(site_num, active_only=active_only)
-        if range_hits:
-            return _result(candidates=[(p, score) for p, score, _ in range_hits])
-
     if not label_only:
         for sep in (' - ', ' – ', ' — ', '—'):
             if sep in trimmed:
@@ -284,18 +298,19 @@ def match_project_ext(text, *, active_only=True):
 
     fuzzy_text = match_key if label_only else trimmed
     scored = _fuzzy_match_projects(fuzzy_text, active_only=active_only)
-    if not scored:
-        return MatchResult()
+    if scored:
+        high_hits = [(p, s) for p, s in scored if s >= FUZZY_HIGH]
+        if len(high_hits) == 1:
+            return _result(project=high_hits[0][0])
+        mid_hits = [(p, s) for p, s in scored if s >= FUZZY_MID]
+        if mid_hits:
+            return _result(candidates=mid_hits)
 
-    top_project, top_score = scored[0]
-    high_hits = [(p, s) for p, s in scored if s >= FUZZY_HIGH]
-
-    if len(high_hits) == 1:
-        return _result(project=high_hits[0][0])
-
-    mid_hits = [(p, s) for p, s in scored if s >= FUZZY_MID]
-    if mid_hits:
-        return _result(candidates=mid_hits)
+    site_num = primary_site_number(match_key)
+    if site_num:
+        site_hits = match_site_projects_by_number(site_num, active_only=active_only)
+        if site_hits:
+            return _result(candidates=[(p, score) for p, score, _ in site_hits])
 
     return MatchResult()
 

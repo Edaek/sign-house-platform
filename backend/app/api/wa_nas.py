@@ -3,6 +3,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from bson import ObjectId
 
 from app.services.nas_watcher_service import nas_mount
+from app.services.project_number_match_service import is_range_folder_code
 from app.services.nas_sync_service import (
     sync_projects_from_nas,
     import_nas_files_for_project,
@@ -35,8 +36,8 @@ def nas_status():
 @jwt_required()
 @require_role('admin', 'manager')
 def sync_bidirectional():
-    """NAS → web: new shared-drive folders and photos appear in the app."""
-    result = run_bidirectional_nas_sync(ObjectId(get_jwt_identity()))
+    """NAS ↔ web: folders/photos on the share and projects in the app stay in sync."""
+    result = run_bidirectional_nas_sync(ObjectId(get_jwt_identity()), import_files=True)
     if not result.get('ok'):
         return jsonify(result), 503
     return jsonify(result)
@@ -45,10 +46,24 @@ def sync_bidirectional():
 @wa_nas_bp.route('/browse', methods=['GET'])
 @jwt_required()
 def browse_nas():
-    code = request.args.get('code')
+    code = (request.args.get('code') or '').strip()
     if code:
-        files = nas_mount.list_folder_files(code)
-        return jsonify({'ok': True, 'code': code.upper(), 'files': files})
+        if is_range_folder_code(code):
+            children = nas_mount.list_bucket_child_folders(code)
+            return jsonify({
+                'ok': True,
+                'code': code.upper(),
+                'rangeBucket': True,
+                'childFolders': children,
+                'siteFolders': [c for c in children if c.get('isSiteProject')],
+            })
+        return jsonify({
+            'ok': True,
+            'code': code.upper(),
+            'rangeBucket': False,
+            'subfolders': nas_mount.list_project_subfolders(code),
+            'files': nas_mount.list_folder_files(code),
+        })
 
     folders = nas_mount.list_folders()
     return jsonify({'ok': True, 'folders': folders})
@@ -62,7 +77,8 @@ def create_folder():
     code = data.get('code', '').strip()
     if not code:
         return jsonify({'ok': False, 'error': 'code is required'}), 400
-    result = nas_mount.create_folder(code)
+    parent_bucket = (data.get('parentBucketCode') or data.get('nasParentFolder') or '').strip() or None
+    result = nas_mount.create_folder(code, parent_bucket_code=parent_bucket)
     if not result.get('ok'):
         return jsonify(result), 500
     return jsonify(result)
@@ -104,3 +120,62 @@ def import_all_nas_files_route():
     results = import_all_projects_from_nas()
     total_created = sum(r.get('created', 0) for r in results)
     return jsonify({'ok': True, 'totalCreated': total_created, 'projects': results})
+
+
+@wa_nas_bp.route('/root-folders/<path:folder_name>', methods=['DELETE'])
+@jwt_required()
+@require_role('admin', 'manager')
+def delete_nas_root_folder(folder_name):
+    """Remove a top-level NAS bucket folder (no wa_projects row required)."""
+    from urllib.parse import unquote
+
+    name = unquote(folder_name or '').strip()
+    if not name or '..' in name or '/' in name:
+        return jsonify({'ok': False, 'error': 'Invalid folder name'}), 400
+    if not nas_mount.is_available():
+        return jsonify({'ok': False, 'error': 'NAS mount not available'}), 503
+    bucket = nas_mount._resolve_bucket_dir(name)
+    if bucket is None:
+        watch = nas_mount._resolved_watch_dir()
+        if not watch:
+            return jsonify({'ok': False, 'error': 'NAS watch dir not configured'}), 503
+        from pathlib import Path
+        bucket = Path(watch) / name
+    if not bucket.is_dir():
+        from pathlib import Path
+        watch = nas_mount._resolved_watch_dir()
+        quarantined = None
+        if watch:
+            prefix = f'.trash-{name}-'
+            for entry in Path(watch).iterdir():
+                if entry.is_dir() and (
+                    entry.name == name
+                    or entry.name.lower() == name.lower()
+                    or entry.name.startswith(prefix)
+                    or entry.name.lower().startswith(prefix.lower())
+                ):
+                    if entry.name.startswith('.trash-'):
+                        quarantined = entry.name
+                        break
+        if quarantined:
+            return jsonify({
+                'ok': True,
+                'folder': name,
+                'alreadyRemoved': True,
+                'quarantinedAs': quarantined,
+                'message': f'Folder already removed (quarantined as {quarantined}).',
+            })
+        return jsonify({
+            'ok': True,
+            'folder': name,
+            'alreadyRemoved': True,
+            'message': 'Folder not found on NAS (may already be deleted).',
+        })
+    r = nas_mount.delete_path(str(bucket))
+    if not r.get('ok'):
+        return jsonify({'ok': False, 'error': r.get('error') or 'Delete failed'}), 503
+    out = {'ok': True, 'folder': name}
+    if r.get('quarantined'):
+        out['quarantined'] = True
+        out['message'] = r.get('message')
+    return jsonify(out)

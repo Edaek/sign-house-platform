@@ -10,8 +10,8 @@ from app.services.ai_extract_service import _call_ollama, _get_config, _parse_st
 from app.services.image_pool_service import match_project_ext
 from app.services.message_parser_service import split_classify_label_and_remark
 from app.services.project_number_match_service import (
-    is_range_folder_code,
-    match_projects_by_site_number,
+    is_wa_classify_target,
+    list_wa_classify_target_projects,
     primary_site_number,
 )
 
@@ -56,11 +56,7 @@ def _format_candidate_lines(candidates, limit=8):
         else:
             proj = item
         code = proj.get('code', '')
-        name = (proj.get('name') or '').strip()
-        if name and name.lower() != code.lower():
-            lines.append(f'{i}. {code} - {name}')
-        else:
-            lines.append(f'{i}. {code}')
+        lines.append(f'{i}. {code}')
     return '\n'.join(lines)
 
 
@@ -99,7 +95,9 @@ def _ollama_suggest_project(user_label, catalog):
     """When heuristics find nothing, ask LLM to pick best catalog row or none."""
     if not catalog:
         return None, ''
-    lines = '\n'.join(f'- id:{p["id"]} code:{p["code"]} name:{p.get("name", "")}' for p in catalog[:60])
+    lines = '\n'.join(
+        f'- id:{p["id"]} code:{p["code"]} folder:{p.get("nasFolder", "")}' for p in catalog[:60]
+    )
     prompt = f"""You help match WhatsApp photo uploads to construction project folders.
 
 User typed: "{user_label}"
@@ -141,7 +139,11 @@ def resolve_classify_input(text, *, active_only=True):
     match_key = label or trimmed
 
     ext = match_project_ext(trimmed, active_only=active_only)
-    if ext.project and _is_exact_code_input(match_key, ext.project):
+    if (
+        ext.project
+        and is_wa_classify_target(ext.project)
+        and _is_exact_code_input(match_key, ext.project)
+    ):
         return ClassifyResolve(
             action='assign',
             project=ext.project,
@@ -150,16 +152,12 @@ def resolve_classify_input(text, *, active_only=True):
         )
 
     site_num = primary_site_number(match_key)
-    range_hits = match_projects_by_site_number(site_num, active_only=active_only) if site_num else []
-
     numeric_site = bool(site_num and match_key.strip().isdigit())
 
     candidates = []
-    if range_hits:
-        candidates = [(p, score) for p, score, _reason in range_hits]
-    elif ext.candidates and not (numeric_site and not range_hits):
-        candidates = list(ext.candidates)
-    elif ext.project:
+    if ext.candidates:
+        candidates = [(p, s) for p, s in ext.candidates if is_wa_classify_target(p)]
+    elif ext.project and is_wa_classify_target(ext.project):
         candidates = [(ext.project, 90)]
 
     if len(candidates) > 1:
@@ -197,14 +195,14 @@ def resolve_classify_input(text, *, active_only=True):
         {
             'id': str(p['_id']),
             'code': p.get('code', ''),
-            'name': p.get('name', ''),
+            'nasFolder': p.get('nasFolder') or '',
         }
-        for p in mongo.db.wa_projects.find({'status': 'active'}).limit(80)
+        for p in list_wa_classify_target_projects(active_only=True, limit=80)
     ]
     suggested, ai_reply = (None, '')
-    if not (numeric_site and not range_hits):
+    if not numeric_site:
         suggested, ai_reply = _ollama_suggest_project(match_key, catalog)
-    if suggested:
+    if suggested and is_wa_classify_target(suggested):
         code = suggested.get('code', '')
         fallback = (
             f'找不到「{match_key}」。是否指 *{code}*？\n'

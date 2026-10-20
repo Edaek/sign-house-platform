@@ -154,21 +154,6 @@ def create_app(config_name=None):
         mongo.db.wa_records.create_index([('createdAt', -1)])
         mongo.db.wa_records.create_index([('senderPhone', 1), ('status', 1), ('createdAt', -1)])
         mongo.db.wa_projects.create_index('code', unique=True)
-        for _p in mongo.db.wa_projects.find({'nameNormalized': {'$exists': False}}, {'name': 1}):
-            _n = (_p.get('name') or '').strip()
-            if _n:
-                mongo.db.wa_projects.update_one(
-                    {'_id': _p['_id']},
-                    {'$set': {'nameNormalized': _n.casefold()}},
-                )
-        try:
-            mongo.db.wa_projects.create_index(
-                'nameNormalized',
-                unique=True,
-                partialFilterExpression={'status': {'$ne': 'archived'}},
-            )
-        except Exception:
-            app.logger.warning('wa_projects nameNormalized unique index not created (duplicate names?)')
         mongo.db.wa_projects.create_index('status')
         mongo.db.pool_images.create_index([('phone', 1), ('projectId', 1)])
         mongo.db.pool_images.create_index([('createdAt', -1)])
