@@ -1,4 +1,5 @@
 """NAS local-mount service — manages project folders on a mounted NAS share."""
+from __future__ import annotations
 
 import logging
 import os
