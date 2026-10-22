@@ -16,14 +16,26 @@ _pending: Dict[str, Dict[str, Any]] = {}
 
 
 def assignment_confirmation_text(project: dict, count: int) -> str:
-    code = project.get('code', '')
-    folder = (project.get('nasFolder') or project.get('nasFolderName') or '').strip()
-    suffix = ''
-    if folder and folder.upper() != (code or '').upper():
-        suffix = f'（{folder}）'
+    from bson import ObjectId
+
+    from app import mongo
+    from app.services.nas_sync_service import enrich_wa_projects_display
+    from app.services.project_number_match_service import wa_classify_display_label
+
+    pid = project.get('_id')
+    if pid is not None:
+        try:
+            oid = pid if isinstance(pid, ObjectId) else ObjectId(str(pid))
+            fresh = mongo.db.wa_projects.find_one({'_id': oid})
+            if fresh:
+                project = fresh
+        except Exception:
+            pass
+    enrich_wa_projects_display([project])
+    name = wa_classify_display_label(project, max_len=500)
     if count > 1:
-        return f'✅ {count} 個檔案已歸類至專案 *{code}*{suffix}。'
-    return f'✅ 檔案已歸類至專案 *{code}*{suffix}。'
+        return f'✅ {count} 個檔案已歸類至專案：\n{name}'
+    return f'✅ 檔案已歸類至專案：\n{name}'
 
 
 def schedule_assignment_confirmation(

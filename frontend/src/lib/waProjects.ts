@@ -10,12 +10,11 @@ export function isRangeBucketCode(code: string): boolean {
   return b != null && b.hi > b.lo
 }
 
-const T_RANGE_BUCKET_RE = /^T-\d+-\d+$/i
+const GENERIC_RANGE_BUCKET_RE = /^(.+)-(\d+)-(\d+)$/i
 
-/** Top-level NAS bucket folder (PJ-lo-hi or T-lo-hi) — not a site project code. */
+/** Top-level NAS bucket folder — site number lo-hi range (any prefix). */
 export function isNasBucketFolderCode(code: string): boolean {
-  const c = (code || '').trim()
-  return isRangeBucketCode(c) || T_RANGE_BUCKET_RE.test(c)
+  return parseRangeBounds(code) != null
 }
 
 export function nasFolderNameDiffersFromCode(project: Pick<WaProject, 'code' | 'nasFolderName'>): boolean {
@@ -25,10 +24,12 @@ export function nasFolderNameDiffersFromCode(project: Pick<WaProject, 'code' | '
 }
 
 export function parseRangeBounds(code: string): { lo: number; hi: number } | null {
-  const m = (code || '').trim().match(RANGE_BUCKET_RE)
+  const trimmed = (code || '').trim()
+  const pj = trimmed.match(RANGE_BUCKET_RE)
+  const m = pj || trimmed.match(GENERIC_RANGE_BUCKET_RE)
   if (!m) return null
-  let lo = parseInt(m[1], 10)
-  let hi = parseInt(m[2], 10)
+  let lo = parseInt(m[pj ? 1 : 2], 10)
+  let hi = parseInt(m[pj ? 2 : 3], 10)
   if (lo > hi) [lo, hi] = [hi, lo]
   return { lo, hi }
 }

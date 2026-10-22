@@ -51,12 +51,12 @@ if [[ -d "$MOUNT_POINT" ]] && ! mount | grep -F " on ${MOUNT_POINT} " >/dev/null
   rm -rf "$MOUNT_POINT" || sudo rm -rf "$MOUNT_POINT"
 fi
 
-if ! ping -c 1 -W 2 "$NAS_IP" >/dev/null 2>&1; then
-  echo "Cannot reach NAS at ${NAS_IP}. Check Tailscale / VPN." >&2
+if ! $VIA_TUNNEL && ! ping -c 1 -W 2 "$NAS_IP" >/dev/null 2>&1; then
+  echo "Cannot reach NAS at ${NAS_IP}. Check Tailscale / VPN, or use: $0 --via-tunnel" >&2
   exit 1
 fi
 
-if [[ ! -d "$MOUNT_POINT" ]]; then
+if ! $VIA_TUNNEL && [[ ! -d "$MOUNT_POINT" ]]; then
   echo "Creating mount point (may ask for your Mac login password)..."
   sudo mkdir -p "$MOUNT_POINT"
   sudo chown "$(whoami)" "$MOUNT_POINT"

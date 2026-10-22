@@ -277,11 +277,21 @@ export default function WaManageProjectsPage() {
         quarantined?: boolean
         alreadyRemoved?: boolean
         message?: string
+        webProjectsRemoved?: string[]
+        webRecordsRemoved?: number
       }
+      const webNote =
+        (data.webRecordsRemoved ?? 0) > 0 || (data.webProjectsRemoved?.length ?? 0) > 0
+          ? ` Web: −${data.webRecordsRemoved ?? 0} record(s)${
+              data.webProjectsRemoved?.length
+                ? `, removed project(s) ${data.webProjectsRemoved.join(', ')}`
+                : ''
+            }.`
+          : ''
       if (data.message) {
-        toast.success(data.message, { duration: 6000 })
+        toast.success(`${data.message}${webNote}`, { duration: 6000 })
       } else {
-        toast.success(`NAS folder ${deleteNasOnlyFolder} deleted`)
+        toast.success(`NAS folder ${deleteNasOnlyFolder} deleted.${webNote}`)
       }
       setDeleteNasOnlyFolder(null)
       fetchNasStatus()

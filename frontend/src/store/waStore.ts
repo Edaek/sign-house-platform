@@ -246,10 +246,18 @@ export const useWaStore = create<WaStore>((set) => ({
   fetchProjects: async () => {
     set({ loading: true })
     try {
-      const { data } = await api.get('/wa/projects', { timeout: 30000 })
+      const { data } = await api.get('/wa/projects', { timeout: 60000 })
       set({ projects: data })
-    } catch {
+    } catch (err: unknown) {
       set({ projects: [] })
+      const ax = err as { code?: string; message?: string; response?: { status?: number } }
+      const msg =
+        ax.code === 'ECONNABORTED'
+          ? '專案列表載入逾時（NAS 較慢），請稍後再試或點 Sync NAS'
+          : ax.response?.status === 401
+            ? '登入已過期，請重新登入'
+            : '無法載入專案列表，請確認 backend (5002) 已啟動'
+      import('react-hot-toast').then(({ default: toast }) => toast.error(msg))
     } finally {
       set({ loading: false })
     }

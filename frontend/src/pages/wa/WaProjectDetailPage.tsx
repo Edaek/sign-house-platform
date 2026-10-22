@@ -3,7 +3,8 @@ import { Link, useParams } from 'react-router-dom'
 import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import WaRecordTable from '../../components/wa/RecordTable'
-import { MapPin, Layers, HardDrive, ChevronLeft, Folder } from 'lucide-react'
+import { MapPin, Layers, HardDrive, ChevronLeft, Folder, FileText, Loader2, RefreshCw } from 'lucide-react'
+import toast from 'react-hot-toast'
 import api from '../../lib/api'
 import { formatWaProjectLabel } from '../../lib/waProjects'
 
@@ -36,14 +37,14 @@ interface ProjectDetail {
   nasChildFolders?: NasChildFolder[]
   nasLooseFiles?: NasFileEntry[]
   nasSubfolders?: { name: string }[]
-  nasFiles?: NasFileEntry[]
+  nasTxtFiles?: NasFileEntry[]
 }
 
 function isRangeBucketCode(code: string) {
   return /^PJ-\d+-\d+$/i.test((code || '').trim())
 }
 
-function NasFileList({ files }: { files: NasFileEntry[] }) {
+function NasLooseFileList({ files }: { files: NasFileEntry[] }) {
   return (
     <ul className="max-h-48 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 rounded-md border border-slate-200 dark:border-slate-700">
       {files.map((f) => (
@@ -55,6 +56,187 @@ function NasFileList({ files }: { files: NasFileEntry[] }) {
         </li>
       ))}
     </ul>
+  )
+}
+
+function NasTxtFilesPanel({
+  projectId,
+  files,
+  nasConnected,
+}: {
+  projectId: string
+  files: NasFileEntry[]
+  nasConnected: boolean
+}) {
+  const sorted = useMemo(
+    () =>
+      [...files].sort((a, b) => (b.modified || '').localeCompare(a.modified || '')),
+    [files],
+  )
+  const [selectedPath, setSelectedPath] = useState('')
+  const [content, setContent] = useState('')
+  const [serverModified, setServerModified] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [externalUpdate, setExternalUpdate] = useState(false)
+
+  useEffect(() => {
+    if (!selectedPath && sorted.length > 0) {
+      setSelectedPath(sorted[0].relativePath || sorted[0].name)
+    }
+  }, [sorted, selectedPath])
+
+  const loadContent = async (path: string, opts?: { silent?: boolean }) => {
+    if (!path || !nasConnected) return
+    if (!opts?.silent) setLoading(true)
+    try {
+      const { data } = await api.get<{ ok: boolean; content?: string; modified?: string; error?: string }>(
+        `/wa/projects/${projectId}/nas/txt/content`,
+        { params: { path } },
+      )
+      if (!data.ok) {
+        if (!opts?.silent) toast.error(data.error || 'Failed to load file')
+        return
+      }
+      const mod = data.modified || null
+      if (opts?.silent && dirty && mod && serverModified && mod !== serverModified) {
+        setExternalUpdate(true)
+        return
+      }
+      setContent(data.content ?? '')
+      setServerModified(mod)
+      setDirty(false)
+      setExternalUpdate(false)
+    } catch {
+      if (!opts?.silent) toast.error('Failed to load NAS text file')
+    } finally {
+      if (!opts?.silent) setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (selectedPath) void loadContent(selectedPath)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, projectId])
+
+  useEffect(() => {
+    if (!selectedPath || !nasConnected || dirty) return
+    const t = window.setInterval(() => {
+      void loadContent(selectedPath, { silent: true })
+    }, 20000)
+    return () => window.clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath, nasConnected, dirty, projectId])
+
+  async function save() {
+    if (!selectedPath || saving) return
+    setSaving(true)
+    try {
+      const { data } = await api.put<{ ok: boolean; modified?: string; error?: string }>(
+        `/wa/projects/${projectId}/nas/txt/content`,
+        { path: selectedPath, content },
+      )
+      if (!data.ok) {
+        toast.error(data.error || 'Save failed')
+        return
+      }
+      setServerModified(data.modified || null)
+      setDirty(false)
+      setExternalUpdate(false)
+      toast.success('Saved to NAS')
+    } catch {
+      toast.error('Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!nasConnected) {
+    return <p className="text-slate-500 text-sm">Connect NAS to view site remark files.</p>
+  }
+  if (sorted.length === 0) {
+    return (
+      <p className="text-slate-500 text-sm">
+        No .txt files in this folder yet (WhatsApp site remarks are saved under Photo/日期/).
+      </p>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {sorted.map((f) => {
+          const path = f.relativePath || f.name
+          const active = path === selectedPath
+          return (
+            <button
+              key={path}
+              type="button"
+              onClick={() => {
+                if (path !== selectedPath) {
+                  setSelectedPath(path)
+                }
+              }}
+              className={`text-left px-2 py-1 rounded-md border text-xs font-mono max-w-full truncate ${
+                active
+                  ? 'border-sign-500 bg-sign-50 dark:bg-sign-950/40 text-sign-800 dark:text-sign-200'
+                  : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+              }`}
+              title={path}
+            >
+              <FileText className="h-3 w-3 inline mr-1 opacity-70" />
+              {path}
+            </button>
+          )
+        })}
+      </div>
+      {externalUpdate && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100">
+          <span>File changed on NAS.</span>
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 font-medium text-sign-600 dark:text-sign-400"
+            onClick={() => void loadContent(selectedPath)}
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Reload
+          </button>
+        </div>
+      )}
+      {loading ? (
+        <div className="flex justify-center py-8">
+          <Loader2 className="h-6 w-6 animate-spin text-sign-500" />
+        </div>
+      ) : (
+        <>
+          <textarea
+            value={content}
+            onChange={(e) => {
+              setContent(e.target.value)
+              setDirty(true)
+              setExternalUpdate(false)
+            }}
+            rows={10}
+            className="input w-full font-mono text-sm resize-y min-h-[160px]"
+            spellCheck={false}
+          />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-slate-500">
+              {dirty ? 'Unsaved changes' : serverModified ? `NAS updated ${serverModified.slice(0, 19).replace('T', ' ')} UTC` : ''}
+            </p>
+            <button
+              type="button"
+              disabled={!dirty || saving}
+              onClick={() => void save()}
+              className="btn btn-primary text-sm px-3 py-1.5 inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save to NAS
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -77,7 +259,7 @@ export default function WaProjectDetailPage() {
     const range = codeHint ? isRangeBucketCode(codeHint) : false
     return api
       .get(`/wa/projects/${projectId}`, {
-        params: range ? {} : { includeNasFiles: '1' },
+        params: range ? {} : { includeNasTxt: '1' },
       })
       .then(({ data }) => {
         setProject(data)
@@ -238,7 +420,7 @@ export default function WaProjectDetailPage() {
       </div>
 
       {(isRangeBucket || (project.nasSubfolders?.length ?? 0) > 0 ||
-        (!isRangeBucket && (project.nasFiles?.length ?? 0) > 0) ||
+        !isRangeBucket ||
         (project.nasLooseFiles?.length ?? 0) > 0) && (
         <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/40 overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center gap-2">
@@ -299,13 +481,19 @@ export default function WaProjectDetailPage() {
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
                   Files on bucket root (not auto-imported)
                 </p>
-                <NasFileList files={project.nasLooseFiles!} />
+                <NasLooseFileList files={project.nasLooseFiles!} />
               </div>
             )}
-            {!isRangeBucket && (project.nasFiles?.length ?? 0) > 0 && (
+            {!isRangeBucket && (
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Image files</p>
-                <NasFileList files={project.nasFiles!} />
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                  Site remark (.txt)
+                </p>
+                <NasTxtFilesPanel
+                  projectId={id!}
+                  files={project.nasTxtFiles ?? []}
+                  nasConnected={Boolean(nasStatus?.connected)}
+                />
               </div>
             )}
           </div>

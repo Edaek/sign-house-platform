@@ -15,12 +15,34 @@ def list_projects():
         query['status'] = status_filter
     
     projects = list(mongo.db.wa_projects.find(query).sort('updatedAt', -1))
+    parent_buckets = sorted({
+        (p.get('nasParentBucket') or '').strip()
+        for p in projects
+        if (p.get('nasParentBucket') or '').strip()
+    })
 
     from datetime import datetime
-    from app.services.nas_sync_service import nas_folder_index, enrich_project_dict
+    from app.services.nas_sync_service import (
+        _build_index_from_folders,
+        build_nas_folder_index_from_buckets,
+        enrich_project_dict,
+        nas_folder_index,
+    )
+    from app.services.nas_watcher_service import nas_mount
 
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
     nas_index = nas_folder_index(blocking_scan=False)
+    if not nas_index:
+        cached = nas_mount.get_cached_folders() or nas_mount.peek_folder_cache()
+        if cached:
+            nas_index = _build_index_from_folders(cached)
+        elif nas_mount.is_volume_mounted() and parent_buckets:
+            nas_index = build_nas_folder_index_from_buckets(parent_buckets)
+        if not nas_index and nas_mount.is_volume_mounted():
+            import threading
+
+            threading.Thread(target=nas_mount.refresh_folder_cache, daemon=True).start()
 
     counts_by_project = {}
     if projects:
@@ -49,7 +71,7 @@ def list_projects():
         stats = counts_by_project.get(p['_id'], {})
         d['totalRecords'] = stats.get('totalRecords', 0)
         d['todayRecords'] = stats.get('todayRecords', 0)
-        enrich_project_dict(d, nas_index)
+        enrich_project_dict(d, nas_index, for_list=True)
         result.append(d)
 
     return jsonify(result)
@@ -60,8 +82,16 @@ def get_project(project_id):
     project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
     if not project:
         return jsonify({'error': 'Project not found'}), 404
-    from app.services.nas_sync_service import enrich_project_dict
+    from app.services.nas_sync_service import enrich_project_dict, reconcile_project_from_nas
     from app.services.nas_watcher_service import nas_mount
+
+    if nas_mount.is_available():
+        outcome = reconcile_project_from_nas(project)
+        if outcome.get('projectRemoved'):
+            return jsonify({'error': 'Project not found on NAS (removed from app)'}), 404
+        project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
     from app.services.project_number_match_service import is_range_folder_code
 
     d = serialize_doc(project)
@@ -79,6 +109,7 @@ def get_project(project_id):
     })
     d['nasRangeBucket'] = is_range_folder_code(code)
     d['nasFiles'] = []
+    d['nasTxtFiles'] = []
     d['nasSubfolders'] = []
     d['nasSiteFolders'] = []
     d['nasLooseFiles'] = []
@@ -99,17 +130,90 @@ def get_project(project_id):
             d['nasSubfolders'] = nas_mount.list_project_subfolders(code)
             nas_files = d.get('nasFileCount') or 0
             d['nasPendingImport'] = max(0, nas_files - d['nasImportedCount'])
-            if request.args.get('includeNasFiles') == '1':
+            if request.args.get('includeNasTxt') == '1':
+                d['nasTxtFiles'] = nas_mount.list_project_txt_files(code)
+            elif request.args.get('includeNasFiles') == '1':
                 d['nasFiles'] = nas_mount.list_folder_files(code)
     else:
         d['nasPendingImport'] = 0
 
     return jsonify(d)
 
+
+def _wa_project_or_404(project_id):
+    try:
+        oid = ObjectId(project_id)
+    except Exception:
+        return None
+    return mongo.db.wa_projects.find_one({'_id': oid, 'status': {'$ne': 'archived'}})
+
+
+@wa_projects_bp.route('/<project_id>/nas/txt', methods=['GET'])
+@jwt_required()
+def list_project_nas_txt(project_id):
+    project = _wa_project_or_404(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    from app.services.nas_watcher_service import nas_mount
+
+    if not nas_mount.is_available():
+        return jsonify({'ok': False, 'error': 'NAS not connected', 'files': []}), 503
+    code = (project.get('code') or '').strip()
+    return jsonify({'ok': True, 'files': nas_mount.list_project_txt_files(code)})
+
+
+@wa_projects_bp.route('/<project_id>/nas/txt/content', methods=['GET', 'PUT'])
+@jwt_required()
+def project_nas_txt_content(project_id):
+    project = _wa_project_or_404(project_id)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    from app.services.nas_watcher_service import nas_mount
+
+    if not nas_mount.is_available():
+        return jsonify({'ok': False, 'error': 'NAS not connected'}), 503
+    code = (project.get('code') or '').strip()
+    rel = (request.args.get('path') or '').strip()
+
+    if request.method == 'GET':
+        if not rel:
+            return jsonify({'ok': False, 'error': 'path is required'}), 400
+        result = nas_mount.read_project_txt_file(code, rel)
+        if not result.get('ok'):
+            status = 404 if result.get('missing') else 400
+            return jsonify(result), status
+        return jsonify(result)
+
+    data = request.get_json(silent=True) or {}
+    rel = (data.get('path') or rel or '').strip()
+    if not rel:
+        return jsonify({'ok': False, 'error': 'path is required'}), 400
+    result = nas_mount.write_project_txt_file(code, rel, data.get('content', ''))
+    if not result.get('ok'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
 @wa_projects_bp.route('/<project_id>/records', methods=['GET'])
 @jwt_required()
 def get_project_records(project_id):
-    query = {'projectId': ObjectId(project_id)}
+    from app.services.nas_sync_service import reconcile_project_from_nas
+    from app.services.nas_watcher_service import nas_mount
+
+    try:
+        pid = ObjectId(project_id)
+    except Exception:
+        return jsonify({'error': 'Invalid project id'}), 400
+
+    project = mongo.db.wa_projects.find_one({'_id': pid, 'status': {'$ne': 'archived'}})
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+    if nas_mount.is_available():
+        outcome = reconcile_project_from_nas(project)
+        if outcome.get('projectRemoved'):
+            return jsonify({'error': 'Project not found on NAS (removed from app)'}), 404
+
+    query = {'projectId': pid}
     status = request.args.get('status')
     rec_type = request.args.get('type')
     phone = request.args.get('phone')

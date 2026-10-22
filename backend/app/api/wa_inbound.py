@@ -19,6 +19,7 @@ from app.services.image_pool_service import (
 from app.services.extraction_runner_service import run_extraction
 from app.services.followup_service import handle_follow_up_reply, send_follow_up
 from app.services.project_ai_resolve_service import (
+    coerce_assign_to_confirm,
     resolve_classify_input,
     set_ai_confirm,
     clear_ai_confirm,
@@ -28,6 +29,7 @@ from app.services.project_ai_resolve_service import (
     is_negative,
     is_rejection_only,
 )
+from app.services.project_number_match_service import classify_input_matches_full_display
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +374,7 @@ def _set_fuzzy_choice(group_id, sender, candidates):
     """Store candidate list so the user can reply with a number."""
     choices = [
         {'code': p['code'], 'nasFolder': p.get('nasFolder') or '', 'id': str(p['_id'])}
-        for p, _score in candidates[:5]
+        for p, _score in candidates
     ]
     mongo.db.wa_system.update_one(
         {'_id': _fuzzy_choice_key(group_id, sender)},
@@ -403,9 +405,13 @@ def _clear_fuzzy_choice(group_id, sender):
 
 def _format_fuzzy_candidates(candidates):
     """Build a numbered list string for bot reply."""
+    from app.services.nas_sync_service import enrich_wa_projects_display
+    from app.services.project_number_match_service import wa_classify_display_label
+
+    enrich_wa_projects_display(candidates)
     lines = []
-    for i, (proj, _score) in enumerate(candidates[:5], 1):
-        lines.append(f'{i}. {proj["code"]}')
+    for i, (proj, _score) in enumerate(candidates, 1):
+        lines.append(f'{i}. {wa_classify_display_label(proj, max_len=500)}')
     return '\n'.join(lines)
 
 
@@ -561,8 +567,10 @@ def _send_fuzzy_prompt(to, label, candidates, *, group_id=None, sender=None):
 
 
 def _send_ai_confirm_prompt(group_id, sender, to, project, *, quote_msg_id=None):
-    code = project.get('code', '')
-    body = f'已選 *{code}*。回覆「是」或「確認」後歸類照片。'
+    from app.services.project_number_match_service import wa_classify_display_label
+
+    label = wa_classify_display_label(project, max_len=500)
+    body = f'已選：\n{label}\n回覆「是」或「確認」後歸類照片。'
     if group_id:
         _send_group_prompt(group_id, sender or to, body, quote_msg_id=quote_msg_id)
     else:
@@ -834,7 +842,15 @@ def _apply_classify_resolve(
     pool_image_ids=None,
 ):
     """Heuristic + Ollama classify. Returns (project|None, remark, json type)."""
-    resolve = resolve_classify_input(text, active_only=True)
+    from app.services.message_parser_service import split_classify_label_and_remark
+
+    trimmed = ' '.join((text or '').strip().split())
+    label, _ = split_classify_label_and_remark(trimmed)
+    match_key = label or trimmed
+    resolve = coerce_assign_to_confirm(
+        resolve_classify_input(text, active_only=True),
+        match_key,
+    )
     remark = resolve.remark
     key_sender = sender or to
 
@@ -989,7 +1005,10 @@ def _resolve_media_project(data, sender, group_id=None):
     if caption:
         ext = match_project_ext(caption, active_only=True)
         if ext.project:
-            return ext.remark or caption, ext.project
+            lab, _ = split_classify_label_and_remark(caption)
+            key = lab or caption
+            if classify_input_matches_full_display(key, ext.project):
+                return ext.remark or caption, ext.project
         if not _looks_like_filename(raw):
             # Full line for pool + classify; resolver splits leading code vs remark.
             return raw, None
@@ -1418,9 +1437,15 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
     if not is_media and text.strip():
         trimmed = text.strip()
         if trimmed.lower() == 'projects':
-            from app.services.project_number_match_service import list_wa_classify_target_projects
+            from app.services.project_number_match_service import (
+                list_wa_classify_target_projects,
+                wa_classify_display_label,
+            )
+            from app.services.nas_sync_service import enrich_wa_projects_display
+
             projects = list_wa_classify_target_projects(active_only=True)
-            lines = [f'• {p["code"]}' for p in projects]
+            enrich_wa_projects_display(projects)
+            lines = [f'• {wa_classify_display_label(p, max_len=500)}' for p in projects]
             try:
                 send_group_message(group_id, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
             except Exception:
@@ -1444,33 +1469,38 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
         if pending and not has_quoted:
             stored = _peek_classify_intent(group_id, sender)
             if stored and stored == trimmed:
-                ext_stored = match_project_ext(stored, active_only=True)
-                if ext_stored.project:
-                    _pop_classify_intent(group_id, sender)
-                    _clear_fuzzy_choice(group_id, sender)
-                    return _categorize_group_image(
-                        pending, ext_stored.project, group_id, data, sender,
-                    )
+                _pop_classify_intent(group_id, sender)
+                gctx = _latest_group_pending_context(group_id, sender)
+                proj, _remark, kind = _apply_classify_resolve(
+                    stored,
+                    to=sender,
+                    group_id=group_id,
+                    sender=sender,
+                    quote_msg_id=_quote_msg_id(data) or gctx.get('quote'),
+                    batch_id=gctx.get('batch_id'),
+                )
+                if kind == 'assign' and proj:
+                    return _categorize_group_image(pending, proj, group_id, data, sender)
+                return jsonify({'handled': True, 'type': kind})
 
         # Numeric fuzzy-choice reply in group
         if trimmed.isdigit() and (pending or has_quoted):
-            move_intent = _pop_move_intent(group_id, sender)
-            choice_project = _pop_fuzzy_choice(group_id, sender, int(trimmed))
-            if choice_project:
-                if move_intent:
-                    return _execute_move(sender, choice_project, move_intent, group_id=group_id)
-                set_ai_confirm(group_id, sender, choice_project)
-                _send_ai_confirm_prompt(group_id, sender, sender, choice_project)
-                return jsonify({'handled': True, 'type': 'group_ai_pick_confirm'})
+            n = int(trimmed)
+            fuzzy_doc = mongo.db.wa_system.find_one({'_id': _fuzzy_choice_key(group_id, sender)})
+            if fuzzy_doc and fuzzy_doc.get('choices') and 1 <= n <= len(fuzzy_doc['choices']) <= 9:
+                move_intent = _pop_move_intent(group_id, sender)
+                choice_project = _pop_fuzzy_choice(group_id, sender, n)
+                if choice_project:
+                    if move_intent:
+                        return _execute_move(sender, choice_project, move_intent, group_id=group_id)
+                    set_ai_confirm(group_id, sender, choice_project)
+                    _send_ai_confirm_prompt(group_id, sender, sender, choice_project)
+                    return jsonify({'handled': True, 'type': 'group_ai_pick_confirm'})
 
         project = _lookup_active_project(trimmed)
 
-        if project and (pending or has_quoted):
-            _clear_fuzzy_choice(group_id, sender)
-            return _categorize_group_image(pending, project, group_id, data, sender)
-
         # Classify — only when there are pending images or a quoted msg
-        if not project and not is_command(trimmed) and (pending or has_quoted):
+        if not is_command(trimmed) and (pending or has_quoted):
             gctx = _latest_group_pending_context(group_id, sender)
             proj, _remark, kind = _apply_classify_resolve(
                 trimmed,
@@ -1960,9 +1990,15 @@ def _handle_command(cmd, sender, *, text='', data=None, group_id=None):
         lines = [f'• {k["term"]}' for k in keywords]
         _safe_send(sender, ('*可用類型關鍵字：*\n' + '\n'.join(lines)) if lines else '尚未設定關鍵字。')
     elif cmd == 'projects':
-        from app.services.project_number_match_service import list_wa_classify_target_projects
+        from app.services.project_number_match_service import (
+            list_wa_classify_target_projects,
+            wa_classify_display_label,
+        )
+        from app.services.nas_sync_service import enrich_wa_projects_display
+
         projects = list_wa_classify_target_projects(active_only=True)
-        lines = [f'• {p["code"]}' for p in projects]
+        enrich_wa_projects_display(projects)
+        lines = [f'• {wa_classify_display_label(p, max_len=500)}' for p in projects]
         _safe_send(sender, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
     elif cmd == 'move':
         return _handle_move(text, sender, data or {}, group_id=group_id)

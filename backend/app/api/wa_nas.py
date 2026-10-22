@@ -10,6 +10,7 @@ from app.services.nas_sync_service import (
     import_all_projects_from_nas,
     run_bidirectional_nas_sync,
     get_last_nas_sync_status,
+    reconcile_after_nas_folder_deleted,
 )
 from app.utils.permissions import require_role
 
@@ -157,6 +158,7 @@ def delete_nas_root_folder(folder_name):
                     if entry.name.startswith('.trash-'):
                         quarantined = entry.name
                         break
+        sync = reconcile_after_nas_folder_deleted(name)
         if quarantined:
             return jsonify({
                 'ok': True,
@@ -164,17 +166,27 @@ def delete_nas_root_folder(folder_name):
                 'alreadyRemoved': True,
                 'quarantinedAs': quarantined,
                 'message': f'Folder already removed (quarantined as {quarantined}).',
+                'webProjectsRemoved': sync.get('projectsRemoved') or [],
+                'webRecordsRemoved': sync.get('recordsRemoved') or 0,
             })
         return jsonify({
             'ok': True,
             'folder': name,
             'alreadyRemoved': True,
             'message': 'Folder not found on NAS (may already be deleted).',
+            'webProjectsRemoved': sync.get('projectsRemoved') or [],
+            'webRecordsRemoved': sync.get('recordsRemoved') or 0,
         })
     r = nas_mount.delete_path(str(bucket))
     if not r.get('ok'):
         return jsonify({'ok': False, 'error': r.get('error') or 'Delete failed'}), 503
-    out = {'ok': True, 'folder': name}
+    sync = reconcile_after_nas_folder_deleted(name)
+    out = {
+        'ok': True,
+        'folder': name,
+        'webProjectsRemoved': sync.get('projectsRemoved') or [],
+        'webRecordsRemoved': sync.get('recordsRemoved') or 0,
+    }
     if r.get('quarantined'):
         out['quarantined'] = True
         out['message'] = r.get('message')

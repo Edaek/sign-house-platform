@@ -342,8 +342,12 @@ function SiteProjectCard({
     <div className="group card hover:border-slate-400 dark:hover:border-slate-500 transition-colors p-5">
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-slate-900 dark:text-white truncate">{formatWaProjectLabel(project)}</h3>
-          <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-0.5">{project.code}</p>
+          <h3 className="font-semibold text-slate-900 dark:text-white text-sm leading-snug break-words whitespace-normal">
+            {formatWaProjectLabel(project)}
+          </h3>
+          {formatWaProjectLabel(project).toUpperCase() !== (project.code || '').toUpperCase() && (
+            <p className="text-xs font-mono text-slate-500 dark:text-slate-400 mt-1">{project.code}</p>
+          )}
         </div>
       </div>
 

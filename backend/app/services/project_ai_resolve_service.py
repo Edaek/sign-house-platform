@@ -10,16 +10,16 @@ from app.services.ai_extract_service import _call_ollama, _get_config, _parse_st
 from app.services.image_pool_service import match_project_ext
 from app.services.message_parser_service import split_classify_label_and_remark
 from app.services.project_number_match_service import (
+    classify_input_matches_full_display,
     is_wa_classify_target,
     list_wa_classify_target_projects,
     primary_site_number,
+    wa_classify_display_label,
 )
 
 logger = logging.getLogger(__name__)
 
 AI_CONFIRM_TTL_S = 600
-
-
 class ClassifyResolve:
     __slots__ = (
         'action', 'project', 'candidates', 'remark', 'user_message', 'needs_confirm',
@@ -42,22 +42,26 @@ class ClassifyResolve:
         self.needs_confirm = needs_confirm
 
 
-def _is_exact_code_input(label, project):
-    if not project or not label:
-        return False
-    return label.strip().upper() == (project.get('code') or '').strip().upper()
+def _format_candidate_lines(candidates):
+    from app.services.nas_sync_service import enrich_wa_projects_display
 
-
-def _format_candidate_lines(candidates, limit=8):
+    enrich_wa_projects_display(candidates)
     lines = []
-    for i, item in enumerate(candidates[:limit], 1):
+    for i, item in enumerate(candidates, 1):
         if isinstance(item, tuple):
             proj = item[0]
         else:
             proj = item
-        code = proj.get('code', '')
-        lines.append(f'{i}. {code}')
+        lines.append(f'{i}. {wa_classify_display_label(proj, max_len=500)}')
     return '\n'.join(lines)
+
+
+def _build_classify_list_message(match_key, candidates):
+    listing = _format_candidate_lines(candidates)
+    return (
+        f'「{match_key}」可能對應：\n{listing}\n\n'
+        f'回覆數字選擇，確認後才歸類照片。'
+    )
 
 
 def _sanitize_wa_reply(text, *, max_len=320):
@@ -129,6 +133,35 @@ If no reasonable match, leave projectId empty."""
         return None, ''
 
 
+def _suggest_single_project(match_key, project, remark=None):
+    label = wa_classify_display_label(project)
+    fallback = (
+        f'收到「{match_key}」，是否歸入：\n{label}\n'
+        f'回覆「是」或「確認」後歸類照片。'
+    )
+    msg = _ollama_polish_message(fallback, '')
+    return ClassifyResolve(
+        action='suggest',
+        project=project,
+        remark=remark,
+        user_message=msg,
+        needs_confirm=True,
+    )
+
+
+def coerce_assign_to_confirm(resolve, match_key):
+    """Inbound safety net — never assign unless input is the full NAS folder name."""
+    if resolve.action != 'assign' or not resolve.project:
+        return resolve
+    if classify_input_matches_full_display(match_key, resolve.project):
+        return resolve
+    return _suggest_single_project(
+        match_key,
+        resolve.project,
+        remark=resolve.remark,
+    )
+
+
 def resolve_classify_input(text, *, active_only=True):
     """Resolve user classify line with heuristics + optional Ollama copy."""
     trimmed = ' '.join((text or '').strip().split())
@@ -139,10 +172,13 @@ def resolve_classify_input(text, *, active_only=True):
     match_key = label or trimmed
 
     ext = match_project_ext(trimmed, active_only=active_only)
+    site_num = primary_site_number(match_key)
+    numeric_site = bool(site_num and match_key.strip().isdigit())
+
     if (
         ext.project
         and is_wa_classify_target(ext.project)
-        and _is_exact_code_input(match_key, ext.project)
+        and classify_input_matches_full_display(match_key, ext.project)
     ):
         return ClassifyResolve(
             action='assign',
@@ -151,9 +187,6 @@ def resolve_classify_input(text, *, active_only=True):
             needs_confirm=False,
         )
 
-    site_num = primary_site_number(match_key)
-    numeric_site = bool(site_num and match_key.strip().isdigit())
-
     candidates = []
     if ext.candidates:
         candidates = [(p, s) for p, s in ext.candidates if is_wa_classify_target(p)]
@@ -161,12 +194,7 @@ def resolve_classify_input(text, *, active_only=True):
         candidates = [(ext.project, 90)]
 
     if len(candidates) > 1:
-        listing = _format_candidate_lines(candidates)
-        fallback = (
-            f'「{match_key}」可能對應：\n{listing}\n\n'
-            f'回覆數字選擇，確認後才歸類照片。'
-        )
-        msg = _ollama_polish_message(fallback, '')
+        msg = _build_classify_list_message(match_key, candidates)
         return ClassifyResolve(
             action='list',
             candidates=candidates,
@@ -176,19 +204,10 @@ def resolve_classify_input(text, *, active_only=True):
         )
 
     if len(candidates) == 1:
-        proj = candidates[0][0]
-        code = proj.get('code', '')
-        fallback = (
-            f'收到「{match_key}」，歸入 *{code}*？\n'
-            f'回覆「是」或「確認」後歸類照片。'
-        )
-        msg = _ollama_polish_message(fallback, '')
-        return ClassifyResolve(
-            action='suggest',
-            project=proj,
+        return _suggest_single_project(
+            match_key,
+            candidates[0][0],
             remark=remark or ext.remark,
-            user_message=msg,
-            needs_confirm=True,
         )
 
     catalog = [

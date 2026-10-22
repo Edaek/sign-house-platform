@@ -184,6 +184,13 @@ class NasMountService:
             return cache
         return None
 
+    def peek_folder_cache(self):
+        """Last folder list from NAS (ignores TTL) — for fast list labels."""
+        with self._cache_lock:
+            if not self._folder_cache:
+                return None
+            return list(self._folder_cache)
+
     def _set_folder_cache(self, folders: list) -> None:
         with self._cache_lock:
             self._folder_cache = folders
@@ -370,12 +377,17 @@ class NasMountService:
             return None
         parent = (doc.get('nasParentBucket') or '').strip()
         bucket = self._resolve_bucket_dir(parent) if parent else None
-        if bucket is not None:
-            folder_label = (doc.get('nasFolderName') or '').strip() or code
-            for name in (folder_label, code):
-                site = bucket / name
-                if site.is_dir():
-                    return site
+        if bucket is not None and bucket.is_dir():
+            matches = []
+            try:
+                for entry in bucket.iterdir():
+                    if entry.is_dir() and not entry.name.startswith('.'):
+                        if self._matches_project_dir_name(entry.name, code):
+                            matches.append(entry)
+            except OSError:
+                matches = []
+            if matches:
+                return max(matches, key=lambda p: len(p.name))
         nf = (doc.get('nasFolder') or '').strip()
         if nf and os.path.isdir(nf):
             return Path(nf)
@@ -469,9 +481,23 @@ class NasMountService:
             return []
 
         max_depth = self._scan_max_depth()
-        folders = []
-        seen_codes = set()
+        by_code: dict = {}
         root = Path(watch_dir)
+
+        def _keep_site_row(site_code, folder_name, parent_bucket):
+            key = (site_code or '').upper()
+            if not key:
+                return
+            row = {
+                'code': site_code,
+                'folderName': folder_name,
+                'parentBucket': parent_bucket,
+                'fileCount': 0,
+                'latestModified': None,
+            }
+            prev = by_code.get(key)
+            if prev is None or len(folder_name) > len(prev.get('folderName') or ''):
+                by_code[key] = row
 
         def walk(parent: Path, depth: int, parent_bucket: str | None):
             if depth > max_depth:
@@ -489,21 +515,35 @@ class NasMountService:
                     continue
                 site_code = parse_nas_site_folder_code(entry.name)
                 if site_code:
-                    code_key = site_code.upper()
-                    if code_key not in seen_codes:
-                        seen_codes.add(code_key)
-                        folders.append({
-                            'code': site_code,
-                            'folderName': entry.name,
-                            'parentBucket': parent_bucket,
-                            'fileCount': 0,
-                            'latestModified': None,
-                        })
+                    _keep_site_row(site_code, entry.name, parent_bucket)
                     continue
                 walk(entry, depth + 1, parent_bucket)
 
         walk(root, 0, None)
-        return folders
+        return list(by_code.values())
+
+    def nas_folder_display_name(self, project_code, *, parent_bucket=None, project_doc=None):
+        """Best-effort NAS directory label (includes site remark after PJ-xxxx)."""
+        code = (project_code or '').strip()
+        if not code:
+            return ''
+        parent = (parent_bucket or '').strip()
+        if not parent and project_doc:
+            parent = (project_doc.get('nasParentBucket') or '').strip()
+        bucket = self._resolve_bucket_dir(parent) if parent else None
+        if bucket is not None and bucket.is_dir():
+            matches = []
+            try:
+                for entry in bucket.iterdir():
+                    if entry.is_dir() and not entry.name.startswith('.'):
+                        if self._matches_project_dir_name(entry.name, code):
+                            matches.append(entry.name)
+            except OSError:
+                matches = []
+            if matches:
+                return max(matches, key=len)
+        folder = self._resolve_project_folder(code)
+        return folder.name if folder is not None else code
 
     def _resolve_project_folder(self, project_code):
         watch_dir = self._resolved_watch_dir()
@@ -530,9 +570,12 @@ class NasMountService:
                 children = [c for c in parent.iterdir() if c.is_dir() and not c.name.startswith('.')]
             except OSError:
                 return None
-            for d in children:
-                if self._matches_project_dir_name(d.name, project_code):
-                    return d
+            bucket_hits = [
+                d for d in children
+                if self._matches_project_dir_name(d.name, project_code)
+            ]
+            if bucket_hits:
+                return max(bucket_hits, key=lambda p: len(p.name))
             for d in children:
                 hit = find_under(d, depth + 1)
                 if hit is not None:
@@ -810,6 +853,102 @@ class NasMountService:
         except OSError as e:
             logger.warning('[NAS] Rename failed %s: %s', folder, e)
             return {'ok': False, 'error': str(e)}
+
+    def _resolve_project_txt_path(self, project_code, relative_path):
+        folder = self._resolve_project_folder(project_code)
+        if folder is None:
+            return None, None
+        root = folder.resolve()
+        rel = (relative_path or '').strip().replace('\\', '/').lstrip('/')
+        if not rel or '..' in rel.split('/'):
+            return None, None
+        target = (folder / rel).resolve()
+        if not str(target).startswith(str(root)):
+            return None, None
+        if target.suffix.lower() != '.txt':
+            return None, None
+        return root, target
+
+    def _list_project_txt_files_sync(self, project_code):
+        folder = self._resolve_project_folder(project_code)
+        if not folder:
+            return []
+        out = []
+        try:
+            for f in sorted(folder.rglob('*.txt')):
+                if not f.is_file() or f.name.startswith('.'):
+                    continue
+                try:
+                    st = f.stat()
+                    out.append({
+                        'name': f.name,
+                        'size': st.st_size,
+                        'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                        'relativePath': str(f.relative_to(folder)),
+                    })
+                except OSError:
+                    continue
+        except OSError as e:
+            logger.warning('[NAS] list txt files failed: %s', e)
+        return out
+
+    def list_project_txt_files(self, project_code):
+        result = _run_with_timeout(
+            lambda: self._list_project_txt_files_sync(project_code),
+            self._io_timeout(),
+            default=None,
+        )
+        if result is None:
+            logger.warning('[NAS] list_project_txt_files timed out for %s', project_code)
+            return []
+        return result
+
+    def read_project_txt_file(self, project_code, relative_path):
+        def _read():
+            _root, target = self._resolve_project_txt_path(project_code, relative_path)
+            if target is None:
+                return {'ok': False, 'error': 'Invalid path'}
+            if not target.is_file():
+                return {'ok': False, 'error': 'File not found', 'missing': True}
+            try:
+                content = target.read_text(encoding='utf-8')
+                st = target.stat()
+                return {
+                    'ok': True,
+                    'content': content,
+                    'relativePath': relative_path,
+                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                }
+            except OSError as e:
+                return {'ok': False, 'error': str(e)}
+
+        result = _run_with_timeout(_read, self._io_timeout(), default=None)
+        if result is None:
+            return {'ok': False, 'error': 'NAS read timed out'}
+        return result
+
+    def write_project_txt_file(self, project_code, relative_path, content):
+        def _write():
+            _root, target = self._resolve_project_txt_path(project_code, relative_path)
+            if target is None:
+                return {'ok': False, 'error': 'Invalid path'}
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                text = content if content is not None else ''
+                target.write_text(text, encoding='utf-8')
+                st = target.stat()
+                return {
+                    'ok': True,
+                    'relativePath': relative_path,
+                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                }
+            except OSError as e:
+                return {'ok': False, 'error': str(e)}
+
+        result = _run_with_timeout(_write, self._io_timeout(), default=None)
+        if result is None:
+            return {'ok': False, 'error': 'NAS write timed out'}
+        return result
 
     def _list_folder_files_sync(self, project_code):
         folder = self._resolve_project_folder(project_code)

@@ -1,9 +1,12 @@
 """Image pool service — manages private-chat image pool and project assignment."""
+import hashlib
 import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime
+from pathlib import Path
 
 from bson import ObjectId
 
@@ -18,7 +21,13 @@ from app.services.message_parser_service import (
 )
 from app.services.project_number_match_service import (
     is_wa_classify_target,
+    match_classify_targets_by_site_number,
+    match_classify_typo_site_numbers,
+    match_classify_cross_bucket_typo_suggestions,
+    match_classify_sites_near_number_in_buckets,
     match_site_projects_by_number,
+    find_buckets_containing_site_number,
+    pj_number_from_project_code,
     primary_site_number,
 )
 
@@ -206,35 +215,60 @@ def _match_project_code_candidates(trimmed, *, active_only=True):
     return []
 
 
-def _fuzzy_match_projects(text, *, active_only=True, limit=5):
-    """Score all active projects against *text* using fuzzy matching.
+FUZZY_HIGH = 88
+FUZZY_MID = 78
 
-    Returns a list of ``(project_doc, score)`` tuples sorted by descending
-    score.  The score is the best of ``partial_ratio(text, code)`` and
-    ``partial_ratio(text, nasFolder)`` for each project.
-    """
+
+def _fuzzy_code_score(text_lower, code, folder_name=''):
+    """Text classify — avoid digit-only partial matches (1007 ≠ PJ-3007)."""
     from rapidfuzz import fuzz
 
+    if not text_lower:
+        return 0
+    code_l = (code or '').lower()
+    folder_l = (folder_name or '').lower()
+    if text_lower.isdigit():
+        return 0
+    if text_lower in code_l or text_lower in folder_l:
+        return 95
+    ratio_code = fuzz.ratio(text_lower, code_l)
+    ratio_folder = fuzz.ratio(text_lower, folder_l) if folder_l else 0
+    token_code = fuzz.token_set_ratio(text_lower, code_l)
+    token_folder = fuzz.token_set_ratio(text_lower, folder_l) if folder_l else 0
+    best = max(ratio_code, ratio_folder, token_code, token_folder)
+    if len(text_lower) <= 4:
+        partial_code = fuzz.partial_ratio(text_lower, code_l)
+        partial_folder = fuzz.partial_ratio(text_lower, folder_l) if folder_l else 0
+        if partial_code >= 90 or partial_folder >= 90:
+            best = max(best, partial_code, partial_folder)
+    return best
+
+
+def _fuzzy_match_projects(text, *, active_only=True):
+    """Score classify-target projects; returns all hits above threshold (no cap)."""
     query = _active_project_query() if active_only else {'status': {'$ne': 'archived'}}
     projects = list(mongo.db.wa_projects.find(query))
     if not projects:
         return []
 
-    text_lower = text.lower()
+    text_lower = text.strip().lower()
+    if text_lower.isdigit():
+        return []
+
     scored = []
     for proj in projects:
         if not is_wa_classify_target(proj):
             continue
-        code = (proj.get('code') or '').lower()
-        folder = (proj.get('nasFolder') or '').lower()
-        code_score = fuzz.partial_ratio(text_lower, code)
-        folder_score = fuzz.partial_ratio(text_lower, folder) if folder else 0
-        best = max(code_score, folder_score)
-        if best >= 50:
+        code = proj.get('code') or ''
+        folder = (proj.get('nasFolder') or '')
+        if folder:
+            folder = Path(folder).name
+        best = _fuzzy_code_score(text_lower, code, folder)
+        if best >= FUZZY_MID:
             scored.append((proj, best))
 
     scored.sort(key=lambda t: t[1], reverse=True)
-    return scored[:limit]
+    return scored
 
 
 class MatchResult:
@@ -251,8 +285,25 @@ class MatchResult:
         return self.project is not None
 
 
-FUZZY_HIGH = 80
-FUZZY_MID = 60
+def _merge_scored_candidates(*groups):
+    """Dedupe by project id; keep highest score."""
+    by_id = {}
+    order = []
+    for group in groups:
+        for proj, score in group:
+            if not is_wa_classify_target(proj):
+                continue
+            pid = str(proj.get('_id', proj.get('code', '')))
+            if pid not in by_id:
+                order.append(pid)
+                by_id[pid] = (proj, score)
+            else:
+                prev_proj, prev_score = by_id[pid]
+                if score > prev_score:
+                    by_id[pid] = (prev_proj, score)
+    out = [by_id[pid] for pid in order]
+    out.sort(key=lambda t: t[1], reverse=True)
+    return out
 
 
 def match_project_ext(text, *, active_only=True):
@@ -260,8 +311,7 @@ def match_project_ext(text, *, active_only=True):
 
     * ``result.project`` is set when a single confident match is found (exact
       or high-score fuzzy).
-    * ``result.candidates`` carries up to 5 fuzzy suggestions when no single
-      confident match exists but there are mid-score hits.
+    * ``result.candidates`` lists all confident fuzzy / numeric suggestions.
     * ``result.remark`` is set when input is ``<project label> <remark>`` (e.g.
       ``2899 carpark sign`` → match on ``2899``, remark ``carpark sign``).
     """
@@ -297,20 +347,48 @@ def match_project_ext(text, *, active_only=True):
                         return _result(project=hit)
 
     fuzzy_text = match_key if label_only else trimmed
-    scored = _fuzzy_match_projects(fuzzy_text, active_only=active_only)
-    if scored:
-        high_hits = [(p, s) for p, s in scored if s >= FUZZY_HIGH]
+    site_num = primary_site_number(match_key)
+    digit_input = bool(match_key.strip().isdigit() and site_num)
+
+    if digit_input and site_num:
+        try:
+            site_n_int = int(site_num)
+        except ValueError:
+            site_n_int = None
+
+        numeric_scored = []
+        bucket_codes = []
+        if site_n_int is not None:
+            bucket_codes = find_buckets_containing_site_number(site_n_int, active_only=active_only)
+            if bucket_codes:
+                numeric_scored = match_classify_sites_near_number_in_buckets(
+                    site_num, bucket_codes, active_only=active_only,
+                )
+
+        if not numeric_scored:
+            numeric_scored = _merge_scored_candidates(
+                match_classify_targets_by_site_number(site_num, active_only=active_only),
+                [(p, s) for p, s, _ in match_site_projects_by_number(site_num, active_only=active_only)],
+            )
+        cross_typo = match_classify_cross_bucket_typo_suggestions(
+            site_num,
+            bucket_codes,
+            active_only=active_only,
+            max_distance=2,
+            limit=2,
+        )
+        numeric_scored = _merge_scored_candidates(numeric_scored, cross_typo)
+        if numeric_scored:
+            return _result(candidates=numeric_scored)
+
+    fuzzy_scored = _fuzzy_match_projects(fuzzy_text, active_only=active_only)
+    if fuzzy_scored:
+        high_hits = [(p, s) for p, s in fuzzy_scored if s >= FUZZY_HIGH]
         if len(high_hits) == 1:
             return _result(project=high_hits[0][0])
-        mid_hits = [(p, s) for p, s in scored if s >= FUZZY_MID]
+        mid_hits = [(p, s) for p, s in fuzzy_scored if s >= FUZZY_MID]
         if mid_hits:
             return _result(candidates=mid_hits)
-
-    site_num = primary_site_number(match_key)
-    if site_num:
-        site_hits = match_site_projects_by_number(site_num, active_only=active_only)
-        if site_hits:
-            return _result(candidates=[(p, score) for p, score, _ in site_hits])
 
     return MatchResult()
 
@@ -391,10 +469,16 @@ def save_to_pool(
     pool_id = str(result.inserted_id)
 
     if caption and not defer_assign:
-        project = match_project(caption)
-        if project and project.get('status') == 'active':
-            assign_images_to_project([pool_id], project, 'user')
-            return {'auto_assigned': True, 'project_code': project['code'], 'pool_id': pool_id}
+        from app.services.project_ai_resolve_service import resolve_classify_input
+
+        resolved = resolve_classify_input(caption, active_only=True)
+        if resolved.action == 'assign' and resolved.project:
+            assign_images_to_project([pool_id], resolved.project, 'user', remark=resolved.remark)
+            return {
+                'auto_assigned': True,
+                'project_code': resolved.project['code'],
+                'pool_id': pool_id,
+            }
 
     if not defer_reminder:
         schedule_reminder(phone)
@@ -441,6 +525,75 @@ def resolve_record_remark(record):
                     return ''
             return cap_s
     return msg or ''
+
+
+def _local_media_path_for_pool(web_path, media_dir):
+    """Resolve pool imagePath to an on-disk file under WA_UPLOADS_FOLDER."""
+    if not web_path:
+        return None
+    wp = str(web_path).strip()
+    if os.path.isabs(wp) and os.path.isfile(wp):
+        return wp
+    rel = wp.lstrip('/')
+    if rel.startswith('uploads/'):
+        rel = rel[len('uploads/'):]
+    if rel.startswith('wa-media/'):
+        rel = rel[len('wa-media/'):]
+    fname = os.path.basename(rel) or os.path.basename(wp)
+    candidates = [
+        os.path.join(media_dir, rel),
+        os.path.join(media_dir, fname),
+    ]
+    try:
+        from flask import current_app
+
+        root = current_app.root_path
+        candidates.append(os.path.join(root, media_dir, fname))
+        candidates.append(os.path.join(root, 'uploads', 'wa-media', fname))
+    except RuntimeError:
+        pass
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def _save_pool_media_bytes(data: bytes, media_dir, *, ext='.jpg'):
+    os.makedirs(media_dir, exist_ok=True)
+    fname = f'{int(time.time() * 1000)}-{hashlib.md5(os.urandom(8)).hexdigest()[:8]}{ext}'
+    fpath = os.path.join(media_dir, fname)
+    with open(fpath, 'wb') as fh:
+        fh.write(data)
+    return fpath, f'/uploads/wa-media/{fname}'
+
+
+def _ensure_pool_image_file(img, media_dir):
+    """Return absolute path to media file, re-downloading from Wakka if needed."""
+    local = _local_media_path_for_pool(img.get('imagePath'), media_dir)
+    if local:
+        return local
+    message_id = (img.get('messageId') or '').strip()
+    if not message_id:
+        return None
+    from app.services.wa_send_service import download_media
+
+    buf = download_media(message_id)
+    if not buf:
+        return None
+    wa_type = img.get('mediaType') or 'image'
+    ext_map = {'image': '.jpg', 'video': '.mp4', 'document': '.pdf'}
+    ext = ext_map.get(wa_type, '.jpg')
+    fpath, web_path = _save_pool_media_bytes(buf, media_dir, ext=ext)
+    mongo.db.pool_images.update_one(
+        {'_id': img['_id']},
+        {'$set': {
+            'imagePath': web_path,
+            'downloadFailed': False,
+            'updatedAt': datetime.utcnow(),
+        }},
+    )
+    img['imagePath'] = web_path
+    return fpath
 
 
 def assign_images_to_project(
@@ -588,22 +741,22 @@ def assign_images_to_project(
             with _app.app_context():
                 try:
                     nas_photos = []
-                    expected = sum(1 for img in _images if img.get('imagePath'))
+                    expected = len(_images)
                     for img in _images:
-                        if not img.get('imagePath'):
-                            continue
-
                         if _use_local:
-                            web_path = img['imagePath']
-                            relative = web_path.lstrip('/').replace('uploads/', '', 1)
-                            if relative.startswith('wa-media/'):
-                                relative = relative[len('wa-media/'):]
-                            local_file = os.path.join(_media_dir, relative)
-                            if not os.path.isfile(local_file):
-                                logger.warning('[ImagePool] File not found for NAS copy: %s', local_file)
+                            local_file = _ensure_pool_image_file(img, _media_dir)
+                            if not local_file:
+                                logger.warning(
+                                    '[ImagePool] No local file for NAS copy (pool=%s msg=%s)',
+                                    img.get('_id'),
+                                    img.get('messageId'),
+                                )
                                 mongo.db.pool_images.update_one(
                                     {'_id': img['_id']},
-                                    {'$set': {'nasSyncStatus': 'failed', 'nasSyncError': 'local file missing'}},
+                                    {'$set': {
+                                        'nasSyncStatus': 'failed',
+                                        'nasSyncError': 'local file missing',
+                                    }},
                                 )
                                 continue
                             r = nas_mount.copy_file_to_project(
@@ -624,6 +777,8 @@ def assign_images_to_project(
                                     }},
                                 )
                         else:
+                            if not img.get('imagePath'):
+                                _ensure_pool_image_file(img, _media_dir)
                             r = upload_to_nas(
                                 img['imagePath'], _project_code, day_str=_assign_day,
                             )
@@ -662,12 +817,23 @@ def assign_images_to_project(
                         update['nasSyncError'] = 'NAS copy/upload failed for all files'
 
                     mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
-                    if _assign_remark:
+                    if _assign_remark and (nas_photos or expected == 0):
                         from app.services.nas_site_remark_service import append_site_remark_to_nas
 
                         append_site_remark_to_nas(
                             _project_code, _assign_remark, day_str=_assign_day,
                         )
+                    if expected > 0 and len(nas_photos) == 0:
+                        phone = (_images[0].get('phone') or '').strip()
+                        if phone:
+                            try:
+                                send_message(
+                                    phone,
+                                    '⚠️ 專案已歸類，但照片未能寫入 NAS（檔案缺失或複製失敗）。'
+                                    '請到「媒體池」重試下載，或重新發送照片。',
+                                )
+                            except Exception:
+                                logger.exception('[ImagePool] NAS failure notify send failed')
                     logger.info(
                         '[ImagePool] NAS %s %s: %d/%d files',
                         'copy' if _use_local else 'upload',
