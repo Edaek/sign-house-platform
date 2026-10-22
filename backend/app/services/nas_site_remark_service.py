@@ -41,17 +41,26 @@ def set_site_remark_context(
     *,
     group_id: Optional[str] = None,
     day_str: Optional[str] = None,
+    nas_folder_name: Optional[str] = None,
+    nas_parent_bucket: Optional[str] = None,
 ) -> None:
     day = day_str or hk_today_str()
+    payload = {
+        'projectCode': project_code,
+        'day': day,
+        'at': datetime.utcnow(),
+        'groupId': group_id,
+        'sender': sender,
+    }
+    fn = (nas_folder_name or '').strip()
+    pb = (nas_parent_bucket or '').strip()
+    if fn:
+        payload['nasFolderName'] = fn
+    if pb:
+        payload['nasParentBucket'] = pb
     mongo.db.wa_system.update_one(
         {'_id': _remark_context_key(group_id, sender)},
-        {'$set': {
-            'projectCode': project_code,
-            'day': day,
-            'at': datetime.utcnow(),
-            'groupId': group_id,
-            'sender': sender,
-        }},
+        {'$set': payload},
         upsert=True,
     )
 
@@ -70,6 +79,8 @@ def append_site_remark_to_nas(
     text: str,
     *,
     day_str: Optional[str] = None,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
 ) -> dict:
     """Append remark text to Photo/YYYY-MM-DD/PJ-xxx_YYYY-MM-DD.txt on NAS mount."""
     body = (text or '').strip()
@@ -82,8 +93,15 @@ def append_site_remark_to_nas(
         return {'ok': False, 'error': 'NAS mount not available'}
 
     day = day_str or hk_today_str()
+    pref = (preferred_folder_name or '').strip() or None
+    bucket = (preferred_parent_bucket or '').strip() or None
     try:
-        day_dir = nas_mount.ensure_photo_day_dir(project_code, day)
+        day_dir = nas_mount.ensure_photo_day_dir(
+            project_code,
+            day,
+            preferred_folder_name=pref,
+            preferred_parent_bucket=bucket,
+        )
         if not day_dir:
             return {'ok': False, 'error': 'project folder not found on NAS'}
         fname = site_remark_filename(project_code, day)
@@ -127,7 +145,13 @@ def try_append_followup_site_remark(
     if ext.project or ext.candidates:
         return False
 
-    result = append_site_remark_to_nas(ctx['projectCode'], trimmed, day_str=ctx.get('day'))
+    result = append_site_remark_to_nas(
+        ctx['projectCode'],
+        trimmed,
+        day_str=ctx.get('day'),
+        preferred_folder_name=ctx.get('nasFolderName'),
+        preferred_parent_bucket=ctx.get('nasParentBucket'),
+    )
     if not result.get('ok'):
         return False
 

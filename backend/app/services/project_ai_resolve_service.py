@@ -56,7 +56,7 @@ def _build_classify_list_message(match_key, candidates):
     listing = _format_candidate_lines(candidates)
     return (
         f'「{match_key}」可能對應：\n{listing}\n\n'
-        f'回覆數字選擇，確認後才歸類照片。'
+        f'回覆數字選擇後立即歸類照片。'
     )
 
 
@@ -265,10 +265,18 @@ def resolve_classify_input(text, *, active_only=True):
     elif ext.project and is_wa_classify_target(ext.project):
         candidates = [(ext.project, 90)]
 
-    candidates = _expand_candidates_for_duplicate_nas_folders(match_key, candidates)
+    expand_key = str(site_num) if site_num else match_key
+    candidates = _expand_candidates_for_duplicate_nas_folders(expand_key, candidates)
+    if len(candidates) <= 1:
+        from app.services.nas_sync_service import list_physical_site_folders
+
+        if len(list_physical_site_folders(expand_key)) > 1:
+            candidates = _expand_candidates_for_duplicate_nas_folders(expand_key, candidates)
+
+    list_label = str(site_num) if site_num else match_key
 
     if len(candidates) > 1:
-        msg = _build_classify_list_message(match_key, candidates)
+        msg = _build_classify_list_message(list_label, candidates)
         return ClassifyResolve(
             action='list',
             candidates=candidates,
@@ -278,6 +286,19 @@ def resolve_classify_input(text, *, active_only=True):
         )
 
     if len(candidates) == 1:
+        from app.services.nas_sync_service import list_physical_site_folders
+
+        if len(list_physical_site_folders(expand_key)) > 1:
+            expanded = _expand_candidates_for_duplicate_nas_folders(expand_key, candidates)
+            if len(expanded) > 1:
+                msg = _build_classify_list_message(list_label, expanded)
+                return ClassifyResolve(
+                    action='list',
+                    candidates=expanded,
+                    remark=remark or ext.remark,
+                    user_message=msg,
+                    needs_confirm=True,
+                )
         return _suggest_single_project(
             match_key,
             candidates[0][0],

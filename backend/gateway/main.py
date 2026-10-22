@@ -185,7 +185,7 @@ def forward_to_app(
             f'{APP_URL}/api/wa/inbound',
             json=payload,
             headers={'Authorization': f'Bearer {GATEWAY_SECRET}'},
-            timeout=15,
+            timeout=90,
         )
         if resp.ok:
             logger.info('[Gateway] Forwarded message %s to app', msg.id)

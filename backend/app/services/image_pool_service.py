@@ -703,7 +703,12 @@ def assign_images_to_project(
     assign_day = hk_today_str()
     phone = images[0].get('phone') or ''
     set_site_remark_context(
-        phone, project['code'], group_id=group_id, day_str=assign_day,
+        phone,
+        project['code'],
+        group_id=group_id,
+        day_str=assign_day,
+        nas_folder_name=(project.get('nasFolderName') or '').strip() or None,
+        nas_parent_bucket=(project.get('nasParentBucket') or '').strip() or None,
     )
 
     msg_ids = [img['messageId'] for img in images if img.get('messageId')]
@@ -827,7 +832,11 @@ def assign_images_to_project(
                         from app.services.nas_site_remark_service import append_site_remark_to_nas
 
                         append_site_remark_to_nas(
-                            _project_code, _assign_remark, day_str=_assign_day,
+                            _project_code,
+                            _assign_remark,
+                            day_str=_assign_day,
+                            preferred_folder_name=_pref_folder,
+                            preferred_parent_bucket=_pref_bucket,
                         )
                     if expected > 0 and len(nas_photos) == 0:
                         phone = (_images[0].get('phone') or '').strip()

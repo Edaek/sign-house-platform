@@ -53,6 +53,36 @@ class NasLayoutTests(unittest.TestCase):
             self.assertIn('第一行备注', content)
             self.assertIn('第二行备注', content)
 
+    def test_remark_uses_preferred_physical_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bucket = root / 'PJ-3000-3999'
+            bare = bucket / 'PJ-3051'
+            long_name = bucket / 'PJ-3051 唐人新村_Hanison (SC)'
+            bare.mkdir(parents=True)
+            long_name.mkdir(parents=True)
+            svc = NasMountService()
+            svc._app = MagicMock()
+            svc._app.config = {'NAS_WATCH_DIR': str(root)}
+            day_bare = svc.ensure_photo_day_dir(
+                'PJ-3051', '2026-10-22', preferred_folder_name='PJ-3051',
+            )
+            from app.services.nas_site_remark_service import append_site_remark_to_nas
+
+            with patch('app.services.nas_site_remark_service.nas_mount', svc):
+                r = append_site_remark_to_nas(
+                    'PJ-3051',
+                    '驗樓用 Foamboard',
+                    day_str='2026-10-22',
+                    preferred_folder_name='PJ-3051',
+                )
+                self.assertTrue(r.get('ok'), r)
+            txt_bare = Path(day_bare) / site_remark_filename('PJ-3051', '2026-10-22')
+            self.assertTrue(txt_bare.is_file(), 'txt should sit beside photos in bare folder')
+            self.assertIn('驗樓用 Foamboard', txt_bare.read_text(encoding='utf-8'))
+            txt_long = long_name / 'Photo' / '2026-10-22' / site_remark_filename('PJ-3051', '2026-10-22')
+            self.assertFalse(txt_long.is_file(), 'must not write remark to the other physical folder')
+
 
 if __name__ == '__main__':
     unittest.main()

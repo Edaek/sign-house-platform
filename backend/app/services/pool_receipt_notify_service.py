@@ -72,6 +72,38 @@ def mark_group_classify_reply_sent(
     )
 
 
+def _classify_in_progress_key(phone: str) -> str:
+    digits = _normalize_phone(phone)
+    return f'wa_classify_in_progress:p:{digits}'
+
+
+def mark_private_classify_in_progress(phone: str, batch_id: Optional[str] = None) -> None:
+    """Block generic pool receipt while NAS/heuristics build the folder list."""
+    from app import mongo
+
+    now = datetime.utcnow()
+    mongo.db.wa_system.update_one(
+        {'_id': _classify_in_progress_key(phone)},
+        {'$set': {'at': now, 'phone': phone, 'batchId': batch_id}},
+        upsert=True,
+    )
+
+
+def clear_private_classify_in_progress(phone: str) -> None:
+    from app import mongo
+
+    mongo.db.wa_system.delete_one({'_id': _classify_in_progress_key(phone)})
+
+
+def private_classify_in_progress(phone: str, within_s: float = 120.0) -> bool:
+    from app import mongo
+
+    doc = mongo.db.wa_system.find_one({'_id': _classify_in_progress_key(phone)})
+    if not doc or not doc.get('at'):
+        return False
+    return (datetime.utcnow() - doc['at']).total_seconds() <= within_s
+
+
 def should_skip_receipt_after_classify_reply(
     phone: Optional[str] = None,
     batch_id: Optional[str] = None,
@@ -544,6 +576,12 @@ def _flush(key: str) -> None:
 
             if entry.get('phone') and not entry.get('group_id'):
                 phone = entry['phone']
+                if private_classify_in_progress(phone):
+                    logger.info(
+                        '[PoolReceipt] Skip receipt — classify in progress for %s',
+                        phone,
+                    )
+                    return
                 if should_skip_receipt_after_classify_reply(
                     phone, entry.get('batch_id'),
                 ):

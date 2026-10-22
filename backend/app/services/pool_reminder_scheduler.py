@@ -117,6 +117,22 @@ class PoolReminderScheduler:
                 ):
                     continue
 
+                from app.services.pool_receipt_notify_service import (
+                    private_classify_in_progress,
+                )
+                from app.services.project_number_match_service import primary_site_number
+
+                if private_classify_in_progress(phone):
+                    continue
+
+                cap = (newest.get('caption') or '').strip()
+                site_grace = float(
+                    self._app.config.get('POOL_REMINDER_CAPTION_SITE_GRACE_S', 45),
+                )
+                if cap and primary_site_number(cap):
+                    if created and (now_utc - created).total_seconds() < site_grace:
+                        continue
+
                 count = len(images)
                 quote_id = newest.get('messageId') or images[0].get('messageId')
                 batch_id = newest.get('batchId')

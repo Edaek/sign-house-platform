@@ -845,6 +845,45 @@ def _latest_unassigned_pool_context(sender):
     }
 
 
+def _try_fast_site_folder_list(site_num, sender, *, quote_msg_id=None, pool_image_ids=None):
+    """Fast NAS bucket scan → numbered folder list (duplicate PJ-xxxx dirs)."""
+    from app.services.nas_sync_service import list_physical_site_folders
+    from app.services.project_ai_resolve_service import _build_classify_list_message
+    from app.services.wa_project_validation import find_project_by_code
+
+    folders = list_physical_site_folders(str(site_num))
+    if len(folders) <= 1:
+        return False
+    code = (folders[0].get('code') or '').strip() or f'PJ-{site_num}'
+    base = find_project_by_code(code)
+    if not base:
+        return False
+    candidates = []
+    for row in folders:
+        proj = dict(base)
+        proj['nasFolderName'] = row['folderName']
+        if row.get('parentBucket'):
+            proj['nasParentBucket'] = row['parentBucket']
+        candidates.append((proj, 100))
+    body = _build_classify_list_message(str(site_num), candidates)
+    _set_fuzzy_choice(None, sender, candidates)
+    sent = _send_private_classify_prompt(
+        sender,
+        body,
+        quote_msg_id=quote_msg_id,
+        pool_image_ids=pool_image_ids,
+    )
+    if sent:
+        from app.services.pool_receipt_notify_service import (
+            cancel_pool_receipt_for_phone,
+            mark_private_classify_reply_sent,
+        )
+
+        mark_private_classify_reply_sent(sender)
+        cancel_pool_receipt_for_phone(sender)
+    return sent
+
+
 def _apply_classify_resolve(
     text,
     *,
@@ -1211,6 +1250,20 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             pool_ids = []
             multi = len(photo_paths) > 1
 
+            site_num_early = None
+            if caption and not project:
+                from app.services.project_number_match_service import primary_site_number
+                from app.services.pool_receipt_notify_service import (
+                    mark_private_classify_in_progress,
+                )
+
+                site_num_early = primary_site_number(caption)
+                if site_num_early:
+                    mark_private_classify_in_progress(sender, inbound_batch_id)
+                    _cancel_scheduled_receipt(
+                        phone=sender, batch_id=inbound_batch_id or None,
+                    )
+
             for idx, image_path in enumerate(photo_paths):
                 msg_id = _pool_msg_id(data, idx, base_msg_id)
                 result = save_to_pool(
@@ -1246,23 +1299,69 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 })
 
             if caption and not project:
+                from app.services.project_number_match_service import primary_site_number
+
                 _clear_burst_project(None, sender)
                 _cancel_scheduled_receipt(phone=sender, batch_id=inbound_batch_id or None)
-                _proj, _remark, kind = _apply_classify_resolve(
-                    caption,
+                classify_kwargs = dict(
                     to=sender,
                     quote_msg_id=_quote_msg_id(data),
                     batch_id=inbound_batch_id or None,
                     pool_image_ids=pool_ids,
                 )
-                if kind == 'pool_no_match':
-                    pass
-                elif kind in ('pool_ai_list', 'pool_ai_confirm', 'assign'):
+                _CLASSIFY_DONE = frozenset({
+                    'pool_ai_list', 'pool_ai_confirm', 'assign', 'pool_send_failed',
+                })
+                site_num = primary_site_number(caption)
+                kind = None
+                if site_num and _try_fast_site_folder_list(
+                    site_num,
+                    sender,
+                    quote_msg_id=classify_kwargs.get('quote_msg_id'),
+                    pool_image_ids=pool_ids,
+                ):
+                    from app.services.pool_receipt_notify_service import (
+                        clear_private_classify_in_progress,
+                    )
+
+                    clear_private_classify_in_progress(sender)
                     return jsonify({
                         'handled': True,
-                        'type': kind,
+                        'type': 'pool_ai_list',
                         'count': len(pool_ids),
                     })
+                if site_num:
+                    _proj, _remark, kind = _apply_classify_resolve(
+                        str(site_num),
+                        **classify_kwargs,
+                    )
+                    if kind in _CLASSIFY_DONE:
+                        from app.services.pool_receipt_notify_service import (
+                            clear_private_classify_in_progress,
+                        )
+
+                        clear_private_classify_in_progress(sender)
+                        return jsonify({
+                            'handled': True,
+                            'type': kind,
+                            'count': len(pool_ids),
+                        })
+                if kind not in _CLASSIFY_DONE:
+                    _proj, _remark, kind = _apply_classify_resolve(
+                        caption,
+                        **classify_kwargs,
+                    )
+                    if kind in _CLASSIFY_DONE:
+                        from app.services.pool_receipt_notify_service import (
+                            clear_private_classify_in_progress,
+                        )
+
+                        clear_private_classify_in_progress(sender)
+                        return jsonify({
+                            'handled': True,
+                            'type': kind,
+                            'count': len(pool_ids),
+                        })
 
             if not caption and not project:
                 if _try_apply_stored_classify_intent_private(sender, data):
@@ -1285,6 +1384,13 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                         'count': len(pool_ids),
                     })
                 # Private: no instant receipt text — user replies with project code, or PoolReminder later.
+
+            if site_num_early:
+                from app.services.pool_receipt_notify_service import (
+                    clear_private_classify_in_progress,
+                )
+
+                clear_private_classify_in_progress(sender)
 
             return jsonify({
                 'handled': True,
@@ -1310,20 +1416,13 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 if choice_project:
                     if move_intent:
                         return _execute_move(sender, choice_project, move_intent)
-                    ctx = _latest_unassigned_pool_context(sender)
-                    set_ai_confirm(
-                        None,
-                        sender,
-                        choice_project,
-                        _classify_remark_from_data(data),
-                        batch_id=ctx['batch_id'],
-                        pool_image_ids=ctx['pool_ids'],
-                        quote_msg_id=ctx['quote'],
-                    )
-                    _send_ai_confirm_prompt(
-                        None, sender, sender, choice_project, quote_msg_id=ctx['quote'],
-                    )
-                    return jsonify({'handled': True, 'type': 'pool_ai_pick_confirm'})
+                    n = _assign_unassigned_for_reply(sender, choice_project, data)
+                    if n <= 0:
+                        _safe_send(
+                            sender,
+                            '找不到待歸類的照片；若剛已歸類完成可忽略。若要改專案請再發照片。',
+                        )
+                    return jsonify({'handled': True, 'type': 'pool_assigned', 'count': n})
 
         has_unassigned = mongo.db.pool_images.count_documents(_open_pool_query(sender)) > 0
 
@@ -1346,6 +1445,16 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             _clear_fuzzy_choice(None, sender)
             _cancel_scheduled_receipt(phone=sender)
             ctx = _latest_unassigned_pool_context(sender)
+            from app.services.project_number_match_service import primary_site_number
+
+            site_num = primary_site_number(trimmed_text)
+            if site_num and _try_fast_site_folder_list(
+                site_num,
+                sender,
+                quote_msg_id=ctx['quote'],
+                pool_image_ids=ctx['pool_ids'],
+            ):
+                return jsonify({'handled': True, 'type': 'pool_ai_list'})
             project, _remark, kind = _apply_classify_resolve(
                 trimmed_text,
                 to=sender,
@@ -1507,9 +1616,12 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                 if choice_project:
                     if move_intent:
                         return _execute_move(sender, choice_project, move_intent, group_id=group_id)
-                    set_ai_confirm(group_id, sender, choice_project)
-                    _send_ai_confirm_prompt(group_id, sender, sender, choice_project)
-                    return jsonify({'handled': True, 'type': 'group_ai_pick_confirm'})
+                    pending = _group_pending_for_sender(group_id, sender)
+                    if pending:
+                        return _categorize_group_image(
+                            pending, choice_project, group_id, data, sender,
+                        )
+                    return jsonify({'handled': True, 'type': 'group_no_pending'})
 
         project = _lookup_active_project(trimmed)
 

@@ -326,6 +326,7 @@ def list_physical_site_folders(site_code_or_num):
         return []
 
     target = site_code.upper()
+    site_num = pj_number_from_project_code(site_code)
     seen = set()
     out = []
 
@@ -346,12 +347,50 @@ def list_physical_site_folders(site_code_or_num):
             'code': parsed,
         })
 
+    def _scan_bucket(bucket_name):
+        for child in nas_mount._list_bucket_child_folders_sync(bucket_name):
+            _add(child.get('folderName') or '', bucket_name)
+
     root_names = nas_mount.list_watch_root_dir_names() or []
     bucket_names = [n for n in root_names if _is_nas_root_bucket_dir(n)]
     bucket_set = set(bucket_names)
+    scanned_buckets = set()
+
+    priority_buckets = []
+    if site_num is not None:
+        watch = nas_mount._watch_dir()
+        if watch:
+            from app.services.project_number_match_service import find_range_bucket_dir
+
+            primary = find_range_bucket_dir(watch, site_num)
+            if primary is not None:
+                priority_buckets.append(primary.name)
+    try:
+        from app import mongo
+
+        for doc in mongo.db.wa_projects.find(
+            {'code': {'$regex': f'^{re.escape(site_code)}$', '$options': 'i'}},
+            {'nasParentBucket': 1},
+        ):
+            pb = (doc.get('nasParentBucket') or '').strip()
+            if pb and pb not in priority_buckets:
+                priority_buckets.append(pb)
+    except Exception:
+        pass
+
+    for bucket in priority_buckets:
+        if bucket in bucket_set or bucket in root_names:
+            _scan_bucket(bucket)
+            scanned_buckets.add(bucket)
+    if len(out) > 1:
+        out.sort(key=lambda r: (r.get('folderName') or '').lower())
+        return out
+
     for bucket in bucket_names:
-        for child in nas_mount._list_bucket_child_folders_sync(bucket):
-            _add(child.get('folderName') or '', bucket)
+        if bucket in scanned_buckets:
+            continue
+        _scan_bucket(bucket)
+        scanned_buckets.add(bucket)
     for name in root_names:
         if name in bucket_set:
             continue
