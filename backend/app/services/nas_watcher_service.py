@@ -393,12 +393,113 @@ class NasMountService:
             return Path(nf)
         return None
 
-    def ensure_photo_day_dir(self, project_code, day_str=None):
+    def _find_dir_named(self, parent: Path, folder_name: str):
+        pref = (folder_name or '').strip()
+        if not pref or parent is None or not parent.is_dir():
+            return None
+        exact = parent / pref
+        if exact.is_dir():
+            return exact
+        try:
+            for entry in parent.iterdir():
+                if entry.is_dir() and entry.name.strip() == pref:
+                    return entry
+        except OSError:
+            return None
+        return None
+
+    def _resolve_site_folder_path(
+        self,
+        project_code,
+        *,
+        preferred_folder_name=None,
+        preferred_parent_bucket=None,
+    ):
+        """Exact NAS folder name wins; never fall back to longest-name match when pref was given."""
+        pref = (preferred_folder_name or '').strip()
+        if pref:
+            from app import mongo
+
+            parent_keys = []
+            pb = (preferred_parent_bucket or '').strip()
+            if pb:
+                parent_keys.append(pb)
+            doc = mongo.db.wa_projects.find_one({
+                'code': {'$regex': f'^{re.escape((project_code or "").strip())}$', '$options': 'i'},
+            })
+            mongo_parent = (doc.get('nasParentBucket') or '').strip() if doc else ''
+            if mongo_parent and mongo_parent not in parent_keys:
+                parent_keys.append(mongo_parent)
+
+            watch = self._resolved_watch_dir()
+            if watch:
+                root = Path(watch)
+                for name in self.list_watch_root_dir_names() or []:
+                    if is_nas_bucket_dir_name(name) and name not in parent_keys:
+                        parent_keys.append(name)
+                tried = set()
+                for key in parent_keys:
+                    if not key or key in tried:
+                        continue
+                    tried.add(key)
+                    bucket = self._resolve_bucket_dir(key)
+                    if bucket is not None:
+                        hit = self._find_dir_named(bucket, pref)
+                        if hit is not None:
+                            return hit
+                hit = self._find_dir_named(root, pref)
+                if hit is not None:
+                    return hit
+            logger.warning(
+                '[NAS] Preferred folder %r not found for %s (buckets=%s)',
+                pref,
+                project_code,
+                parent_keys[:5],
+            )
+            return None
+        return self._resolve_project_folder(project_code)
+
+    def _folder_for_project(
+        self,
+        project_code,
+        project_doc=None,
+        *,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        """Resolve NAS site directory — prefer stored/query folder name over longest match."""
+        fn = (folder_name or '').strip()
+        pb = (parent_bucket or '').strip()
+        if project_doc:
+            fn = fn or (project_doc.get('nasFolderName') or '').strip()
+            pb = pb or (project_doc.get('nasParentBucket') or '').strip()
+        if fn:
+            hit = self._resolve_site_folder_path(
+                project_code,
+                preferred_folder_name=fn,
+                preferred_parent_bucket=pb or None,
+            )
+            if hit is not None:
+                return hit
+        return self._resolve_project_folder(project_code)
+
+    def ensure_photo_day_dir(
+        self,
+        project_code,
+        day_str=None,
+        *,
+        preferred_folder_name=None,
+        preferred_parent_bucket=None,
+    ):
         """Project folder / Photo / YYYY-MM-DD (matches manual NAS layout)."""
         if not self.is_available():
             return None
         day = day_str or self._hk_today_str()
-        proj = self._resolve_project_folder(project_code)
+        proj = self._resolve_site_folder_path(
+            project_code,
+            preferred_folder_name=preferred_folder_name,
+            preferred_parent_bucket=preferred_parent_bucket,
+        )
         if proj is None:
             parent = None
             from app import mongo
@@ -419,12 +520,25 @@ class NasMountService:
         day_dir.mkdir(parents=True, exist_ok=True)
         return str(day_dir)
 
-    def copy_file_to_project(self, local_file_path, project_code, *, day_str=None):
+    def copy_file_to_project(
+        self,
+        local_file_path,
+        project_code,
+        *,
+        day_str=None,
+        preferred_folder_name=None,
+        preferred_parent_bucket=None,
+    ):
         """Copy a local file into Photo/YYYY-MM-DD under the project folder."""
         if not self.is_available():
             return {'ok': False, 'error': 'NAS mount not available'}
 
-        day_dir = self.ensure_photo_day_dir(project_code, day_str)
+        day_dir = self.ensure_photo_day_dir(
+            project_code,
+            day_str,
+            preferred_folder_name=preferred_folder_name,
+            preferred_parent_bucket=preferred_parent_bucket,
+        )
         if not day_dir:
             return {'ok': False, 'error': 'Could not resolve NAS project folder'}
 
@@ -627,9 +741,14 @@ class NasMountService:
             if f.get('code')
         ]
 
-    def list_project_subfolders(self, project_code):
+    def list_project_subfolders(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
         """Immediate subdirectories under a site project folder."""
-        folder = self._resolve_project_folder(project_code)
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if not folder:
             return []
         out = []
@@ -641,9 +760,14 @@ class NasMountService:
             logger.warning('[NAS] list_project_subfolders failed: %s', e)
         return out
 
-    def list_loose_root_files(self, project_code):
+    def list_loose_root_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
         """Image files sitting directly on a folder root (not in subdirs)."""
-        folder = self._resolve_project_folder(project_code)
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if not folder:
             return []
         files = []
@@ -663,7 +787,14 @@ class NasMountService:
             logger.warning('[NAS] list_loose_root_files failed: %s', e)
         return files
 
-    def _folder_stats_sync(self, project_code):
+    def _folder_stats_sync(
+        self,
+        project_code,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
         if is_range_folder_code(project_code):
             bucket = self._resolve_project_folder(project_code)
             if not bucket:
@@ -676,7 +807,12 @@ class NasMountService:
                 'siteFolderCount': len(sites),
                 'latestModified': None,
             }
-        folder = self._resolve_project_folder(project_code)
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if not folder:
             return None
         file_count = 0
@@ -694,10 +830,25 @@ class NasMountService:
             'latestModified': datetime.utcfromtimestamp(latest_mtime).isoformat() if latest_mtime else None,
         }
 
-    def folder_stats(self, project_code):
+    def folder_stats(
+        self,
+        project_code,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
         """Stats for one project folder only (time-boxed — no unbounded SMB walk on API thread)."""
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
         return _run_with_timeout(
-            lambda: self._folder_stats_sync(project_code),
+            lambda: self._folder_stats_sync(
+                project_code,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            ),
             self._io_timeout(),
             default=None,
         )
@@ -854,8 +1005,21 @@ class NasMountService:
             logger.warning('[NAS] Rename failed %s: %s', folder, e)
             return {'ok': False, 'error': str(e)}
 
-    def _resolve_project_txt_path(self, project_code, relative_path):
-        folder = self._resolve_project_folder(project_code)
+    def _resolve_project_txt_path(
+        self,
+        project_code,
+        relative_path,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if folder is None:
             return None, None
         root = folder.resolve()
@@ -869,8 +1033,20 @@ class NasMountService:
             return None, None
         return root, target
 
-    def _list_project_txt_files_sync(self, project_code):
-        folder = self._resolve_project_folder(project_code)
+    def _list_project_txt_files_sync(
+        self,
+        project_code,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if not folder:
             return []
         out = []
@@ -892,9 +1068,17 @@ class NasMountService:
             logger.warning('[NAS] list txt files failed: %s', e)
         return out
 
-    def list_project_txt_files(self, project_code):
+    def list_project_txt_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
         result = _run_with_timeout(
-            lambda: self._list_project_txt_files_sync(project_code),
+            lambda: self._list_project_txt_files_sync(
+                project_code,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            ),
             self._io_timeout(),
             default=None,
         )
@@ -903,9 +1087,27 @@ class NasMountService:
             return []
         return result
 
-    def read_project_txt_file(self, project_code, relative_path):
+    def read_project_txt_file(
+        self,
+        project_code,
+        relative_path,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
+
         def _read():
-            _root, target = self._resolve_project_txt_path(project_code, relative_path)
+            _root, target = self._resolve_project_txt_path(
+                project_code,
+                relative_path,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            )
             if target is None:
                 return {'ok': False, 'error': 'Invalid path'}
             if not target.is_file():
@@ -927,9 +1129,28 @@ class NasMountService:
             return {'ok': False, 'error': 'NAS read timed out'}
         return result
 
-    def write_project_txt_file(self, project_code, relative_path, content):
+    def write_project_txt_file(
+        self,
+        project_code,
+        relative_path,
+        content,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
+
         def _write():
-            _root, target = self._resolve_project_txt_path(project_code, relative_path)
+            _root, target = self._resolve_project_txt_path(
+                project_code,
+                relative_path,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            )
             if target is None:
                 return {'ok': False, 'error': 'Invalid path'}
             try:
@@ -950,8 +1171,20 @@ class NasMountService:
             return {'ok': False, 'error': 'NAS write timed out'}
         return result
 
-    def _list_folder_files_sync(self, project_code):
-        folder = self._resolve_project_folder(project_code)
+    def _list_folder_files_sync(
+        self,
+        project_code,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        folder = self._folder_for_project(
+            project_code,
+            project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
         if not folder:
             return []
 
@@ -972,10 +1205,18 @@ class NasMountService:
             })
         return files
 
-    def list_folder_files(self, project_code):
+    def list_folder_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
         """List image files under the project folder (all subfolders, time-boxed)."""
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
         result = _run_with_timeout(
-            lambda: self._list_folder_files_sync(project_code),
+            lambda: self._list_folder_files_sync(
+                project_code,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            ),
             self._io_timeout(),
             default=None,
         )

@@ -1,12 +1,21 @@
 import { useEffect, useState, useMemo } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import WaRecordTable from '../../components/wa/RecordTable'
 import { MapPin, Layers, HardDrive, ChevronLeft, Folder, FileText, Loader2, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import api from '../../lib/api'
-import { formatWaProjectLabel } from '../../lib/waProjects'
+import { formatWaProjectTitleSuffix } from '../../lib/waProjects'
+
+function nasFolderApiParams(searchParams: URLSearchParams): Record<string, string> {
+  const out: Record<string, string> = {}
+  const fn = searchParams.get('nasFolderName')?.trim()
+  const pb = searchParams.get('nasParentBucket')?.trim()
+  if (fn) out.nasFolderName = fn
+  if (pb) out.nasParentBucket = pb
+  return out
+}
 
 interface NasFileEntry {
   name: string
@@ -38,6 +47,8 @@ interface ProjectDetail {
   nasLooseFiles?: NasFileEntry[]
   nasSubfolders?: { name: string }[]
   nasTxtFiles?: NasFileEntry[]
+  nasResolvedFolderName?: string
+  nasPhysicalFolders?: { folderName: string; nasParentBucket?: string }[]
 }
 
 function isRangeBucketCode(code: string) {
@@ -63,10 +74,12 @@ function NasTxtFilesPanel({
   projectId,
   files,
   nasConnected,
+  nasFolderParams,
 }: {
   projectId: string
   files: NasFileEntry[]
   nasConnected: boolean
+  nasFolderParams?: Record<string, string>
 }) {
   const sorted = useMemo(
     () =>
@@ -93,7 +106,7 @@ function NasTxtFilesPanel({
     try {
       const { data } = await api.get<{ ok: boolean; content?: string; modified?: string; error?: string }>(
         `/wa/projects/${projectId}/nas/txt/content`,
-        { params: { path } },
+        { params: { path, ...nasFolderParams } },
       )
       if (!data.ok) {
         if (!opts?.silent) toast.error(data.error || 'Failed to load file')
@@ -118,7 +131,7 @@ function NasTxtFilesPanel({
   useEffect(() => {
     if (selectedPath) void loadContent(selectedPath)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPath, projectId])
+  }, [selectedPath, projectId, nasFolderParams])
 
   useEffect(() => {
     if (!selectedPath || !nasConnected || dirty) return
@@ -136,6 +149,7 @@ function NasTxtFilesPanel({
       const { data } = await api.put<{ ok: boolean; modified?: string; error?: string }>(
         `/wa/projects/${projectId}/nas/txt/content`,
         { path: selectedPath, content },
+        { params: nasFolderParams },
       )
       if (!data.ok) {
         toast.error(data.error || 'Save failed')
@@ -242,6 +256,8 @@ function NasTxtFilesPanel({
 
 export default function WaProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
+  const nasFolderParams = useMemo(() => nasFolderApiParams(searchParams), [searchParams])
   const { records, fetchProjectRecords, nasStatus, fetchNasStatus } = useWaStore()
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [nasChildFolders, setNasChildFolders] = useState<NasChildFolder[]>([])
@@ -259,7 +275,7 @@ export default function WaProjectDetailPage() {
     const range = codeHint ? isRangeBucketCode(codeHint) : false
     return api
       .get(`/wa/projects/${projectId}`, {
-        params: range ? {} : { includeNasTxt: '1' },
+        params: range ? { ...nasFolderParams } : { includeNasTxt: '1', ...nasFolderParams },
       })
       .then(({ data }) => {
         setProject(data)
@@ -318,7 +334,7 @@ export default function WaProjectDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [id, fetchProjectRecords, fetchNasStatus])
+  }, [id, fetchProjectRecords, fetchNasStatus, nasFolderParams])
 
   useEffect(() => {
     if (!id || !project || !nasStatus?.connected) return
@@ -337,7 +353,7 @@ export default function WaProjectDetailPage() {
       fetchProjectRecords(id)
     }, ms)
     return () => window.clearInterval(timer)
-  }, [id, nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjectRecords, project?.code])
+  }, [id, nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjectRecords, project?.code, nasFolderParams])
 
   const displayChildFolders = useMemo(() => {
     if (nasChildFolders.length > 0) return nasChildFolders
@@ -380,10 +396,10 @@ export default function WaProjectDetailPage() {
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-display font-bold text-slate-900 dark:text-white">
               <span className="font-mono text-sign-600 dark:text-sign-400">{project.code}</span>
-              {formatWaProjectLabel(project).toUpperCase() !== project.code.toUpperCase() && (
+              {formatWaProjectTitleSuffix(project) && (
                 <>
                   <span className="mx-2 text-slate-400">—</span>
-                  {formatWaProjectLabel(project)}
+                  {formatWaProjectTitleSuffix(project)}
                 </>
               )}
             </h1>
@@ -428,6 +444,42 @@ export default function WaProjectDetailPage() {
             <h2 className="font-semibold text-slate-900 dark:text-white text-sm">NAS on shared drive</h2>
           </div>
           <div className="p-4 space-y-4 text-sm">
+            {!isRangeBucket && project.nasResolvedFolderName && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-mono break-all">
+                NAS folder: {project.nasResolvedFolderName}
+              </p>
+            )}
+            {!isRangeBucket && (project.nasPhysicalFolders?.length ?? 0) > 1 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                  Other folders for this site on the share
+                </p>
+                <ul className="flex flex-col gap-1">
+                  {(project.nasPhysicalFolders ?? []).map((f) => {
+                    const active =
+                      (project.nasFolderName || '').trim() === (f.folderName || '').trim()
+                    const q = new URLSearchParams({
+                      nasFolderName: f.folderName,
+                      ...(f.nasParentBucket ? { nasParentBucket: f.nasParentBucket } : {}),
+                    })
+                    return (
+                      <li key={f.folderName}>
+                        {active ? (
+                          <span className="text-sign-600 dark:text-sign-400 text-xs font-mono">{f.folderName}</span>
+                        ) : (
+                          <Link
+                            to={`/wa/projects/${id}?${q.toString()}`}
+                            className="text-xs font-mono text-slate-600 hover:text-sign-600 dark:text-slate-400 dark:hover:text-sign-400"
+                          >
+                            {f.folderName}
+                          </Link>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )}
             {isRangeBucket && (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
@@ -460,20 +512,24 @@ export default function WaProjectDetailPage() {
                 )}
               </div>
             )}
-            {!isRangeBucket && (project.nasSubfolders?.length ?? 0) > 0 && (
+            {!isRangeBucket && (
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Subfolders</p>
-                <ul className="flex flex-wrap gap-2">
-                  {project.nasSubfolders!.map((s) => (
-                    <li
-                      key={s.name}
-                      className="px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-1"
-                    >
-                      <Folder className="h-3.5 w-3.5" />
-                      {s.name}
-                    </li>
-                  ))}
-                </ul>
+                {(project.nasSubfolders?.length ?? 0) > 0 ? (
+                  <ul className="flex flex-wrap gap-2">
+                    {project.nasSubfolders!.map((s) => (
+                      <li
+                        key={s.name}
+                        className="px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 flex items-center gap-1"
+                      >
+                        <Folder className="h-3.5 w-3.5" />
+                        {s.name}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-slate-500 text-sm">No subfolders in this NAS directory.</p>
+                )}
               </div>
             )}
             {(project.nasLooseFiles?.length ?? 0) > 0 && (
@@ -493,6 +549,7 @@ export default function WaProjectDetailPage() {
                   projectId={id!}
                   files={project.nasTxtFiles ?? []}
                   nasConnected={Boolean(nasStatus?.connected)}
+                  nasFolderParams={nasFolderParams}
                 />
               </div>
             )}

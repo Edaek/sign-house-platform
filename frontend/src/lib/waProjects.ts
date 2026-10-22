@@ -135,14 +135,18 @@ export function buildProjectBuckets(projects: WaProject[]): WaProjectBucket[] {
         bucketKey = `__standalone:${norm}`
         if (!standaloneLabels.has(norm)) standaloneLabels.set(norm, label)
       } else {
-        bucketKey = inferRangeBucketCode(num)
+        let best: { key: string; span: number } | null = null
         for (const r of ranges) {
           const b = parseRangeBounds(r.code)
           if (b && num >= b.lo && num <= b.hi) {
-            bucketKey = r.code.toUpperCase()
-            break
+            const span = b.hi - b.lo
+            // Prefer the outer NAS bucket (e.g. PJ-3000-3999 over PJ-3000-3099 for site 3047).
+            if (!best || span > best.span) {
+              best = { key: r.code.toUpperCase(), span }
+            }
           }
         }
+        bucketKey = best?.key ?? inferRangeBucketCode(num)
       }
     }
     if (!sitesByBucket.has(bucketKey)) sitesByBucket.set(bucketKey, [])
@@ -234,6 +238,20 @@ export function formatWaProjectLabel(project: Pick<WaProject, 'code' | 'nasFolde
     return folder
   }
   return code
+}
+
+/** Detail page title suffix — avoids "PJ-3002 — PJ-3002 中醫院…" duplication. */
+export function formatWaProjectTitleSuffix(
+  project: Pick<WaProject, 'code' | 'nasFolderName'>,
+): string | null {
+  const code = (project.code || '').trim()
+  const folder = (project.nasFolderName || '').trim()
+  if (!folder || folder.toUpperCase() === code.toUpperCase()) return null
+  if (folder.toUpperCase().startsWith(code.toUpperCase())) {
+    const rest = folder.slice(code.length).trim().replace(/^[-–—]\s*/, '')
+    return rest || null
+  }
+  return folder
 }
 
 export function filterWaProjects(

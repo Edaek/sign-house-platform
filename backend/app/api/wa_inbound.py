@@ -373,7 +373,13 @@ def _fuzzy_choice_key(group_id, sender):
 def _set_fuzzy_choice(group_id, sender, candidates):
     """Store candidate list so the user can reply with a number."""
     choices = [
-        {'code': p['code'], 'nasFolder': p.get('nasFolder') or '', 'id': str(p['_id'])}
+        {
+            'code': p['code'],
+            'nasFolder': p.get('nasFolder') or '',
+            'nasFolderName': (p.get('nasFolderName') or '').strip(),
+            'nasParentBucket': (p.get('nasParentBucket') or '').strip(),
+            'id': str(p['_id']),
+        }
         for p, _score in candidates
     ]
     mongo.db.wa_system.update_one(
@@ -396,7 +402,18 @@ def _pop_fuzzy_choice(group_id, sender, selection):
     if idx < 0 or idx >= len(doc['choices']):
         return None
     choice = doc['choices'][idx]
-    return mongo.db.wa_projects.find_one({'_id': ObjectId(choice['id']), 'status': 'active'})
+    project = mongo.db.wa_projects.find_one({'_id': ObjectId(choice['id']), 'status': 'active'})
+    if not project:
+        return None
+    fn = (choice.get('nasFolderName') or '').strip()
+    parent = (choice.get('nasParentBucket') or '').strip()
+    if fn or parent:
+        project = dict(project)
+        if fn:
+            project['nasFolderName'] = fn
+        if parent:
+            project['nasParentBucket'] = parent
+    return project
 
 
 def _clear_fuzzy_choice(group_id, sender):
@@ -405,14 +422,11 @@ def _clear_fuzzy_choice(group_id, sender):
 
 def _format_fuzzy_candidates(candidates):
     """Build a numbered list string for bot reply."""
-    from app.services.nas_sync_service import enrich_wa_projects_display
-    from app.services.project_number_match_service import wa_classify_display_label
+    from app.services.project_number_match_service import wa_classify_list_labels
 
-    enrich_wa_projects_display(candidates)
-    lines = []
-    for i, (proj, _score) in enumerate(candidates, 1):
-        lines.append(f'{i}. {wa_classify_display_label(proj, max_len=500)}')
-    return '\n'.join(lines)
+    projs = [p for p, _score in candidates]
+    labels = wa_classify_list_labels(projs, max_len=500)
+    return '\n'.join(f'{i}. {lab}' for i, lab in enumerate(labels, 1))
 
 
 def _quoted_id_variants(quoted_id):

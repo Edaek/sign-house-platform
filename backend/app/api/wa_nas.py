@@ -6,6 +6,7 @@ from app.services.nas_watcher_service import nas_mount
 from app.services.project_number_match_service import is_range_folder_code
 from app.services.nas_sync_service import (
     sync_projects_from_nas,
+    sync_bucket_site_projects_from_nas,
     import_nas_files_for_project,
     import_all_projects_from_nas,
     run_bidirectional_nas_sync,
@@ -58,12 +59,22 @@ def browse_nas():
                 'childFolders': children,
                 'siteFolders': [c for c in children if c.get('isSiteProject')],
             })
+        from app.services.wa_project_validation import find_project_by_code
+
+        proj = find_project_by_code(code)
+        view = dict(proj) if proj else {'code': code}
+        fn = (request.args.get('nasFolderName') or '').strip()
+        pb = (request.args.get('nasParentBucket') or '').strip()
+        if fn:
+            view['nasFolderName'] = fn
+        if pb:
+            view['nasParentBucket'] = pb
         return jsonify({
             'ok': True,
             'code': code.upper(),
             'rangeBucket': False,
-            'subfolders': nas_mount.list_project_subfolders(code),
-            'files': nas_mount.list_folder_files(code),
+            'subfolders': nas_mount.list_project_subfolders(code, project_doc=view),
+            'files': nas_mount.list_folder_files(code, project_doc=view),
         })
 
     folders = nas_mount.list_folders()
@@ -91,6 +102,20 @@ def create_folder():
 def sync_projects_from_nas_route():
     """Create web projects for folders that exist on the NAS mount but not in Mongo."""
     result = sync_projects_from_nas(ObjectId(get_jwt_identity()))
+    if not result.get('ok'):
+        return jsonify(result), 503
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/sync-bucket', methods=['POST'])
+@jwt_required()
+def sync_bucket_from_nas_route():
+    """Import site folders under one NAS bucket into wa_projects (Projects drill-down)."""
+    data = request.get_json() or {}
+    bucket_code = (data.get('bucketCode') or data.get('code') or '').strip()
+    if not bucket_code:
+        return jsonify({'ok': False, 'error': 'bucketCode required'}), 400
+    result = sync_bucket_site_projects_from_nas(bucket_code, ObjectId(get_jwt_identity()))
     if not result.get('ok'):
         return jsonify(result), 503
     return jsonify(result)

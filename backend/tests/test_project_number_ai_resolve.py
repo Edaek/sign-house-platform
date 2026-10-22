@@ -222,6 +222,62 @@ class TestResolveClassify:
             assert 'projects' in (r.user_message or '').lower()
 
 
+class TestDuplicateNasFolderLabels:
+
+    def test_enrich_keeps_bare_and_full_names_for_same_site(self, app):
+        with app.app_context():
+            from unittest.mock import patch
+
+            from app.services.nas_sync_service import enrich_wa_projects_display
+            from app.services.project_number_match_service import wa_classify_display_label
+
+            idx = {
+                'PJ-3051': {
+                    'folderName': 'PJ-3051 唐人新村_Hanison (SC)',
+                    'code': 'PJ-3051',
+                },
+            }
+            cands = [
+                ({'code': 'PJ-3051', 'nasFolderName': 'PJ-3051'}, 100),
+                (
+                    {
+                        'code': 'PJ-3051',
+                        'nasFolderName': 'PJ-3051 唐人新村_Hanison (SC)',
+                    },
+                    100,
+                ),
+            ]
+            with patch('app.services.nas_sync_service.nas_folder_index', return_value=idx):
+                enrich_wa_projects_display(cands)
+            assert cands[0][0]['nasFolderName'] == 'PJ-3051'
+            assert cands[1][0]['nasFolderName'] == 'PJ-3051 唐人新村_Hanison (SC)'
+            labels = [
+                wa_classify_display_label(cands[0][0]),
+                wa_classify_display_label(cands[1][0]),
+            ]
+            assert labels == ['PJ-3051', 'PJ-3051 唐人新村_Hanison (SC)']
+
+    def test_list_labels_append_bucket_when_names_collide(self, app):
+        with app.app_context():
+            from app.services.project_number_match_service import wa_classify_list_labels
+
+            projs = [
+                {
+                    'code': 'PJ-3051',
+                    'nasFolderName': 'PJ-3051 唐人新村_Hanison (SC)',
+                    'nasParentBucket': 'PJ-3000-3999',
+                },
+                {
+                    'code': 'PJ-3051',
+                    'nasFolderName': 'PJ-3051 唐人新村_Hanison (SC)',
+                    'nasParentBucket': 'PJ-2800-2899',
+                },
+            ]
+            labels = wa_classify_list_labels(projs, max_len=500)
+            assert '[PJ-3000-3999]' in labels[0]
+            assert '[PJ-2800-2899]' in labels[1]
+
+
 class TestClassifyTarget:
 
     def test_is_wa_classify_target_excludes_range(self, app):

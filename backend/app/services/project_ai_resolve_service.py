@@ -10,11 +10,13 @@ from app.services.ai_extract_service import _call_ollama, _get_config, _parse_st
 from app.services.image_pool_service import match_project_ext
 from app.services.message_parser_service import split_classify_label_and_remark
 from app.services.project_number_match_service import (
+    _normalize_classify_label,
     classify_input_matches_full_display,
     is_wa_classify_target,
     list_wa_classify_target_projects,
     primary_site_number,
     wa_classify_display_label,
+    wa_classify_list_labels,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,17 +45,11 @@ class ClassifyResolve:
 
 
 def _format_candidate_lines(candidates):
-    from app.services.nas_sync_service import enrich_wa_projects_display
-
-    enrich_wa_projects_display(candidates)
-    lines = []
-    for i, item in enumerate(candidates, 1):
-        if isinstance(item, tuple):
-            proj = item[0]
-        else:
-            proj = item
-        lines.append(f'{i}. {wa_classify_display_label(proj, max_len=500)}')
-    return '\n'.join(lines)
+    projs = []
+    for item in candidates:
+        projs.append(item[0] if isinstance(item, tuple) else item)
+    labels = wa_classify_list_labels(projs, max_len=500)
+    return '\n'.join(f'{i}. {lab}' for i, lab in enumerate(labels, 1))
 
 
 def _build_classify_list_message(match_key, candidates):
@@ -149,6 +145,79 @@ def _suggest_single_project(match_key, project, remark=None):
     )
 
 
+def _expand_candidates_for_duplicate_nas_folders(match_key, candidates):
+    """Same site code, multiple physical NAS folders → list each full folder name."""
+    from app.services.nas_sync_service import list_physical_site_folders
+    from app.services.wa_project_validation import find_project_by_code
+
+    folders = list_physical_site_folders(match_key)
+    if len(folders) <= 1:
+        return candidates
+
+    base = candidates[0][0] if candidates else None
+    if not base and folders[0].get('code'):
+        base = find_project_by_code(folders[0]['code'])
+    if not base:
+        return candidates
+
+    expanded = []
+    for row in folders:
+        proj = dict(base)
+        proj['nasFolderName'] = row['folderName']
+        if row.get('parentBucket'):
+            proj['nasParentBucket'] = row['parentBucket']
+        expanded.append((proj, 100))
+    return expanded
+
+
+def _resolve_assign_for_physical_folders(match_key, ext, remark):
+    """Assign only when input matches exactly one physical NAS folder for this site."""
+    from app.services.nas_sync_service import list_physical_site_folders
+    from app.services.wa_project_validation import find_project_by_code
+
+    physical = list_physical_site_folders(match_key)
+    if not physical:
+        return None
+
+    norm_key = _normalize_classify_label(match_key)
+    exact_rows = [
+        r for r in physical
+        if _normalize_classify_label(r.get('folderName') or '') == norm_key
+    ]
+
+    if len(physical) > 1:
+        if len(exact_rows) != 1:
+            return None
+        row = exact_rows[0]
+    elif len(exact_rows) == 1:
+        row = exact_rows[0]
+    elif (
+        ext.project
+        and is_wa_classify_target(ext.project)
+        and classify_input_matches_full_display(match_key, ext.project)
+    ):
+        row = physical[0]
+    else:
+        return None
+
+    base = ext.project if ext.project and is_wa_classify_target(ext.project) else None
+    if not base:
+        base = find_project_by_code(row.get('code') or '')
+    if not base:
+        return None
+
+    proj = dict(base)
+    proj['nasFolderName'] = row['folderName']
+    if row.get('parentBucket'):
+        proj['nasParentBucket'] = row['parentBucket']
+    return ClassifyResolve(
+        action='assign',
+        project=proj,
+        remark=ext.remark or remark,
+        needs_confirm=False,
+    )
+
+
 def coerce_assign_to_confirm(resolve, match_key):
     """Inbound safety net — never assign unless input is the full NAS folder name."""
     if resolve.action != 'assign' or not resolve.project:
@@ -175,6 +244,9 @@ def resolve_classify_input(text, *, active_only=True):
     site_num = primary_site_number(match_key)
     numeric_site = bool(site_num and match_key.strip().isdigit())
 
+    physical_assign = _resolve_assign_for_physical_folders(match_key, ext, remark)
+    if physical_assign:
+        return physical_assign
     if (
         ext.project
         and is_wa_classify_target(ext.project)
@@ -192,6 +264,8 @@ def resolve_classify_input(text, *, active_only=True):
         candidates = [(p, s) for p, s in ext.candidates if is_wa_classify_target(p)]
     elif ext.project and is_wa_classify_target(ext.project):
         candidates = [(ext.project, 90)]
+
+    candidates = _expand_candidates_for_duplicate_nas_folders(match_key, candidates)
 
     if len(candidates) > 1:
         msg = _build_classify_list_message(match_key, candidates)
@@ -265,6 +339,8 @@ def set_ai_confirm(
         {'$set': {
             'projectId': str(project['_id']),
             'code': project.get('code', ''),
+            'nasFolderName': (project.get('nasFolderName') or '').strip() or None,
+            'nasParentBucket': (project.get('nasParentBucket') or '').strip() or None,
             'remark': remark,
             'afterListPick': after_list_pick,
             'batchId': batch_id,
@@ -294,10 +370,20 @@ def pop_ai_confirm_project(group_id, sender):
         return None, None, {}
     project = mongo.db.wa_projects.find_one({'_id': ObjectId(pid), 'status': 'active'})
     remark = doc.get('remark')
+    pref_folder = (doc.get('nasFolderName') or '').strip()
+    pref_bucket = (doc.get('nasParentBucket') or '').strip()
+    if project and (pref_folder or pref_bucket):
+        project = dict(project)
+        if pref_folder:
+            project['nasFolderName'] = pref_folder
+        if pref_bucket:
+            project['nasParentBucket'] = pref_bucket
     scope = {
         'batchId': doc.get('batchId'),
         'poolImageIds': doc.get('poolImageIds') or [],
         'quoteMsgId': doc.get('quoteMsgId'),
+        'nasFolderName': pref_folder or None,
+        'nasParentBucket': pref_bucket or None,
     }
     return project, remark, scope
 

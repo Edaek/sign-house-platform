@@ -188,6 +188,12 @@ interface WaStore {
     totalCreated: number
     totalRemoved: number
   }>
+  syncNasBucket: (bucketCode: string) => Promise<{
+    created: string[]
+    updated: number
+    scanned: number
+  }>
+  fetchNasBucketSites: (bucketCode: string) => Promise<WaProject[]>
   createProject: (data: {
     code: string
     location?: string
@@ -253,10 +259,10 @@ export const useWaStore = create<WaStore>((set) => ({
       const ax = err as { code?: string; message?: string; response?: { status?: number } }
       const msg =
         ax.code === 'ECONNABORTED'
-          ? '專案列表載入逾時（NAS 較慢），請稍後再試或點 Sync NAS'
+          ? 'Project list timed out (NAS may be slow). Retry or click Sync NAS.'
           : ax.response?.status === 401
-            ? '登入已過期，請重新登入'
-            : '無法載入專案列表，請確認 backend (5002) 已啟動'
+            ? 'Session expired — please sign in again'
+            : 'Could not load projects. Ensure the backend is running on port 5002.'
       import('react-hot-toast').then(({ default: toast }) => toast.error(msg))
     } finally {
       set({ loading: false })
@@ -419,6 +425,39 @@ export const useWaStore = create<WaStore>((set) => ({
       totalCreated: data.recordsImported ?? data.totalCreated ?? 0,
       totalRemoved: data.recordsRemoved ?? 0,
     }
+  },
+
+  syncNasBucket: async (bucketCode) => {
+    const { data } = await api.post(
+      '/wa/nas/sync-bucket',
+      { bucketCode },
+      { timeout: 120000 },
+    )
+    return {
+      created: (data.created as string[]) || [],
+      updated: (data.updated as number) || 0,
+      scanned: (data.scanned as number) || 0,
+    }
+  },
+
+  fetchNasBucketSites: async (bucketCode) => {
+    const { data } = await api.get('/wa/projects/nas-bucket-sites', {
+      params: { bucket: bucketCode, sync: '0' },
+      timeout: 120000,
+    })
+    const sites = (data.sites || []) as Array<Record<string, unknown>>
+    return sites.map((row) => ({
+      id: (row.projectId as string) || `nas:${row.folderName}`,
+      code: (row.code as string) || (row.folderName as string) || '',
+      nasFolderName: (row.nasFolderName as string) || (row.folderName as string) || '',
+      status: (row.status as string) || 'active',
+      stage: 'active',
+      totalRecords: (row.totalRecords as number) ?? 0,
+      todayRecords: (row.todayRecords as number) ?? 0,
+      location: row.location as string | undefined,
+      nasParentBucket: row.nasParentBucket as string | undefined,
+      nasFileCount: (row.nasFileCount as number) ?? undefined,
+    })) as WaProject[]
   },
 
   createProject: async (projData) => {

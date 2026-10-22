@@ -253,6 +253,17 @@ def classify_input_matches_full_display(label, project) -> bool:
         display_probe = wa_classify_display_label(project, max_len=0)
         if display_probe and (' ' in display_probe or '_' in display_probe):
             return False
+    from app.services.nas_sync_service import list_physical_site_folders
+
+    physical = list_physical_site_folders(label)
+    if len(physical) > 1:
+        norm_lab = _normalize_classify_label(lab)
+        matches = [
+            r for r in physical
+            if _normalize_classify_label(r.get('folderName') or '') == norm_lab
+        ]
+        return len(matches) == 1
+
     display = wa_classify_display_label(project, max_len=0)
     if not display:
         return False
@@ -271,6 +282,28 @@ def wa_classify_display_label(proj, *, max_len=_WA_LABEL_MAX):
     if max_len and len(label) > max_len:
         return label[: max_len - 1].rstrip() + '…'
     return label
+
+
+def wa_classify_list_labels(projects, *, max_len=_WA_LABEL_MAX):
+    """Numbered-list labels; append [bucket] when the same folder name appears twice."""
+    from collections import Counter
+
+    from app.services.nas_sync_service import enrich_wa_projects_display
+
+    projs = [p for p in projects if p]
+    if not projs:
+        return []
+    enrich_wa_projects_display(projs)
+    raw = [wa_classify_display_label(p, max_len=max_len) for p in projs]
+    counts = Counter(raw)
+    labels = []
+    for p, label in zip(projs, raw):
+        if counts[label] > 1:
+            bucket = (p.get('nasParentBucket') or '').strip()
+            if bucket:
+                label = f'{label} [{bucket}]'
+        labels.append(label)
+    return labels
 
 
 def list_wa_classify_target_projects(*, active_only=True, limit=None):

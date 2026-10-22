@@ -4,6 +4,7 @@ import { useWaStore, type WaProject } from '../../store/waStore'
 import {
   buildProjectBuckets,
   bucketSiteProjects,
+  bucketFolderLabel,
   filterWaProjects,
   isRangeBucketCode,
   isStandaloneBucketCode,
@@ -28,10 +29,25 @@ import {
 import toast from 'react-hot-toast'
 
 export default function WaProjectsPage() {
-  const { projects, fetchProjects, loading, nasStatus, nasStatusLoading, fetchNasStatus, syncNasFromDrive } = useWaStore()
+  const {
+    projects,
+    fetchProjects,
+    loading,
+    nasStatus,
+    nasStatusLoading,
+    fetchNasStatus,
+    syncNasFromDrive,
+    fetchNasBucketSites,
+  } = useWaStore()
   const [search, setSearch] = useState('')
   const [selectedBucketCode, setSelectedBucketCode] = useState<string | null>(null)
   const [syncingNas, setSyncingNas] = useState(false)
+  const [bucketSyncing, setBucketSyncing] = useState(false)
+  const [bucketSites, setBucketSites] = useState<WaProject[]>([])
+  /** 'nas' = full shared-drive list; 'mongo' = fallback when NAS API failed */
+  const [bucketSitesSource, setBucketSitesSource] = useState<'nas' | 'mongo' | null>(null)
+  /** Physical NAS folder count per bucket (from shared drive scan, not MongoDB). */
+  const [nasFolderCountsByBucket, setNasFolderCountsByBucket] = useState<Record<string, number>>({})
 
   useEffect(() => {
     fetchProjects()
@@ -48,6 +64,44 @@ export default function WaProjectsPage() {
     }, ms)
     return () => window.clearInterval(timer)
   }, [nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjects, fetchNasStatus])
+
+  useEffect(() => {
+    if (!selectedBucketCode || !nasStatus?.connected) {
+      setBucketSites([])
+      setBucketSitesSource(null)
+      return
+    }
+    const nasBucket = bucketFolderLabel(selectedBucketCode)
+    let cancelled = false
+    setBucketSyncing(true)
+    setBucketSites([])
+    setBucketSitesSource(null)
+    fetchNasBucketSites(nasBucket)
+      .then((sites) => {
+        if (cancelled) return
+        setBucketSites(sites)
+        setBucketSitesSource('nas')
+        if (selectedBucketCode) {
+          setNasFolderCountsByBucket((prev) => ({
+            ...prev,
+            [selectedBucketCode]: sites.length,
+          }))
+        }
+        return fetchProjects()
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBucketSitesSource('mongo')
+          toast.error('Could not read folders from the shared drive. Showing app projects only — try Sync NAS or refresh.')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBucketSyncing(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedBucketCode, nasStatus?.connected, fetchNasBucketSites, fetchProjects])
 
   const buckets = useMemo(() => buildProjectBuckets(projects), [projects])
 
@@ -72,8 +126,14 @@ export default function WaProjectsPage() {
 
   const filteredSiteProjects = useMemo(() => {
     if (!selectedBucket) return []
-    return filterWaProjects(bucketSiteProjects(selectedBucket), search)
-  }, [selectedBucket, search])
+    if (bucketSitesSource === 'nas') {
+      return filterWaProjects(bucketSites, search)
+    }
+    if (bucketSitesSource === 'mongo' || bucketSites.length === 0) {
+      return filterWaProjects(bucketSiteProjects(selectedBucket), search)
+    }
+    return filterWaProjects(bucketSites, search)
+  }, [selectedBucket, bucketSites, bucketSitesSource, search])
 
   const hasSearch = search.trim().length > 0
   const atBucketRoot = selectedBucketCode == null
@@ -85,13 +145,21 @@ export default function WaProjectsPage() {
         ? `${n} of ${buckets.length} folder${buckets.length !== 1 ? 's' : ''}`
         : `${n} NAS folder${n !== 1 ? 's' : ''} · ${projects.filter((p) => !isRangeBucketCode(p.code)).length} site projects`
     }
-    const total = selectedBucket ? bucketSiteProjects(selectedBucket).length : 0
+    const total =
+      bucketSitesSource === 'nas'
+        ? bucketSites.length
+        : selectedBucket
+          ? bucketSiteProjects(selectedBucket).length
+          : 0
     const n = filteredSiteProjects.length
+    const bucketLabel = selectedBucketCode || ''
     return hasSearch
-      ? `${n} of ${total} project${total !== 1 ? 's' : ''} in ${selectedBucketCode}`
-      : `${total} project${total !== 1 ? 's' : ''} in ${selectedBucketCode}`
+      ? `${n} of ${total} folder${total !== 1 ? 's' : ''} on shared drive in ${bucketLabel}`
+      : `${total} folder${total !== 1 ? 's' : ''} on shared drive in ${bucketLabel}`
   }, [
     atBucketRoot,
+    bucketSites.length,
+    bucketSitesSource,
     buckets.length,
     filteredBuckets.length,
     filteredSiteProjects.length,
@@ -245,6 +313,11 @@ export default function WaProjectsPage() {
           <p className="text-slate-500 dark:text-slate-400">No folders match your search</p>
           <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Try a different code or project name</p>
         </div>
+      ) : !atBucketRoot && bucketSyncing && bucketSitesSource !== 'nas' ? (
+        <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+          <RefreshCw className="h-10 w-10 animate-spin text-sign-500 mb-3" />
+          <p>Loading folders from shared drive: {bucketFolderLabel(selectedBucketCode!)}…</p>
+        </div>
       ) : !atBucketRoot && filteredSiteProjects.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           {hasSearch ? (
@@ -267,23 +340,48 @@ export default function WaProjectsPage() {
             <BucketCard
               key={bucket.code}
               bucket={bucket}
+              nasFolderCount={nasFolderCountsByBucket[bucket.code]}
               onOpen={() => setSelectedBucketCode(bucket.code)}
             />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredSiteProjects.map((project) => (
-            <SiteProjectCard key={project.id} project={project} nasConnected={!!nasStatus?.connected} />
-          ))}
+        <div className="space-y-4">
+          {bucketSitesSource === 'mongo' && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+              Shared drive folder list unavailable — showing app projects only. Use Sync NAS or refresh this page.
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredSiteProjects.map((project) => (
+              <SiteProjectCard
+                key={project.nasFolderName || project.id}
+                project={project}
+                nasConnected={!!nasStatus?.connected}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>
   )
 }
 
-function BucketCard({ bucket, onOpen }: { bucket: WaProjectBucket; onOpen: () => void }) {
-  const count = bucketSiteProjects(bucket).length
+function BucketCard({
+  bucket,
+  nasFolderCount,
+  onOpen,
+}: {
+  bucket: WaProjectBucket
+  nasFolderCount?: number
+  onOpen: () => void
+}) {
+  const mongoCount = bucketSiteProjects(bucket).length
+  const count = nasFolderCount ?? mongoCount
+  const countHint =
+    nasFolderCount != null && nasFolderCount !== mongoCount
+      ? `${nasFolderCount} on shared drive · ${mongoCount} in app`
+      : `${count} folder${count !== 1 ? 's' : ''} on shared drive`
   const isRange = isRangeBucketCode(bucket.code)
   const title = isRange
     ? bucket.code
@@ -308,9 +406,7 @@ function BucketCard({ bucket, onOpen }: { bucket: WaProjectBucket; onOpen: () =>
           )}
         </div>
       </div>
-      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-        {count} site project{count !== 1 ? 's' : ''}
-      </p>
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">{countHint}</p>
       <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-700">
         {bucket.projectId ? (
           <Link
@@ -375,12 +471,26 @@ function SiteProjectCard({
 
       <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-700">
         <WaStatusBadge status={project.status} size="sm" />
-        <Link
-          to={`/wa/projects/${project.id}`}
-          className="inline-flex items-center gap-1 text-xs font-medium text-sign-600 hover:text-sign-500 dark:text-sign-400"
-        >
-          Open <ArrowRight className="h-3 w-3" />
-        </Link>
+        {project.id.startsWith('nas:') ? (
+          <span className="text-xs text-slate-400">Shared drive only</span>
+        ) : (
+          <Link
+            to={{
+              pathname: `/wa/projects/${project.id}`,
+              search: project.nasFolderName
+                ? new URLSearchParams({
+                    nasFolderName: project.nasFolderName,
+                    ...(project.nasParentBucket
+                      ? { nasParentBucket: project.nasParentBucket }
+                      : {}),
+                  }).toString()
+                : '',
+            }}
+            className="inline-flex items-center gap-1 text-xs font-medium text-sign-600 hover:text-sign-500 dark:text-sign-400"
+          >
+            Open <ArrowRight className="h-3 w-3" />
+          </Link>
+        )}
       </div>
     </div>
   )

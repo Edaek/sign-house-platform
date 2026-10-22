@@ -732,6 +732,8 @@ def assign_images_to_project(
         _record_id = record_id
         _images = list(images)
         _project_code = project['code']
+        _pref_folder = (project.get('nasFolderName') or '').strip() or None
+        _pref_bucket = (project.get('nasParentBucket') or '').strip() or None
         _media_dir = current_app.config.get('WA_UPLOADS_FOLDER', 'uploads/wa-media')
         _use_local = use_local
         _assign_day = assign_day
@@ -760,7 +762,11 @@ def assign_images_to_project(
                                 )
                                 continue
                             r = nas_mount.copy_file_to_project(
-                                local_file, _project_code, day_str=_assign_day,
+                                local_file,
+                                _project_code,
+                                day_str=_assign_day,
+                                preferred_folder_name=_pref_folder,
+                                preferred_parent_bucket=_pref_bucket,
                             )
                             if r.get('ok'):
                                 nas_photos.append(r['path'])

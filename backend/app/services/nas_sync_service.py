@@ -167,7 +167,9 @@ def enrich_wa_projects_display(projects) -> None:
         if not code:
             continue
         stored = (p.get('nasFolderName') or '').strip()
-        if stored and stored.upper() != code.upper() and (' ' in stored or '_' in stored):
+        # Keep any explicit folder name (bare PJ-xxxx or full name) — do not merge
+        # duplicate physical folders to the single longest name in the NAS index.
+        if stored:
             continue
         nas = _nas_entry_for_code(idx, code.upper())
         dn = _list_nas_folder_display_name(p, nas)
@@ -180,11 +182,12 @@ def enrich_wa_project_display(project) -> None:
         enrich_wa_projects_display([project])
 
 
-def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False, for_list=False):
+def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False, for_list=False, nas_view_doc=None):
     """Add NAS fields to a serialized project dict."""
     code = (project_doc.get('code') or '').upper()
     if fast_single and code and nas_mount.is_available():
-        nas = nas_mount.folder_stats(code) or {}
+        view = nas_view_doc or project_doc
+        nas = nas_mount.folder_stats(code, project_doc=view) or {}
         if is_range_folder_code(code):
             project_doc['nasSiteFolderCount'] = nas.get('siteFolderCount', 0)
             project_doc['nasFileCount'] = 0
@@ -192,8 +195,10 @@ def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False, for_l
             project_doc['nasFileCount'] = nas.get('fileCount', 0)
         project_doc['nasLastModified'] = nas.get('latestModified')
         project_doc['nasSyncedAt'] = datetime.utcnow().isoformat() if nas else None
-        project_doc['nasFolderName'] = nas.get('folderName')
-        _apply_nas_display_folder_name(project_doc)
+        stored = (project_doc.get('nasFolderName') or '').strip()
+        if not stored and nas.get('folderName'):
+            project_doc['nasFolderName'] = nas.get('folderName')
+            _apply_nas_display_folder_name(project_doc)
         return project_doc
     if nas_index is None:
         nas_index = nas_folder_index(blocking_scan=not for_list)
@@ -298,6 +303,64 @@ def _merge_site_folder_row(by_code: dict, row: dict) -> None:
         by_code[key] = row
 
 
+def list_physical_site_folders(site_code_or_num):
+    """Every NAS directory for one site code (e.g. PJ-3051), including duplicates across buckets."""
+    from app.services.project_number_match_service import (
+        pj_number_from_project_code,
+        primary_site_number,
+    )
+
+    raw = (site_code_or_num or '').strip()
+    if not raw:
+        return []
+    site_code = None
+    if raw.upper().startswith('PJ-'):
+        site_code = raw.upper()
+        if not pj_number_from_project_code(site_code):
+            site_code = None
+    if not site_code:
+        num = primary_site_number(raw)
+        if num is not None:
+            site_code = f'PJ-{num}'
+    if not site_code or not nas_mount.is_available():
+        return []
+
+    target = site_code.upper()
+    seen = set()
+    out = []
+
+    def _add(folder_name, parent_bucket):
+        fn = (folder_name or '').strip()
+        if not fn:
+            return
+        dedupe_key = (fn, (parent_bucket or '').strip())
+        if dedupe_key in seen:
+            return
+        parsed = parse_nas_site_folder_code(fn)
+        if not parsed or parsed.upper() != target:
+            return
+        seen.add(dedupe_key)
+        out.append({
+            'folderName': fn,
+            'parentBucket': parent_bucket,
+            'code': parsed,
+        })
+
+    root_names = nas_mount.list_watch_root_dir_names() or []
+    bucket_names = [n for n in root_names if _is_nas_root_bucket_dir(n)]
+    bucket_set = set(bucket_names)
+    for bucket in bucket_names:
+        for child in nas_mount._list_bucket_child_folders_sync(bucket):
+            _add(child.get('folderName') or '', bucket)
+    for name in root_names:
+        if name in bucket_set:
+            continue
+        _add(name, None)
+
+    out.sort(key=lambda r: (r.get('folderName') or '').lower())
+    return out
+
+
 def collect_nas_site_folder_rows():
     """Fast NAS → site rows via root scan + per-bucket children (no full-tree walk)."""
     by_code: dict = {}
@@ -309,7 +372,8 @@ def collect_nas_site_folder_rows():
     bucket_names = [n for n in root_names if _is_nas_root_bucket_dir(n)]
     bucket_set = set(bucket_names)
     for name in bucket_names[:_NAS_BUCKET_SCAN_LIMIT]:
-        for child in nas_mount.list_bucket_child_folders(name):
+        # Direct iterdir — avoid SMB timeout wrapper dropping bucket children.
+        for child in nas_mount._list_bucket_child_folders_sync(name):
             site_code = (child.get('code') or '').strip()
             if not site_code:
                 continue
@@ -375,6 +439,65 @@ def _ensure_nas_bucket_projects(owner_id, root_names, now):
         mongo.db.wa_projects.insert_one(doc)
         created.append(doc['code'])
     return created
+
+
+def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
+    """Import/update all site folders under one NAS bucket (e.g. PJ-3000-3999)."""
+    if not nas_mount.is_available():
+        return {'ok': False, 'error': 'NAS mount not available'}
+
+    code = (bucket_code or '').strip()
+    if not code:
+        return {'ok': False, 'error': 'bucketCode required'}
+
+    from app.services.wa_project_validation import find_project_by_code
+
+    now = datetime.utcnow()
+    children = sorted(
+        nas_mount._list_bucket_child_folders_sync(code),
+        key=lambda c: len((c.get('folderName') or '')),
+        reverse=True,
+    )
+    created = []
+    updated = 0
+    for child in children:
+        site_code = (child.get('code') or '').strip()
+        if not site_code:
+            continue
+        folder_name = (child.get('folderName') or site_code).strip()
+        existing = find_project_by_code(site_code)
+        if existing:
+            patch = {'updatedAt': now, 'nasParentBucket': code}
+            if folder_name:
+                patch['nasFolderName'] = folder_name
+                patch['nasFolder'] = folder_name
+            mongo.db.wa_projects.update_one({'_id': existing['_id']}, {'$set': patch})
+            updated += 1
+            continue
+        doc = {
+            'code': site_code,
+            'location': '',
+            'owner': owner_id,
+            'stage': 'active',
+            'status': 'active',
+            'members': [owner_id],
+            'nasFolder': folder_name,
+            'nasFolderName': folder_name,
+            'nasParentBucket': code,
+            'nasImportedAt': now,
+            'createdAt': now,
+            'updatedAt': now,
+        }
+        mongo.db.wa_projects.insert_one(doc)
+        created.append(site_code)
+
+    return {
+        'ok': True,
+        'bucketCode': code,
+        'scanned': len(children),
+        'created': created,
+        'updated': updated,
+    }
 
 
 def sync_projects_from_nas(owner_id):
@@ -560,9 +683,9 @@ def _record_media_basenames(record) -> set:
     return names
 
 
-def _project_nas_image_basenames(project_code):
+def _project_nas_image_basenames(project_code, project_doc=None):
     """Lowercase file names of images under the project folder on the share."""
-    folder = nas_mount._resolve_project_folder(project_code)
+    folder = nas_mount._folder_for_project(project_code, project_doc)
     if folder is None:
         return None
     from app.services.nas_watcher_service import _iter_project_images
@@ -1001,7 +1124,7 @@ def reconcile_project_from_nas(project, *, media_dir=None):
         media_dir = _media_dir()
 
     code = (project.get('code') or '').strip()
-    folder = nas_mount._resolve_project_folder(code)
+    folder = nas_mount._folder_for_project(code, project)
     if folder is None and _project_linked_to_nas(project):
         delete_web_project(project, remove_nas_folder=False)
         return {
@@ -1012,7 +1135,7 @@ def reconcile_project_from_nas(project, *, media_dir=None):
         }
 
     folder_missing = folder is None
-    nas_image_names = _project_nas_image_basenames(code) if not folder_missing else None
+    nas_image_names = _project_nas_image_basenames(code, project) if not folder_missing else None
 
     records_removed = 0
     record_refs = []

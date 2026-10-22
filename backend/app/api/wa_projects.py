@@ -6,6 +6,20 @@ from app.models import serialize_doc
 
 wa_projects_bp = Blueprint('wa_projects', __name__)
 
+
+def _nas_view_project_doc(project, req=None):
+    """Merge query overrides so NAS I/O targets the physical folder the user opened."""
+    doc = dict(project)
+    src = req or request
+    fn = (src.args.get('nasFolderName') or '').strip()
+    pb = (src.args.get('nasParentBucket') or '').strip()
+    if fn:
+        doc['nasFolderName'] = fn
+    if pb:
+        doc['nasParentBucket'] = pb
+    return doc
+
+
 @wa_projects_bp.route('', methods=['GET'])
 @jwt_required()
 def list_projects():
@@ -76,6 +90,71 @@ def list_projects():
 
     return jsonify(result)
 
+
+@wa_projects_bp.route('/nas-bucket-sites', methods=['GET'])
+@jwt_required()
+def list_nas_bucket_sites():
+    """One row per physical NAS folder under a bucket (includes duplicate PJ-xxxx + long names)."""
+    from flask_jwt_extended import get_jwt_identity
+    from app.services.nas_sync_service import sync_bucket_site_projects_from_nas
+    from app.services.nas_watcher_service import nas_mount
+    from app.services.wa_project_validation import find_project_by_code
+    bucket = (request.args.get('bucket') or '').strip()
+    if not bucket:
+        return jsonify({'ok': False, 'error': 'bucket query required'}), 400
+    if not nas_mount.is_available():
+        return jsonify({'ok': False, 'error': 'NAS not connected', 'sites': []}), 503
+
+    if request.args.get('sync') != '0':
+        sync_bucket_site_projects_from_nas(bucket, ObjectId(get_jwt_identity()))
+
+    children = sorted(
+        nas_mount._list_bucket_child_folders_sync(bucket),
+        key=lambda c: (c.get('folderName') or '').lower(),
+    )
+    sites = []
+    for child in children:
+        folder_name = (child.get('folderName') or '').strip()
+        code = (child.get('code') or '').strip()
+        proj = find_project_by_code(code) if code else None
+        row = {
+            'folderName': folder_name,
+            'code': code or None,
+            'isSiteProject': bool(child.get('isSiteProject')),
+            'projectId': None,
+            'nasFolderName': folder_name,
+            'status': 'active',
+            'totalRecords': 0,
+        }
+        if proj:
+            d = serialize_doc(proj)
+            d['nasFolderName'] = folder_name or d.get('nasFolderName') or d.get('code')
+            row.update({
+                'projectId': d['id'],
+                'code': d.get('code') or code,
+                'status': d.get('status', 'active'),
+                'totalRecords': mongo.db.wa_records.count_documents({
+                    'projectId': proj['_id'],
+                    'status': {'$ne': 'voided'},
+                }),
+                'todayRecords': 0,
+                'location': d.get('location'),
+                'nasParentBucket': bucket,
+            })
+        elif code:
+            row['nasParentBucket'] = bucket
+        sites.append(row)
+
+    site_rows = [s for s in sites if s.get('code')]
+    return jsonify({
+        'ok': True,
+        'bucket': bucket,
+        'count': len(sites),
+        'siteFolderCount': len(site_rows),
+        'sites': sites,
+    })
+
+
 @wa_projects_bp.route('/<project_id>', methods=['GET'])
 @jwt_required()
 def get_project(project_id):
@@ -94,8 +173,13 @@ def get_project(project_id):
             return jsonify({'error': 'Project not found'}), 404
     from app.services.project_number_match_service import is_range_folder_code
 
+    nas_view = _nas_view_project_doc(project)
     d = serialize_doc(project)
-    enrich_project_dict(d, fast_single=True)
+    if (request.args.get('nasFolderName') or '').strip():
+        d['nasFolderName'] = request.args.get('nasFolderName').strip()
+    if (request.args.get('nasParentBucket') or '').strip():
+        d['nasParentBucket'] = request.args.get('nasParentBucket').strip()
+    enrich_project_dict(d, fast_single=True, nas_view_doc=nas_view)
     pid = project['_id']
     code = (project.get('code') or '').strip()
     d['totalRecords'] = mongo.db.wa_records.count_documents({
@@ -127,13 +211,27 @@ def get_project(project_id):
             d['nasPendingImport'] = 0
             d['nasFileCount'] = 0
         else:
-            d['nasSubfolders'] = nas_mount.list_project_subfolders(code)
+            resolved = nas_mount._folder_for_project(code, nas_view)
+            if resolved is not None:
+                d['nasResolvedFolderName'] = resolved.name
+            from app.services.nas_sync_service import list_physical_site_folders
+
+            physical = list_physical_site_folders(code)
+            if len(physical) > 1:
+                d['nasPhysicalFolders'] = [
+                    {
+                        'folderName': r['folderName'],
+                        'nasParentBucket': r.get('parentBucket') or d.get('nasParentBucket'),
+                    }
+                    for r in physical
+                ]
+            d['nasSubfolders'] = nas_mount.list_project_subfolders(code, project_doc=nas_view)
             nas_files = d.get('nasFileCount') or 0
             d['nasPendingImport'] = max(0, nas_files - d['nasImportedCount'])
             if request.args.get('includeNasTxt') == '1':
-                d['nasTxtFiles'] = nas_mount.list_project_txt_files(code)
+                d['nasTxtFiles'] = nas_mount.list_project_txt_files(code, project_doc=nas_view)
             elif request.args.get('includeNasFiles') == '1':
-                d['nasFiles'] = nas_mount.list_folder_files(code)
+                d['nasFiles'] = nas_mount.list_folder_files(code, project_doc=nas_view)
     else:
         d['nasPendingImport'] = 0
 
@@ -159,7 +257,8 @@ def list_project_nas_txt(project_id):
     if not nas_mount.is_available():
         return jsonify({'ok': False, 'error': 'NAS not connected', 'files': []}), 503
     code = (project.get('code') or '').strip()
-    return jsonify({'ok': True, 'files': nas_mount.list_project_txt_files(code)})
+    view = _nas_view_project_doc(project)
+    return jsonify({'ok': True, 'files': nas_mount.list_project_txt_files(code, project_doc=view)})
 
 
 @wa_projects_bp.route('/<project_id>/nas/txt/content', methods=['GET', 'PUT'])
@@ -178,7 +277,8 @@ def project_nas_txt_content(project_id):
     if request.method == 'GET':
         if not rel:
             return jsonify({'ok': False, 'error': 'path is required'}), 400
-        result = nas_mount.read_project_txt_file(code, rel)
+        view = _nas_view_project_doc(project)
+        result = nas_mount.read_project_txt_file(code, rel, project_doc=view)
         if not result.get('ok'):
             status = 404 if result.get('missing') else 400
             return jsonify(result), status
@@ -188,7 +288,10 @@ def project_nas_txt_content(project_id):
     rel = (data.get('path') or rel or '').strip()
     if not rel:
         return jsonify({'ok': False, 'error': 'path is required'}), 400
-    result = nas_mount.write_project_txt_file(code, rel, data.get('content', ''))
+    view = _nas_view_project_doc(project)
+    result = nas_mount.write_project_txt_file(
+        code, rel, data.get('content', ''), project_doc=view,
+    )
     if not result.get('ok'):
         return jsonify(result), 400
     return jsonify(result)
