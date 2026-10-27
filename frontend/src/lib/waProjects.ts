@@ -45,7 +45,9 @@ export function siteNumberFromCode(code: string): number | null {
   return null
 }
 
-export function siteNumberFromProject(project: WaProject): number | null {
+export function siteNumberFromProject(
+  project: Pick<WaProject, 'code' | 'nasFolderName'>,
+): number | null {
   for (const raw of [project.code, project.nasFolderName]) {
     const n = siteNumberFromCode(raw || '')
     if (n != null) return n

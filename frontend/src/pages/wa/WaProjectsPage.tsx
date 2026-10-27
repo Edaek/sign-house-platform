@@ -157,7 +157,7 @@ export default function WaProjectsPage() {
     fetchNasBucketSites(nasBucket, { timeoutMs: 60000 })
       .then(({ sites, staleFromCache, hint }) => {
         if (cancelled) return
-        applySites(sites, staleFromCache, hint)
+        applySites(sites, staleFromCache ?? false, hint)
         if (sites.length > 0) {
           setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
         }
@@ -183,7 +183,7 @@ export default function WaProjectsPage() {
       fetchNasBucketSites(nasBucket, { liveScan: true, timeoutMs: 120000 })
         .then(({ sites, staleFromCache }) => {
           if (cancelled || sites.length === 0) return
-          applySites(sites, staleFromCache)
+          applySites(sites, staleFromCache ?? false)
           if (!staleFromCache) setBucketSitesSource('nas')
         })
         .catch(() => {})
