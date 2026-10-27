@@ -1,9 +1,9 @@
-# WhatsApp MCP moved to sign-house-v3-mcp
+# WhatsApp MCP on `mcp-v3` branch
 
-Cursor / Loom MCP (`sign-house-wa` tools, config UI) is **not** served from this repository anymore.
+This branch merges the former **sign-house-v3-mcp** repo into Sign House v3:
 
-- **Repo**: `sign-house-v3-mcp` (sibling directory or its own Git remote)
-- **Client URL**: `https://YOUR-MCP-HOST/mcp` with `Authorization: Bearer <Sign House JWT>`
-- **WA API**: unchanged on this deploy at `/api/wa/*`
+- **One process**: Flask `/api` + hosted MCP at `/mcp` (see `backend/mcp_wa/`, `DEPLOYMENT_MCP.md`)
+- **Env**: use **`backend/.env`** with v3 defaults (`PORT=5002`, `APP_URL=http://localhost:5002`, frontend on **3000**)
+- **Do not** use a separate 5010 MCP-only deploy unless you intentionally split again
 
-See `sign-house-v3-mcp/DEPLOYMENT_MCP.md` for Coolify and URL migration from `/api/mcp/wa/mcp`.
+`main` may still document the old split layout; active WA + Loomy + MCP work happens on **`mcp-v3`**.

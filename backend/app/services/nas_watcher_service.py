@@ -70,6 +70,7 @@ class NasMountService:
         self._app = None
         self._folder_cache: list = []
         self._folder_cache_at = 0.0
+        self._bucket_children_cache: dict[str, list] = {}
         self._cache_lock = threading.Lock()
         self._cache_stop = threading.Event()
         self._cache_thread: threading.Thread | None = None
@@ -196,16 +197,75 @@ class NasMountService:
             self._folder_cache = folders
             self._folder_cache_at = time.time()
 
+    def _folder_cache_io_timeout_s(self) -> float:
+        """Background full-tree scan may exceed normal NAS_IO_TIMEOUT_S on slow SMB."""
+        base = self._io_timeout()
+        extra = float(self._cfg('NAS_FOLDER_CACHE_IO_TIMEOUT_S', 120))
+        return max(base, extra)
+
     def refresh_folder_cache(self) -> bool:
         if not self.is_volume_mounted():
             return False
-        folders = _run_with_timeout(self.list_folders, self._io_timeout(), default=None)
+        timeout_s = self._folder_cache_io_timeout_s()
+        folders = _run_with_timeout(self.list_folders, timeout_s, default=None)
         if folders is None:
-            logger.warning('[NAS] Background folder cache refresh timed out')
+            stale = self.peek_folder_cache()
+            if stale:
+                logger.info(
+                    '[NAS] Background folder cache refresh timed out (%ss) — keeping %d cached folder(s)',
+                    int(timeout_s),
+                    len(stale),
+                )
+            else:
+                logger.warning(
+                    '[NAS] Background folder cache refresh timed out (%ss); NAS list may be empty until remount or retry',
+                    int(timeout_s),
+                )
             return False
         self._set_folder_cache(folders)
+        self._refresh_bucket_children_caches()
         logger.info('[NAS] Folder cache refreshed (%d site folders)', len(folders))
         return True
+
+    def _set_bucket_children_cache_entry(self, bucket_code: str, children: list) -> None:
+        key = (bucket_code or '').strip().lower()
+        if not key:
+            return
+        with self._cache_lock:
+            self._bucket_children_cache[key] = list(children)
+
+    def peek_bucket_children_cache(self, range_code: str):
+        """Full child folder list for one range bucket (no SMB)."""
+        key = (range_code or '').strip().lower()
+        if not key:
+            return None
+        with self._cache_lock:
+            rows = self._bucket_children_cache.get(key)
+        return list(rows) if rows else None
+
+    def refresh_bucket_children_cache_for(self, range_code: str) -> bool:
+        """Time-boxed SMB scan for one bucket → updates in-memory bucket cache."""
+        code = (range_code or '').strip()
+        if not code:
+            return False
+        children = self.list_bucket_child_folders(code)
+        if children:
+            self._set_bucket_children_cache_entry(code, children)
+            logger.info('[NAS] Bucket children cache updated for %s (%d folders)', code, len(children))
+            return True
+        return False
+
+    def _refresh_bucket_children_caches(self) -> None:
+        """Populate per-bucket child lists (all physical folders, not deduped by site code)."""
+        root_names = self.list_watch_root_dir_names(timeout_s=8) or []
+        refreshed = 0
+        for name in root_names:
+            if not (is_range_folder_code(name) or is_nas_bucket_dir_name(name)):
+                continue
+            if self.refresh_bucket_children_cache_for(name):
+                refreshed += 1
+        if refreshed:
+            logger.info('[NAS] Bucket children cache updated for %d range folder(s)', refreshed)
 
     def _start_folder_cache_loop(self):
         interval = int(self._cfg('NAS_FOLDER_CACHE_REFRESH_S', 300))
@@ -257,10 +317,34 @@ class NasMountService:
             out['mountHint'] = (
                 'SMB is slow or stale. Remount: backend/scripts/mount_nas_share.sh --via-tunnel'
             )
+        folders_cache_stale = False
         if mounted:
-            out['rootFolderNames'] = self.list_watch_root_dir_names()
-        else:
-            out['rootFolderNames'] = []
+            if not cached:
+                folders_cache_stale = True
+            elif cache_age is not None and cache_age > ttl:
+                folders_cache_stale = True
+        out['foldersCacheStale'] = folders_cache_stale
+        mongo_active = 0
+        try:
+            from app import mongo
+
+            mongo_active = mongo.db.wa_projects.count_documents({'status': {'$ne': 'archived'}})
+        except Exception:
+            pass
+        out['mongoActiveProjects'] = mongo_active
+        # Do not scandir SMB on /nas/status — dev Flask is single-threaded; use cache only.
+        out['rootFolderNames'] = []
+        if mounted and cached:
+            buckets = sorted({
+                (row.get('parentBucket') or '').strip()
+                for row in cached
+                if (row.get('parentBucket') or '').strip()
+            })
+            if buckets:
+                out['rootFolderNames'] = buckets
+        from app.services.loomy_wa_nas_summary import format_wa_nas_summary_zh
+
+        out['statusSummaryZh'] = format_wa_nas_summary_zh(out)
         return out
 
     @staticmethod
@@ -733,6 +817,44 @@ class NasMountService:
             return []
         return result
 
+    def bucket_child_folders_from_cache(self, range_code):
+        """Site folders under one bucket from the background folder cache (no SMB)."""
+        bucket = (range_code or '').strip()
+        if not bucket:
+            return []
+        direct = self.peek_bucket_children_cache(bucket)
+        if direct:
+            return direct
+        cached = self.peek_folder_cache() or self.get_cached_folders(max_age_s=86400) or []
+        if not cached:
+            return []
+        bucket_key = bucket.lower()
+        out = []
+        for row in cached:
+            if (row.get('parentBucket') or '').strip().lower() != bucket_key:
+                continue
+            folder_name = (row.get('folderName') or '').strip()
+            if not folder_name:
+                continue
+            code = (row.get('code') or '').strip() or None
+            out.append({
+                'folderName': folder_name,
+                'code': code,
+                'isSiteProject': code is not None,
+            })
+        out.sort(key=lambda c: (c.get('folderName') or '').lower())
+        return out
+
+    def list_bucket_child_folders_with_fallback(self, range_code):
+        """Live SMB listing (time-boxed), then stale cache if live is empty."""
+        live = self.list_bucket_child_folders(range_code)
+        if live:
+            return live, False
+        cached = self.bucket_child_folders_from_cache(range_code)
+        if cached:
+            logger.info('[NAS] bucket %s: using cached folder list (%s rows)', range_code, len(cached))
+        return cached, bool(cached)
+
     def list_bucket_site_folders(self, range_code):
         """Site project directories that are direct children of a PJ-lo-hi bucket."""
         return [
@@ -741,8 +863,14 @@ class NasMountService:
             if f.get('code')
         ]
 
-    def list_project_subfolders(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
-        """Immediate subdirectories under a site project folder."""
+    def _list_project_subfolders_sync(
+        self,
+        project_code,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
         folder = self._folder_for_project(
             project_code,
             project_doc,
@@ -759,6 +887,26 @@ class NasMountService:
         except OSError as e:
             logger.warning('[NAS] list_project_subfolders failed: %s', e)
         return out
+
+    def list_project_subfolders(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
+        """Immediate subdirectories under a site project folder (time-boxed SMB)."""
+        doc = project_doc
+        fn = folder_name
+        pb = parent_bucket
+        result = _run_with_timeout(
+            lambda: self._list_project_subfolders_sync(
+                project_code,
+                project_doc=doc,
+                folder_name=fn,
+                parent_bucket=pb,
+            ),
+            self._io_timeout(),
+            default=None,
+        )
+        if result is None:
+            logger.warning('[NAS] list_project_subfolders timed out for %s', project_code)
+            return []
+        return result
 
     def list_loose_root_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
         """Image files sitting directly on a folder root (not in subdirs)."""
@@ -1005,11 +1153,16 @@ class NasMountService:
             logger.warning('[NAS] Rename failed %s: %s', folder, e)
             return {'ok': False, 'error': str(e)}
 
-    def _resolve_project_txt_path(
+    _NAS_IMAGE_SUFFIXES = frozenset({
+        '.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic', '.bmp',
+    })
+
+    def _resolve_project_relative_file(
         self,
         project_code,
         relative_path,
         *,
+        allowed_suffixes=None,
         project_doc=None,
         folder_name=None,
         parent_bucket=None,
@@ -1029,9 +1182,45 @@ class NasMountService:
         target = (folder / rel).resolve()
         if not str(target).startswith(str(root)):
             return None, None
-        if target.suffix.lower() != '.txt':
+        if allowed_suffixes is not None and target.suffix.lower() not in allowed_suffixes:
             return None, None
         return root, target
+
+    def _resolve_project_txt_path(
+        self,
+        project_code,
+        relative_path,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        return self._resolve_project_relative_file(
+            project_code,
+            relative_path,
+            allowed_suffixes={'.txt'},
+            project_doc=project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
+
+    def _resolve_project_image_path(
+        self,
+        project_code,
+        relative_path,
+        *,
+        project_doc=None,
+        folder_name=None,
+        parent_bucket=None,
+    ):
+        return self._resolve_project_relative_file(
+            project_code,
+            relative_path,
+            allowed_suffixes=self._NAS_IMAGE_SUFFIXES,
+            project_doc=project_doc,
+            folder_name=folder_name,
+            parent_bucket=parent_bucket,
+        )
 
     def _list_project_txt_files_sync(
         self,

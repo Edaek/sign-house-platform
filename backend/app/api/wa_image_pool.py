@@ -16,14 +16,14 @@ def list_or_stats():
     mode = request.args.get('mode')
     if mode == 'stats':
         pipeline = [
-            {'$match': {'projectId': {'$exists': False}}},
+            {'$match': {'projectId': {'$exists': False}, 'dismissed': {'$ne': True}}},
             {'$group': {'_id': '$phone', 'count': {'$sum': 1},
                        'senderName': {'$first': '$senderName'},
                        'latestAt': {'$max': '$createdAt'}}},
             {'$sort': {'latestAt': -1}}
         ]
         by_sender = list(mongo.db.pool_images.aggregate(pipeline))
-        total_unassigned = mongo.db.pool_images.count_documents({'projectId': {'$exists': False}})
+        total_unassigned = mongo.db.pool_images.count_documents({'projectId': {'$exists': False}, 'dismissed': {'$ne': True}})
         total_assigned = mongo.db.pool_images.count_documents({'projectId': {'$exists': True}})
         return jsonify({
             'totalUnassigned': total_unassigned,
@@ -40,6 +40,7 @@ def list_or_stats():
     query = {}
     if status == 'unassigned':
         query['projectId'] = {'$exists': False}
+        query['dismissed'] = {'$ne': True}
     elif status == 'assigned':
         query['projectId'] = {'$exists': True}
     if phone:
@@ -78,8 +79,21 @@ def assign_images():
         return jsonify({'error': 'Project must be active to assign images'}), 400
 
     from app.services.image_pool_service import assign_images_to_project
+
+    proj = dict(project)
+    nas_folder = (data.get('nasFolderName') or '').strip()
+    nas_bucket = (data.get('nasParentBucket') or '').strip()
+    if nas_folder:
+        proj['nasFolderName'] = nas_folder
+    if nas_bucket:
+        proj['nasParentBucket'] = nas_bucket
+    group_id = (data.get('groupId') or '').strip() or None
+    notify_whatsapp = bool(data.get('notifyWhatsApp'))
+
     try:
-        count = assign_images_to_project(image_ids, project, 'operator')
+        count = assign_images_to_project(
+            image_ids, proj, 'operator', group_id=group_id,
+        )
     except Exception as exc:
         logger.exception('[ImagePool] Manual assign failed')
         return jsonify({'error': str(exc)}), 500
@@ -89,7 +103,17 @@ def assign_images():
             'error': 'No files were assigned (they may already be assigned to a project)',
             'assigned': 0,
         }), 409
-    return jsonify({'assigned': count, 'projectCode': project['code']})
+
+    if notify_whatsapp and group_id:
+        from app.services.assignment_notify_service import schedule_assignment_confirmation
+
+        schedule_assignment_confirmation(proj, count, group_id=group_id)
+
+    return jsonify({
+        'assigned': count,
+        'projectCode': project['code'],
+        'whatsappNotified': bool(notify_whatsapp and group_id),
+    })
 
 @wa_image_pool_bp.route('/retry-download', methods=['POST'])
 @jwt_required()

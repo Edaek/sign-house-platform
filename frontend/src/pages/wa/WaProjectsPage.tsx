@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useWaStore, type WaProject } from '../../store/waStore'
 import {
   buildProjectBuckets,
@@ -28,6 +28,41 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+function NasFolderLoadProgress() {
+  return (
+    <div className="rounded-lg border border-sign-500/25 bg-sign-500/5 px-4 py-3 space-y-2.5">
+      <p className="text-sm font-medium text-sign-900 dark:text-sign-100">
+        Loading full folder list from shared drive…
+      </p>
+      <div
+        className="h-2 w-full overflow-hidden rounded-full bg-slate-200/90 dark:bg-slate-700"
+        role="progressbar"
+        aria-valuetext="Loading NAS folders"
+      >
+        <div className="nas-folder-indeterminate-bar h-full w-1/3 rounded-full bg-sign-500" />
+      </div>
+      <p className="text-xs text-slate-500 dark:text-slate-400">
+        App projects are shown below. Folder names will refresh when the NAS scan finishes (may take several minutes on a
+        slow connection).
+      </p>
+    </div>
+  )
+}
+
+/** Warnings only — loading state uses NasFolderLoadProgress instead. */
+function englishBucketWarningHint(h: string | null | undefined): string | null {
+  if (!h?.trim()) return null
+  const t = h.trim()
+  if (/加载|刷新完整|正在从共享|已显示应用/.test(t)) return null
+  if (t.includes('暂不可用') || t.includes('未能列出')) {
+    return 'Shared drive list unavailable — showing app projects only. Try Sync NAS or refresh.'
+  }
+  if (t.includes('缓存') || t.includes('stale') || t.includes('cached')) {
+    return 'Showing cached folder list. Use Sync NAS to refresh from the share.'
+  }
+  return t
+}
+
 export default function WaProjectsPage() {
   const {
     projects,
@@ -39,13 +74,29 @@ export default function WaProjectsPage() {
     syncNasFromDrive,
     fetchNasBucketSites,
   } = useWaStore()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedBucketCode = useMemo(() => {
+    const raw = searchParams.get('bucket')?.trim()
+    return raw || null
+  }, [searchParams])
+
+  const setSelectedBucketCode = (code: string | null) => {
+    const next = new URLSearchParams(searchParams)
+    if (code?.trim()) {
+      next.set('bucket', code.trim())
+    } else {
+      next.delete('bucket')
+    }
+    setSearchParams(next, { replace: !code })
+  }
+
   const [search, setSearch] = useState('')
-  const [selectedBucketCode, setSelectedBucketCode] = useState<string | null>(null)
   const [syncingNas, setSyncingNas] = useState(false)
   const [bucketSyncing, setBucketSyncing] = useState(false)
   const [bucketSites, setBucketSites] = useState<WaProject[]>([])
-  /** 'nas' = full shared-drive list; 'mongo' = fallback when NAS API failed */
-  const [bucketSitesSource, setBucketSitesSource] = useState<'nas' | 'mongo' | null>(null)
+  /** 'nas' = shared-drive list; 'mongo' = fallback when NAS API failed; 'cache' = stale NAS cache */
+  const [bucketSitesSource, setBucketSitesSource] = useState<'nas' | 'mongo' | 'cache' | null>(null)
+  const [bucketSitesHint, setBucketSitesHint] = useState<string | null>(null)
   /** Physical NAS folder count per bucket (from shared drive scan, not MongoDB). */
   const [nasFolderCountsByBucket, setNasFolderCountsByBucket] = useState<Record<string, number>>({})
 
@@ -69,41 +120,92 @@ export default function WaProjectsPage() {
     if (!selectedBucketCode || !nasStatus?.connected) {
       setBucketSites([])
       setBucketSitesSource(null)
+      setBucketSitesHint(null)
       return
     }
     const nasBucket = bucketFolderLabel(selectedBucketCode)
     let cancelled = false
-    setBucketSyncing(true)
-    setBucketSites([])
-    setBucketSitesSource(null)
-    fetchNasBucketSites(nasBucket)
-      .then((sites) => {
+    let sitesShown = 0
+    const applySites = (sites: WaProject[], staleFromCache: boolean, hint?: string) => {
+      if (cancelled || sites.length === 0) return
+      sitesShown = Math.max(sitesShown, sites.length)
+      setBucketSites(sites)
+      setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
+      setBucketSitesHint(hint?.trim() || null)
+      if (selectedBucketCode) {
+        setNasFolderCountsByBucket((prev) => ({
+          ...prev,
+          [selectedBucketCode]: sites.length,
+        }))
+      }
+    }
+
+    const localBucket = buildProjectBuckets(useWaStore.getState().projects).find(
+      (b) => b.code === selectedBucketCode,
+    )
+    const localSites = localBucket ? bucketSiteProjects(localBucket) : []
+
+    if (localSites.length > 0) {
+      applySites(localSites, true)
+    } else {
+      setBucketSites([])
+      setBucketSitesSource(null)
+      setBucketSitesHint(null)
+    }
+    setBucketSyncing(localSites.length === 0)
+
+    fetchNasBucketSites(nasBucket, { timeoutMs: 60000 })
+      .then(({ sites, staleFromCache, hint }) => {
         if (cancelled) return
-        setBucketSites(sites)
-        setBucketSitesSource('nas')
-        if (selectedBucketCode) {
-          setNasFolderCountsByBucket((prev) => ({
-            ...prev,
-            [selectedBucketCode]: sites.length,
-          }))
+        applySites(sites, staleFromCache, hint)
+        if (sites.length > 0) {
+          setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
         }
         return fetchProjects()
       })
       .catch(() => {
-        if (!cancelled) {
-          setBucketSitesSource('mongo')
-          toast.error('Could not read folders from the shared drive. Showing app projects only — try Sync NAS or refresh.')
+        if (cancelled || sitesShown > 0) return
+        if (localSites.length > 0) {
+          applySites(
+            localSites,
+            true,
+            'Shared drive list unavailable — showing app projects only.',
+          )
+          return
         }
+        setBucketSitesSource('mongo')
       })
       .finally(() => {
         if (!cancelled) setBucketSyncing(false)
       })
+
+    const poll = window.setInterval(() => {
+      fetchNasBucketSites(nasBucket, { liveScan: true, timeoutMs: 120000 })
+        .then(({ sites, staleFromCache }) => {
+          if (cancelled || sites.length === 0) return
+          applySites(sites, staleFromCache)
+          if (!staleFromCache) setBucketSitesSource('nas')
+        })
+        .catch(() => {})
+    }, 90000)
+
     return () => {
       cancelled = true
+      window.clearInterval(poll)
     }
   }, [selectedBucketCode, nasStatus?.connected, fetchNasBucketSites, fetchProjects])
 
   const buckets = useMemo(() => buildProjectBuckets(projects), [projects])
+
+  useEffect(() => {
+    if (!selectedBucketCode || loading || projects.length === 0) return
+    const ok = buckets.some((b) => b.code === selectedBucketCode)
+    if (!ok) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('bucket')
+      setSearchParams(next, { replace: true })
+    }
+  }, [selectedBucketCode, buckets, loading, projects.length, searchParams, setSearchParams])
 
   const selectedBucket = useMemo(
     () => (selectedBucketCode ? buckets.find((b) => b.code === selectedBucketCode) : null),
@@ -126,7 +228,7 @@ export default function WaProjectsPage() {
 
   const filteredSiteProjects = useMemo(() => {
     if (!selectedBucket) return []
-    if (bucketSitesSource === 'nas') {
+    if (bucketSites.length > 0) {
       return filterWaProjects(bucketSites, search)
     }
     if (bucketSitesSource === 'mongo' || bucketSites.length === 0) {
@@ -145,21 +247,30 @@ export default function WaProjectsPage() {
         ? `${n} of ${buckets.length} folder${buckets.length !== 1 ? 's' : ''}`
         : `${n} NAS folder${n !== 1 ? 's' : ''} · ${projects.filter((p) => !isRangeBucketCode(p.code)).length} site projects`
     }
+    const mongoOnly = bucketSitesSource === 'mongo'
+    const loadingBucket = !atBucketRoot && bucketSyncing && bucketSites.length === 0
     const total =
-      bucketSitesSource === 'nas'
+      bucketSitesSource === 'nas' || bucketSitesSource === 'cache'
         ? bucketSites.length
         : selectedBucket
           ? bucketSiteProjects(selectedBucket).length
           : 0
     const n = filteredSiteProjects.length
     const bucketLabel = selectedBucketCode || ''
-    return hasSearch
-      ? `${n} of ${total} folder${total !== 1 ? 's' : ''} on shared drive in ${bucketLabel}`
+    if (loadingBucket) {
+      return `Loading folders from shared drive in ${bucketLabel}…`
+    }
+    const scope = mongoOnly
+      ? `app project${total !== 1 ? 's' : ''} in ${bucketLabel} (shared drive list unavailable)`
       : `${total} folder${total !== 1 ? 's' : ''} on shared drive in ${bucketLabel}`
+    return hasSearch
+      ? `${n} of ${total} ${mongoOnly ? 'app project' : 'folder'}${total !== 1 ? 's' : ''} in ${bucketLabel}`
+      : scope
   }, [
     atBucketRoot,
     bucketSites.length,
     bucketSitesSource,
+    bucketSyncing,
     buckets.length,
     filteredBuckets.length,
     filteredSiteProjects.length,
@@ -313,7 +424,7 @@ export default function WaProjectsPage() {
           <p className="text-slate-500 dark:text-slate-400">No folders match your search</p>
           <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Try a different code or project name</p>
         </div>
-      ) : !atBucketRoot && bucketSyncing && bucketSitesSource !== 'nas' ? (
+      ) : !atBucketRoot && bucketSyncing && bucketSites.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
           <RefreshCw className="h-10 w-10 animate-spin text-sign-500 mb-3" />
           <p>Loading folders from shared drive: {bucketFolderLabel(selectedBucketCode!)}…</p>
@@ -347,11 +458,25 @@ export default function WaProjectsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {bucketSitesSource === 'mongo' && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-              Shared drive folder list unavailable — showing app projects only. Use Sync NAS or refresh this page.
-            </div>
-          )}
+          {bucketSyncing && <NasFolderLoadProgress />}
+          {(() => {
+            const warning = englishBucketWarningHint(bucketSitesHint)
+            if (warning) {
+              return (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+                  {warning}
+                </div>
+              )
+            }
+            if (bucketSitesSource === 'mongo' && bucketSites.length === 0) {
+              return (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
+                  Shared drive folder list unavailable — showing app projects only. Use Sync NAS or refresh this page.
+                </div>
+              )
+            }
+            return null
+          })()}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredSiteProjects.map((project) => (
               <SiteProjectCard

@@ -1,0 +1,235 @@
+"""Execute WA MCP tools in-process (no HTTP JWT) — WhatsApp Loomy classify path."""
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from bson import ObjectId
+
+from mcp_wa.client import json_result
+
+
+def _db():
+    from app import mongo
+
+    return mongo.db
+
+INPROCESS_TOOL_NAMES = frozenset({
+    'wa_get_nas_status',
+    'wa_get_pool_stats',
+    'wa_list_pool_images',
+    'wa_list_projects',
+    'wa_get_project',
+    'wa_assign_pool_images',
+    'wa_list_keywords',
+    'wa_get_record',
+})
+
+
+def inprocess_tools_enabled() -> bool:
+    import os
+
+    raw = (os.environ.get('LOOMY_WA_INPROCESS_TOOLS') or 'true').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+def can_run_inprocess(name: str) -> bool:
+    return inprocess_tools_enabled() and name in INPROCESS_TOOL_NAMES
+
+
+def execute_tool_inprocess(name: str, arguments: dict[str, Any]) -> str:
+    args = arguments if isinstance(arguments, dict) else {}
+    fn = _HANDLERS.get(name)
+    if not fn:
+        return f'Error: no in-process handler for {name}'
+    return fn(args)
+
+
+def _exec_nas_status(_a: dict) -> str:
+    from app.services.nas_watcher_service import nas_mount
+    from app.services.nas_sync_service import get_last_nas_sync_status
+
+    data = dict(nas_mount.status())
+    last = get_last_nas_sync_status()
+    if last.get('at'):
+        data['lastAutoSyncAt'] = last.get('at')
+        data['lastProjectsCreated'] = last.get('projectsCreated', [])
+        data['lastRecordsImported'] = last.get('recordsImported', 0)
+    try:
+        from flask import current_app
+
+        data['autoSyncIntervalSec'] = current_app.config.get('NAS_SYNC_INTERVAL_S', 60)
+    except RuntimeError:
+        pass
+    return json_result(data)
+
+
+def _exec_pool_stats(_a: dict) -> str:
+    from app.models import serialize_doc
+
+    pipeline = [
+        {'$match': {'projectId': {'$exists': False}, 'dismissed': {'$ne': True}}},
+        {'$group': {'_id': '$phone', 'count': {'$sum': 1},
+                   'senderName': {'$first': '$senderName'},
+                   'latestAt': {'$max': '$createdAt'}}},
+        {'$sort': {'latestAt': -1}},
+    ]
+    db = _db()
+    by_sender = list(db.pool_images.aggregate(pipeline))
+    return json_result({
+        'totalUnassigned': db.pool_images.count_documents({'projectId': {'$exists': False}, 'dismissed': {'$ne': True}}),
+        'totalAssigned': db.pool_images.count_documents({'projectId': {'$exists': True}}),
+        'bySender': [serialize_doc(s) for s in by_sender],
+    })
+
+
+def _exec_list_pool(a: dict) -> str:
+    from app.services.pool_receipt_notify_service import phone_match_query
+
+    status = a.get('status') or 'unassigned'
+    phone = (a.get('phone') or '').strip()
+    project_filter = (a.get('project') or '').strip()
+    page = max(1, int(a.get('page') or 1))
+    limit = min(100, max(1, int(a.get('limit') or 50)))
+
+    query: dict[str, Any] = {}
+    if status == 'unassigned':
+        query['projectId'] = {'$exists': False}
+        query['dismissed'] = {'$ne': True}
+    elif status == 'assigned':
+        query['projectId'] = {'$exists': True}
+    if phone:
+        query.update(phone_match_query(phone))
+    if project_filter:
+        query['projectId'] = ObjectId(project_filter)
+
+    db = _db()
+    total = db.pool_images.count_documents(query)
+    skip = (page - 1) * limit
+    images = list(
+        db.pool_images.find(query).sort('createdAt', -1).skip(skip).limit(limit),
+    )
+    from app.models import serialize_doc
+
+    return json_result({
+        'images': [serialize_doc(img) for img in images],
+        'pagination': {
+            'page': page,
+            'limit': limit,
+            'total': total,
+            'pages': (total + limit - 1) // limit if limit else 1,
+        },
+    })
+
+
+def _exec_list_projects(a: dict) -> str:
+    from app.models import serialize_doc
+    from app.services.nas_sync_service import enrich_wa_projects_display
+    from app.services.project_number_match_service import (
+        list_wa_classify_target_projects,
+        wa_classify_display_label,
+    )
+
+    status = (a.get('status') or 'active').strip().lower()
+    active_only = status != 'all'
+    projects = list_wa_classify_target_projects(active_only=active_only, limit=120)
+    enrich_wa_projects_display(projects)
+    rows = []
+    for p in projects:
+        row = serialize_doc(p)
+        row['displayLabel'] = wa_classify_display_label(p, max_len=400)
+        rows.append(row)
+    return json_result({'projects': rows})
+
+
+def _exec_get_project(a: dict) -> str:
+    pid = (a.get('project_id') or '').strip()
+    if not pid:
+        return 'Error: project_id required'
+    try:
+        oid = ObjectId(pid)
+    except Exception:
+        return 'Error: invalid project_id'
+    from app.models import serialize_doc
+
+    project = _db().wa_projects.find_one({'_id': oid})
+    if not project:
+        return 'Error: project not found'
+    return json_result(serialize_doc(project))
+
+
+def _exec_assign_pool(a: dict) -> str:
+    ids = a.get('image_ids') or a.get('imageIds') or []
+    if isinstance(ids, str):
+        ids = [ids]
+    pid = (a.get('project_id') or a.get('projectId') or '').strip()
+    if not ids or not pid:
+        return 'Error: image_ids and project_id required'
+
+    project = _db().wa_projects.find_one({'_id': ObjectId(pid)})
+    if not project:
+        return json_result({'error': 'Project not found', 'assigned': 0})
+    if project.get('status') != 'active':
+        return json_result({'error': 'Project must be active', 'assigned': 0})
+
+    from app.services.image_pool_service import assign_images_to_project
+
+    proj = dict(project)
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    if fn:
+        proj['nasFolderName'] = fn
+    if pb:
+        proj['nasParentBucket'] = pb
+    group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
+    notify = bool(a.get('notify_whatsapp') or a.get('notifyWhatsApp'))
+    phone = (a.get('phone') or '').strip() or None
+
+    count = assign_images_to_project(ids, proj, 'loomy_agent', group_id=group_id)
+    notified = False
+    if notify and count > 0:
+        from app.services.assignment_notify_service import schedule_assignment_confirmation
+
+        if group_id:
+            schedule_assignment_confirmation(proj, count, group_id=group_id)
+            notified = True
+        elif phone:
+            schedule_assignment_confirmation(proj, count, phone=phone)
+            notified = True
+
+    return json_result({
+        'assigned': count,
+        'projectCode': project.get('code'),
+        'whatsappNotified': notified,
+    })
+
+
+def _exec_list_keywords(_a: dict) -> str:
+    from app.models import serialize_doc
+
+    keywords = list(_db().wa_keywords.find({'isActive': True}).sort('term', 1))
+    return json_result({'keywords': [serialize_doc(k) for k in keywords]})
+
+
+def _exec_get_record(a: dict) -> str:
+    from app.models import serialize_doc
+
+    rid = (a.get('record_id') or '').strip()
+    if not rid:
+        return 'Error: record_id required'
+    record = _db().wa_records.find_one({'_id': ObjectId(rid)})
+    if not record:
+        return 'Error: record not found'
+    return json_result(serialize_doc(record))
+
+
+_HANDLERS = {
+    'wa_get_nas_status': _exec_nas_status,
+    'wa_get_pool_stats': _exec_pool_stats,
+    'wa_list_pool_images': _exec_list_pool,
+    'wa_list_projects': _exec_list_projects,
+    'wa_get_project': _exec_get_project,
+    'wa_assign_pool_images': _exec_assign_pool,
+    'wa_list_keywords': _exec_list_keywords,
+    'wa_get_record': _exec_get_record,
+}

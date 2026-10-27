@@ -8,6 +8,29 @@ from flask import current_app
 
 logger = logging.getLogger(__name__)
 
+_LEGACY_RECEIPT_SNIPPETS = ('收到', '照片', '專案編碼', '歸類')
+
+
+def _is_legacy_pool_receipt_text(text: str) -> bool:
+    t = (text or '').replace('*', '')
+    return all(s in t for s in _LEGACY_RECEIPT_SNIPPETS)
+
+
+def _block_legacy_receipt_outbound(text: str, *, channel: str, target: str):
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+    if not text or not wa_loomy_agent_enabled():
+        return False
+    if not _is_legacy_pool_receipt_text(text):
+        return False
+    logger.warning(
+        '[Wakka] Blocked legacy pool-receipt text in Loomy mode (%s → %s)',
+        channel,
+        target,
+    )
+    return True
+
+
 def _wakka_request(path, method='GET', json_data=None):
     """Make authenticated request to Wakka API."""
     url = current_app.config['WAKKA_API_URL']
@@ -98,7 +121,30 @@ def _quote_body_fields(quoted_msg_id, quoted_payload=None):
     return fields
 
 
+def send_chat_presence(to, state='composing', *, group_id=None):
+    """Best-effort WhatsApp typing/recording indicator via Wakka (optional)."""
+    import os
+
+    # Off by default — bot「正在输入」须由 WA 会话发 composing；未接 Wakka 时勿打 404。
+    if os.environ.get('LOOMY_WA_TYPING_INDICATOR', 'false').strip().lower() not in (
+        '1', 'true', 'yes', 'on',
+    ):
+        return None
+    recipient = group_id or wakka_private_recipient(to)
+    if not recipient:
+        return None
+    path = (os.environ.get('WAKKA_PRESENCE_PATH') or '/api/v1/messages/presence').strip()
+    body = {'to': recipient, 'state': state}
+    try:
+        return _wakka_request(path, 'POST', body)
+    except Exception as exc:
+        logger.debug('[Wakka] presence %s failed: %s', state, exc)
+        return None
+
+
 def send_message(to, text, quoted_msg_id=None, quoted_payload=None):
+    if _block_legacy_receipt_outbound(text, channel='private', target=str(to)):
+        return None
     recipient = wakka_private_recipient(to)
     body = {'to': recipient, 'message': text}
     body.update(_quote_body_fields(quoted_msg_id, quoted_payload))
@@ -117,6 +163,8 @@ def send_group_message(
     quoted_msg_id=None,
     quoted_payload=None,
 ):
+    if _block_legacy_receipt_outbound(text, channel='group', target=str(group_id)):
+        return None
     body = {'message': text}
     if media_data_uri:
         body['mediaUrl'] = media_data_uri

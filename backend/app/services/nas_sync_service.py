@@ -160,7 +160,11 @@ def enrich_wa_projects_display(projects) -> None:
         if cached:
             idx = _build_index_from_folders(cached)
     if not idx and buckets and nas_mount.is_volume_mounted():
-        idx = build_nas_folder_index_from_buckets(buckets)
+        threading.Thread(
+            target=lambda: build_nas_folder_index_from_buckets(buckets[:_NAS_BUCKET_SCAN_LIMIT]),
+            daemon=True,
+            name='nas-bucket-index-warm',
+        ).start()
 
     for p in projs:
         code = (p.get('code') or '').strip()
@@ -303,8 +307,8 @@ def _merge_site_folder_row(by_code: dict, row: dict) -> None:
         by_code[key] = row
 
 
-def list_physical_site_folders(site_code_or_num):
-    """Every NAS directory for one site code (e.g. PJ-3051), including duplicates across buckets."""
+def _list_physical_site_folders_impl(site_code_or_num):
+    """Uncached NAS scan for one site code — may hang on stale SMB."""
     from app.services.project_number_match_service import (
         pj_number_from_project_code,
         primary_site_number,
@@ -397,6 +401,28 @@ def list_physical_site_folders(site_code_or_num):
         _add(name, None)
 
     out.sort(key=lambda r: (r.get('folderName') or '').lower())
+    return out
+
+
+def list_physical_site_folders(site_code_or_num):
+    """Every NAS directory for one site code; time-boxed (SMB tunnel may hang)."""
+    from app.services.nas_watcher_service import _run_with_timeout
+
+    if not nas_mount.is_volume_mounted():
+        return []
+    timeout_s = float(os.environ.get('NAS_SITE_FOLDER_LIST_TIMEOUT_S', '8'))
+    out = _run_with_timeout(
+        lambda: _list_physical_site_folders_impl(site_code_or_num),
+        timeout_s,
+        default=None,
+    )
+    if out is None:
+        logger.warning(
+            '[NAS] list_physical_site_folders timed out after %ss (%s)',
+            timeout_s,
+            site_code_or_num,
+        )
+        return []
     return out
 
 

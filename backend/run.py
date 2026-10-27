@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Run the Flask application or Gateway process.
+"""Run Sign House (v3 + MCP) or Gateway.
 
 Usage:
-    python run.py              # Start Flask backend
-    python run.py --gateway    # Start Gateway (Wakka Socket.IO bridge)
-    python run.py --all        # Start both backend and gateway
+    python run.py              # Flask backend + /mcp HTTP
+    python run.py --gateway    # Wakka Socket.IO bridge
+    python run.py --all        # Backend + gateway
 """
+import logging
 import os
 import sys
-import logging
 
 logging.basicConfig(level=logging.INFO)
 
-# run.py --all uses debug=False + no reloader; schedulers must still start (see create_app).
 if '--all' in sys.argv:
     os.environ['SIGNHOUSE_START_SCHEDULERS'] = '1'
 
@@ -20,59 +19,65 @@ from app import create_app
 
 app = create_app(os.environ.get('FLASK_CONFIG', 'development'))
 
-_MCP_PORT = 5010
 
+def _log_mcp_endpoint(port: int) -> None:
+    from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
-def _assert_main_app_port(port: int) -> None:
-    if port == _MCP_PORT:
-        print(
-            f'ERROR: PORT={port} is reserved for sign-house-mcp. Use PORT=5002 (or 5000) in backend/.env.',
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    prefix = os.environ.get('MCP_HTTP_MOUNT_PREFIX', '/mcp').rstrip('/') or '/mcp'
+    if isinstance(app.wsgi_app, DispatcherMiddleware):
+        print(f'WhatsApp MCP (HTTP): http://127.0.0.1:{port}{prefix}')
+        print(f'WhatsApp MCP (SSE, dev only): http://127.0.0.1:{port}{prefix}/sse')
+    else:
+        print('WhatsApp MCP: NOT mounted — pip install a2wsgi', file=sys.stderr)
 
 
 def run_backend():
     host = app.config.get('HOST', '0.0.0.0')
-    port = app.config.get('PORT', 5000)
-    _assert_main_app_port(int(port))
+    port = int(app.config.get('PORT', 5002))
     debug = app.config.get('DEBUG', True)
-    print(f"Starting server on http://{host}:{port}")
+    print(f'Starting Sign House on http://{host}:{port}')
+    print(f'WA API (MCP tools): {app.config.get("SIGN_HOUSE_API_URL")}')
+    _log_mcp_endpoint(port)
     app.run(host=host, port=port, debug=debug, threaded=True)
 
 
 def run_gateway():
     from gateway.main import main as gateway_main
+
     gateway_main()
 
 
 def run_all():
     import threading
-    host = app.config.get('HOST', '0.0.0.0')
-    port = app.config.get('PORT', 5000)
-    _assert_main_app_port(int(port))
+    import time
 
-    t = threading.Thread(target=lambda: app.run(host=host, port=port, debug=False, use_reloader=False), daemon=True)
+    host = app.config.get('HOST', '0.0.0.0')
+    port = int(app.config.get('PORT', 5002))
+
+    t = threading.Thread(
+        target=lambda: app.run(
+            host=host, port=port, debug=False, use_reloader=False, threaded=True,
+        ),
+        daemon=True,
+    )
     t.start()
-    print(f"Backend started on http://{host}:{port}")
+    print(f'Backend started on http://{host}:{port}')
+    _log_mcp_endpoint(port)
 
     os.environ.setdefault('APP_URL', f'http://localhost:{port}')
-    try:
-        run_gateway()
-    except SystemExit as e:
-        code = e.code if isinstance(e.code, int) else 1
-        logging.error(
-            'Gateway exited (code %s); Flask API keeps running on port %s',
-            code,
-            port,
-        )
-        if code != 0:
-            while t.is_alive():
-                t.join(timeout=86400)
-    except Exception as e:
-        logging.error('Gateway exited (%s); Flask API keeps running on port %s', e, port)
-        while t.is_alive():
-            t.join(timeout=86400)
+    time.sleep(0.8)
+    while True:
+        try:
+            run_gateway()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            logging.error(
+                'Gateway exited (%s); retrying in 5s (Flask still on port %s)',
+                e,
+                port,
+            )
+            time.sleep(5)
 
 
 if __name__ == '__main__':

@@ -173,7 +173,11 @@ def _expand_candidates_for_duplicate_nas_folders(match_key, candidates):
 def _resolve_assign_for_physical_folders(match_key, ext, remark):
     """Assign only when input matches exactly one physical NAS folder for this site."""
     from app.services.nas_sync_service import list_physical_site_folders
+    from app.services.nas_watcher_service import nas_mount
     from app.services.wa_project_validation import find_project_by_code
+
+    if not nas_mount.probe_responsive(timeout_s=3):
+        return None
 
     physical = list_physical_site_folders(match_key)
     if not physical:

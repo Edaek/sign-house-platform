@@ -195,6 +195,22 @@ def primary_site_number(text):
     return None
 
 
+def loomy_primary_site_number(text):
+    """Site number for WA pool captions — prefer leading digits, not longest in remark."""
+    trimmed = ' '.join((text or '').strip().split())
+    if not trimmed:
+        return None
+    stripped = re.sub(r'^[^\d\w]+', '', trimmed, flags=re.UNICODE)
+    stripped = ' '.join(stripped.split())
+    m = PJ_NUM_RE.match(stripped)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(\d{3,6})\b', stripped)
+    if m:
+        return m.group(1)
+    return primary_site_number(trimmed)
+
+
 def _active_query(active_only=True):
     if active_only:
         return {'status': 'active'}
@@ -242,6 +258,33 @@ def _normalize_classify_label(text):
     return ' '.join((text or '').strip().split()).upper()
 
 
+def loomy_caption_site_matches_project(caption, project) -> bool:
+    """Mongo-only: caption contains site number matching project code (no NAS I/O)."""
+    if not project:
+        return False
+    num = loomy_primary_site_number(caption or '')
+    if num is None:
+        return False
+    proj_num = pj_number_from_project_code((project.get('code') or '').strip())
+    if proj_num is None:
+        return False
+    try:
+        return int(proj_num) == int(num)
+    except (TypeError, ValueError):
+        return str(proj_num) == str(num)
+
+
+def wa_classify_display_label_mongo_only(proj, *, max_len=_WA_LABEL_MAX):
+    """Display label from Mongo fields only — safe when NAS is slow/unavailable."""
+    if not proj:
+        return ''
+    code = (proj.get('code') or '').strip()
+    label = (proj.get('nasFolderName') or proj.get('name') or code).strip()
+    if max_len and len(label) > max_len:
+        return label[: max_len - 1].rstrip() + '…'
+    return label
+
+
 def classify_input_matches_full_display(label, project) -> bool:
     """True only when input equals the full NAS folder label shown in WhatsApp lists."""
     if not project or not (label or '').strip():
@@ -250,12 +293,15 @@ def classify_input_matches_full_display(label, project) -> bool:
     if lab.isdigit():
         return False
     if re.fullmatch(r'[Pp][Jj][-]?\d{1,6}', lab):
-        display_probe = wa_classify_display_label(project, max_len=0)
+        display_probe = wa_classify_display_label_mongo_only(project, max_len=0)
         if display_probe and (' ' in display_probe or '_' in display_probe):
             return False
     from app.services.nas_sync_service import list_physical_site_folders
+    from app.services.nas_watcher_service import nas_mount
 
-    physical = list_physical_site_folders(label)
+    physical = []
+    if nas_mount.probe_responsive(timeout_s=2):
+        physical = list_physical_site_folders(label)
     if len(physical) > 1:
         norm_lab = _normalize_classify_label(lab)
         matches = [

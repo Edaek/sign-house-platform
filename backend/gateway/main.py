@@ -284,7 +284,19 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    client.connect()
+    for attempt in range(1, 6):
+        try:
+            client.connect()
+            break
+        except Exception as exc:
+            logger.warning(
+                '[Gateway] Wakka connect attempt %s/5 failed: %s',
+                attempt,
+                exc,
+            )
+            if attempt >= 5:
+                raise
+            time.sleep(min(3 * attempt, 15))
 
     try:
         while True:

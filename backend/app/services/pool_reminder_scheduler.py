@@ -28,6 +28,11 @@ class PoolReminderScheduler:
         self._app = app
 
     def start(self):
+        from app.services.wa_classify_mode import worker_auto_classify_enabled
+
+        if not worker_auto_classify_enabled(self._app.config):
+            logger.info('[PoolReminder] Disabled (WA_INBOUND_CLASSIFY_MODE=loomy)')
+            return
         if not self._app.config.get('POOL_REMINDER_ENABLED'):
             logger.info('[PoolReminder] Disabled (POOL_REMINDER_ENABLED=false)')
             return
@@ -115,6 +120,11 @@ class PoolReminderScheduler:
                 if should_skip_receipt_after_classify_reply(
                     phone, newest.get('batchId'),
                 ):
+                    continue
+
+                from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+                if wa_loomy_agent_enabled():
                     continue
 
                 from app.services.pool_receipt_notify_service import (

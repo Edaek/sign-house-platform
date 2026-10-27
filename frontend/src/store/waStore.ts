@@ -35,6 +35,8 @@ export interface WaRecord {
   senderPhone: string
   senderName?: string
   photos: string[]
+  nasPhotos?: string[]
+  nasSourcePath?: string
   hasMedia?: boolean
   mediaType?: string
   extractedFields: ExtractedField[]
@@ -193,7 +195,14 @@ interface WaStore {
     updated: number
     scanned: number
   }>
-  fetchNasBucketSites: (bucketCode: string) => Promise<WaProject[]>
+  fetchNasBucketSites: (
+    bucketCode: string,
+    opts?: { cacheOnly?: boolean; liveScan?: boolean; timeoutMs?: number },
+  ) => Promise<{
+    sites: WaProject[]
+    staleFromCache?: boolean
+    hint?: string
+  }>
   createProject: (data: {
     code: string
     location?: string
@@ -270,12 +279,14 @@ export const useWaStore = create<WaStore>((set) => ({
   },
 
   fetchProjectRecords: async (projectId, params = {}) => {
-    set({ loading: true, records: [] })
     try {
-      const { data } = await api.get(`/wa/projects/${projectId}/records`, { params })
+      const { data } = await api.get(`/wa/projects/${projectId}/records`, {
+        params,
+        timeout: 30000,
+      })
       set({ records: data.records || data })
-    } finally {
-      set({ loading: false })
+    } catch {
+      // Keep prior records on timeout — NAS slowness must not blank the detail page.
     }
   },
 
@@ -440,24 +451,36 @@ export const useWaStore = create<WaStore>((set) => ({
     }
   },
 
-  fetchNasBucketSites: async (bucketCode) => {
+  fetchNasBucketSites: async (bucketCode, opts) => {
     const { data } = await api.get('/wa/projects/nas-bucket-sites', {
-      params: { bucket: bucketCode, sync: '0' },
-      timeout: 120000,
+      params: {
+        bucket: bucketCode,
+        sync: '0',
+        ...(opts?.cacheOnly ? { cacheOnly: '1' } : {}),
+        ...(opts?.liveScan ? { liveScan: '1' } : {}),
+      },
+      timeout: opts?.timeoutMs ?? 60000,
     })
+    if (data.ok === false) {
+      throw new Error((data.error as string) || 'NAS bucket list failed')
+    }
     const sites = (data.sites || []) as Array<Record<string, unknown>>
-    return sites.map((row) => ({
-      id: (row.projectId as string) || `nas:${row.folderName}`,
-      code: (row.code as string) || (row.folderName as string) || '',
-      nasFolderName: (row.nasFolderName as string) || (row.folderName as string) || '',
-      status: (row.status as string) || 'active',
-      stage: 'active',
-      totalRecords: (row.totalRecords as number) ?? 0,
-      todayRecords: (row.todayRecords as number) ?? 0,
-      location: row.location as string | undefined,
-      nasParentBucket: row.nasParentBucket as string | undefined,
-      nasFileCount: (row.nasFileCount as number) ?? undefined,
-    })) as WaProject[]
+    return {
+      sites: sites.map((row) => ({
+        id: (row.projectId as string) || `nas:${row.folderName}`,
+        code: (row.code as string) || (row.folderName as string) || '',
+        nasFolderName: (row.nasFolderName as string) || (row.folderName as string) || '',
+        status: (row.status as string) || 'active',
+        stage: 'active',
+        totalRecords: (row.totalRecords as number) ?? 0,
+        todayRecords: (row.todayRecords as number) ?? 0,
+        location: row.location as string | undefined,
+        nasParentBucket: row.nasParentBucket as string | undefined,
+        nasFileCount: (row.nasFileCount as number) ?? undefined,
+      })) as WaProject[],
+      staleFromCache: Boolean(data.staleFromCache),
+      hint: (data.hint as string) || undefined,
+    }
   },
 
   createProject: async (projData) => {
