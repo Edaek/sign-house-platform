@@ -1708,10 +1708,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 _safe_send(sender, '好的，紀錄已提交（部分資訊待補）。')
                 return jsonify({'handled': True, 'type': 'skip'})
             ctx = _latest_unassigned_pool_context(sender)
-            from app.services.loomy_loom_platform_bridge import (
-                is_pool_classify_turn,
-                wa_loom_platform_classify_enabled,
-            )
+            from app.services.loomy_loom_platform_bridge import should_use_loom_platform
 
             loom_ctx = {
                 'phone': sender,
@@ -1725,9 +1722,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 sender_name=data.get('fromName') or data.get('senderName'),
                 data=data,
                 active_record=active_record,
-                loom_classify_attempted=(
-                    wa_loom_platform_classify_enabled() and is_pool_classify_turn(loom_ctx)
-                ),
+                loom_classify_attempted=should_use_loom_platform(loom_ctx),
             )
             return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
 
@@ -1833,10 +1828,7 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
             if cmd:
                 resp = _handle_command(cmd, sender, text=trimmed, data=data, group_id=group_id)
                 return resp or jsonify({'handled': True, 'type': 'group_command'})
-            from app.services.loomy_loom_platform_bridge import (
-                is_pool_classify_turn,
-                wa_loom_platform_classify_enabled,
-            )
+            from app.services.loomy_loom_platform_bridge import should_use_loom_platform
 
             loom_ctx = {
                 'phone': sender,
@@ -1850,9 +1842,7 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                 user_text=trimmed,
                 sender_name=from_name,
                 data=data,
-                loom_classify_attempted=(
-                    wa_loom_platform_classify_enabled() and is_pool_classify_turn(loom_ctx)
-                ),
+                loom_classify_attempted=should_use_loom_platform(loom_ctx),
             )
             return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
 

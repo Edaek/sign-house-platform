@@ -29,6 +29,23 @@ def loom_platform_fallback_local() -> bool:
     return raw not in ('0', 'false', 'no', 'off')
 
 
+def loom_platform_all_turns_enabled() -> bool:
+    """Route every WhatsApp agent turn to Loom Platform (same brain as Mattermost), not only pool classify."""
+    raw = (os.environ.get('LOOMY_WA_LOOM_PLATFORM_ALL_TURNS') or '').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+def should_use_loom_platform(ctx: Dict[str, Any]) -> bool:
+    if not wa_loom_platform_classify_enabled():
+        return False
+    if loom_platform_all_turns_enabled():
+        return bool(
+            (ctx.get('user_text') or ctx.get('caption') or '').strip()
+            or ctx.get('pool_ids')
+        )
+    return is_pool_classify_turn(ctx)
+
+
 def is_pool_classify_turn(ctx: Dict[str, Any]) -> bool:
     """Only route pool/media classify to Loom — not general chit-chat."""
     if ctx.get('pool_ids'):
@@ -206,14 +223,19 @@ def build_loom_classify_payload(ctx: Dict[str, Any]) -> dict:
 
     pending = get_pending_assignment(phone=phone, group_id=group_id)
 
+    channel = (os.environ.get('LOOM_PLATFORM_WA_CHANNEL') or '').strip()
+    if not channel:
+        channel = 'whatsapp_chat' if loom_platform_all_turns_enabled() else 'whatsapp_pool_classify'
+    intent = 'general' if channel == 'whatsapp_chat' else 'pool_classify'
+
     payload: Dict[str, Any] = {
         'bot': (os.environ.get('LOOM_PLATFORM_BOT_ID') or 'signhouseloomy').strip(),
-        'channel': 'whatsapp_pool_classify',
+        'channel': channel,
         'session_id': _session_id(ctx),
         'message': (ctx.get('user_text') or ctx.get('caption') or '').strip(),
         'poolImageIds': pool_ids,
         'context': {
-            'intent': 'pool_classify',
+            'intent': intent,
             'phone': phone,
             'group_id': group_id,
             'sender_name': ctx.get('sender_name') or '',
@@ -268,9 +290,7 @@ def try_loom_platform_classify(ctx: Dict[str, Any]) -> Optional[str]:
     POST to Loom platform chat API. Server uses LOOM_PLATFORM_SERVICE_TOKEN only.
     Returns WhatsApp reply text, or None to fall back to local classify.
     """
-    if not wa_loom_platform_classify_enabled():
-        return None
-    if not is_pool_classify_turn(ctx):
+    if not should_use_loom_platform(ctx):
         return None
 
     url = (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()

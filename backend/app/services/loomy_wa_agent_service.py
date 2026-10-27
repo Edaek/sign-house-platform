@@ -353,7 +353,7 @@ def try_loomy_inbound_text_reply(
     if batch_reply:
         return batch_reply
 
-    from app.services.loomy_loom_platform_bridge import is_pool_classify_turn, try_loom_platform_classify
+    from app.services.loomy_loom_platform_bridge import should_use_loom_platform, try_loom_platform_classify
 
     loom_ctx = {
         'phone': phone,
@@ -363,7 +363,7 @@ def try_loomy_inbound_text_reply(
         'quoted_msg_id': quoted,
         'has_quoted': has_quoted,
     }
-    if is_pool_classify_turn(loom_ctx):
+    if should_use_loom_platform(loom_ctx):
         loom_reply = try_loom_platform_classify(loom_ctx)
         if loom_reply:
             return loom_reply
