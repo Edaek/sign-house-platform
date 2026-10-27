@@ -5,6 +5,10 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const apiProxy =
     env.VITE_DEV_API_PROXY || process.env.VITE_DEV_API_PROXY || 'http://localhost:5002'
+  const allowedHosts = (env.VITE_ALLOWED_HOSTS || process.env.VITE_ALLOWED_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean)
 
   return {
   plugins: [react()],
@@ -14,6 +18,8 @@ export default defineConfig(({ mode }) => {
     host: '127.0.0.1',
     port: 3000,
     strictPort: false,
+    // Cloudflare / custom domain → local Vite (demo Mac mini)
+    allowedHosts: allowedHosts.length > 0 ? allowedHosts : ['signhousedemo.cynthai.com'],
     proxy: {
       '/api': {
         target: apiProxy,
