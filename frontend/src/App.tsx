@@ -10,7 +10,6 @@ import ExportPage from './pages/ExportPage'
 import AdminPage from './pages/AdminPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import DictionaryPage from './pages/DictionaryPage'
-import McpPage from './pages/McpPage'
 import WaLayout from './pages/wa/WaLayout'
 import WaDashboardPage from './pages/wa/WaDashboardPage'
 import WaProjectsPage from './pages/wa/WaProjectsPage'
@@ -54,7 +53,6 @@ function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
-        <Route path="mcp" element={<McpPage />} />
 
         <Route path="wa" element={<WaLayout />}>
           <Route index element={<WaDashboardPage />} />

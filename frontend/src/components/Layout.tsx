@@ -11,7 +11,6 @@ import {
   FileText,
   Book,
   MessageCircle,
-  Plug2,
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuthStore } from '../store/authStore'
@@ -40,7 +39,6 @@ export default function Layout() {
     { path: '/', icon: Home, label: isManager() ? 'All Projects' : 'Dashboard' },
     { path: '/dictionary', icon: Book, label: 'Dictionary' },
     { path: '/wa', icon: MessageCircle, label: 'WA Bot' },
-    { path: '/mcp', icon: Plug2, label: 'MCP' },
   ]
 
   if (isAdmin()) {
