@@ -20,11 +20,22 @@ from app import create_app
 app = create_app(os.environ.get('FLASK_CONFIG', 'development'))
 
 
-def _log_mcp_endpoint(port: int) -> None:
+def _mcp_http_mounted() -> bool:
     from werkzeug.middleware.dispatcher import DispatcherMiddleware
 
+    wsgi = app.wsgi_app
+    if isinstance(wsgi, DispatcherMiddleware):
+        return True
+    while hasattr(wsgi, 'app'):
+        wsgi = wsgi.app
+        if isinstance(wsgi, DispatcherMiddleware):
+            return True
+    return False
+
+
+def _log_mcp_endpoint(port: int) -> None:
     prefix = os.environ.get('MCP_HTTP_MOUNT_PREFIX', '/mcp').rstrip('/') or '/mcp'
-    if isinstance(app.wsgi_app, DispatcherMiddleware):
+    if _mcp_http_mounted():
         print(f'WhatsApp MCP (HTTP): http://127.0.0.1:{port}{prefix}')
         print(f'WhatsApp MCP (SSE, dev only): http://127.0.0.1:{port}{prefix}/sse')
     else:
