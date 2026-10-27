@@ -21,6 +21,19 @@ export default defineConfig(({ mode }) => {
         timeout: 300000,
         proxyTimeout: 300000,
       },
+      // Hosted WA MCP (Streamable HTTP). Browser GET /mcp → React settings page; Loom POST → backend.
+      '/mcp': {
+        target: apiProxy,
+        changeOrigin: true,
+        timeout: 300000,
+        proxyTimeout: 300000,
+        bypass(req) {
+          const accept = String(req.headers?.accept ?? '')
+          if (req.method === 'GET' && accept.includes('text/html')) {
+            return '/index.html'
+          }
+        },
+      },
     },
   },
   build: {
