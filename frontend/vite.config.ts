@@ -11,41 +11,38 @@ export default defineConfig(({ mode }) => {
     .filter(Boolean)
 
   return {
-  plugins: [react()],
-  // Using custom domain, so root path for all modes
-  base: '/',
-  server: {
-    host: '127.0.0.1',
-    port: 3000,
-    strictPort: false,
-    // Cloudflare / custom domain → local Vite (demo Mac mini)
-    allowedHosts: allowedHosts.length > 0 ? allowedHosts : ['signhousedemo.cynthai.com'],
-    proxy: {
-      '/api': {
-        target: apiProxy,
-        changeOrigin: true,
-        timeout: 300000,
-        proxyTimeout: 300000,
-      },
-      // Hosted WA MCP (Streamable HTTP). Browser GET /mcp → React settings page; Loom POST → backend.
-      '/mcp': {
-        target: apiProxy,
-        changeOrigin: true,
-        timeout: 300000,
-        proxyTimeout: 300000,
-        bypass(req) {
-          const accept = String(req.headers?.accept ?? '')
-          if (req.method === 'GET' && accept.includes('text/html')) {
-            return '/index.html'
-          }
+    plugins: [react()],
+    base: '/',
+    server: {
+      host: '127.0.0.1',
+      port: 3000,
+      strictPort: false,
+      allowedHosts: allowedHosts.length > 0 ? allowedHosts : ['signhousedemo.cynthai.com'],
+      proxy: {
+        '/api': {
+          target: apiProxy,
+          changeOrigin: true,
+          timeout: 300000,
+          proxyTimeout: 300000,
+        },
+        '/mcp': {
+          target: apiProxy,
+          changeOrigin: true,
+          timeout: 300000,
+          proxyTimeout: 300000,
+          bypass(req) {
+            const accept = String(req.headers?.accept ?? '')
+            if (req.method === 'GET' && accept.includes('text/html')) {
+              return '/index.html'
+            }
+          },
         },
       },
     },
-  },
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-    sourcemap: false,
-  },
-}})
-
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+      sourcemap: false,
+    },
+  }
+})
