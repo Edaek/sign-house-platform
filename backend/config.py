@@ -3,7 +3,35 @@ from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent / '.env')
+# override=True: paths with spaces in .env must win over a truncated shell export.
+load_dotenv(Path(__file__).resolve().parent / '.env', override=True)
+
+
+def _normalize_cors_origin(origin: str) -> str:
+    """Browsers send Origin as scheme+host only; strip accidental path suffixes in env."""
+    origin = origin.strip()
+    if not origin or origin == '*':
+        return origin
+    if not origin.startswith(('http://', 'https://')):
+        return origin
+    from urllib.parse import urlparse
+
+    parsed = urlparse(origin)
+    if not parsed.scheme or not parsed.netloc:
+        return origin
+    return f'{parsed.scheme}://{parsed.netloc}'
+
+
+def _parse_allowed_origins(raw: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in raw.split(','):
+        normalized = _normalize_cors_origin(part)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
 
 
 class Config:
@@ -12,14 +40,20 @@ class Config:
     
     # Server Configuration
     HOST = os.environ.get('HOST', '0.0.0.0')
-    PORT = int(os.environ.get('PORT', 5000))
+    PORT = int(os.environ.get('PORT', 5002))
     
     # JWT Configuration
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'jwt-secret-key-change-in-production')
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=24)
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(
+        hours=int(os.environ.get('JWT_ACCESS_TOKEN_HOURS', '24'))
+    )
     
-    # MongoDB Configuration
-    MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/signhouse_dev')
+    # MongoDB Configuration (append serverSelectionTimeoutMS in URI if missing — fail fast on Atlas/network)
+    _mongo_default = 'mongodb://localhost:27017/signhouse_dev'
+    MONGO_URI = os.environ.get('MONGO_URI', _mongo_default)
+    if MONGO_URI and 'serverSelectionTimeoutMS' not in MONGO_URI:
+        sep = '&' if '?' in MONGO_URI else '?'
+        MONGO_URI = f'{MONGO_URI}{sep}serverSelectionTimeoutMS=10000'
     
     # File Upload Configuration
     UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
@@ -40,12 +74,13 @@ class Config:
     TITLE_REGION_WIDTH = int(os.environ.get('TITLE_REGION_WIDTH', 40))      # 40% of image width
     TITLE_REGION_HEIGHT = int(os.environ.get('TITLE_REGION_HEIGHT', 15))    # 15% of image height
     
-    # CORS Configuration
-    ALLOWED_ORIGINS = [
-        o.strip()
-        for o in os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
-        if o.strip()
-    ]
+    # CORS Configuration (Origin header never includes path — use https://xerosumio.github.io)
+    ALLOWED_ORIGINS = _parse_allowed_origins(
+        os.environ.get(
+            'ALLOWED_ORIGINS',
+            'http://localhost:3000,http://127.0.0.1:3000',
+        )
+    )
     
     # Wakka WhatsApp API
     WAKKA_API_URL = os.environ.get('WAKKA_API_URL', '')
@@ -69,13 +104,6 @@ class Config:
 
     # NAS local mount (Mac Mini where NAS is mounted via SMB)
     NAS_WATCH_DIR = os.environ.get('NAS_WATCH_DIR', '/Volumes/Project Photo for Installation/Project Photo for Installation')
-    NAS_SCAN_MAX_DEPTH = int(os.environ.get('NAS_SCAN_MAX_DEPTH', 6))
-    # SMB: treat volume mounted as connected (avoid isdir/list timeouts marking "disconnected")
-    NAS_FAST_CONNECT = os.environ.get('NAS_FAST_CONNECT', 'true').lower() == 'true'
-    NAS_PROBE_TIMEOUT_S = float(os.environ.get('NAS_PROBE_TIMEOUT_S', 4))
-    NAS_FOLDER_CACHE_TTL_S = int(os.environ.get('NAS_FOLDER_CACHE_TTL_S', 600))
-    NAS_FOLDER_CACHE_REFRESH_S = int(os.environ.get('NAS_FOLDER_CACHE_REFRESH_S', 300))
-    NAS_IO_TIMEOUT_S = float(os.environ.get('NAS_IO_TIMEOUT_S', 45))
 
     # Mac Mini (SSH/SCP)
     MINI_HOST = os.environ.get('MINI_HOST', '')
@@ -109,12 +137,31 @@ class Config:
     # Burst project hint after user sends classify text before photos arrive
     WA_BURST_PROJECT_TTL_S = int(os.environ.get('WA_BURST_PROJECT_TTL_S', '120'))
 
+    # auto = legacy WhatsApp fuzzy/AI classify; loomy = intake only + Mattermost @signhouseloomy
+    WA_INBOUND_CLASSIFY_MODE = os.environ.get('WA_INBOUND_CLASSIFY_MODE', 'auto').strip().lower()
+    MATTERMOST_POOL_WEBHOOK_URL = os.environ.get('MATTERMOST_POOL_WEBHOOK_URL', '').strip()
+    LOOMY_POOL_NOTIFY_ENABLED = os.environ.get('LOOMY_POOL_NOTIFY_ENABLED', '').strip().lower()
+    LOOMY_WA_POOL_ACK = os.environ.get('LOOMY_WA_POOL_ACK', '').strip()
+    LOOMY_MATTERMOST_NOTIFY = os.environ.get('LOOMY_MATTERMOST_NOTIFY', '').strip().lower()
+    LOOMY_WA_AGENT_DEBOUNCE_S = float(os.environ.get('LOOMY_WA_AGENT_DEBOUNCE_S', '3'))
+    LOOMY_WA_MCP_MAX_ROUNDS = int(os.environ.get('LOOMY_WA_MCP_MAX_ROUNDS', '3'))
+    LOOMY_WA_MCP_TOOLS_ALLOW = os.environ.get('LOOMY_WA_MCP_TOOLS_ALLOW', '').strip()
+    LOOMY_WA_MCP_TOOLS_DENY = os.environ.get('LOOMY_WA_MCP_TOOLS_DENY', '').strip()
+    LOOMY_WA_INPROCESS_TOOLS = os.environ.get('LOOMY_WA_INPROCESS_TOOLS', 'true').strip().lower()
+    SIGN_HOUSE_INTERNAL_API_URL = os.environ.get('SIGN_HOUSE_INTERNAL_API_URL', '').strip()
+
     # Poll NAS mount for new folders/files → web projects/records (0 = disabled)
     NAS_SYNC_INTERVAL_S = int(os.environ.get('NAS_SYNC_INTERVAL_S', 60))
 
     # Stale job recovery — jobs with no worker progress beyond this are auto-failed
     JOB_STALE_MINUTES = int(os.environ.get('JOB_STALE_MINUTES', 30))
     JOB_RECOVERY_INTERVAL_MINUTES = int(os.environ.get('JOB_RECOVERY_INTERVAL_MINUTES', 5))
+
+    # Hosted sign-house-wa MCP tools (same process when unset → this server's /api)
+    MCP_HTTP_MOUNT_PREFIX = os.environ.get('MCP_HTTP_MOUNT_PREFIX', '/mcp')
+    SIGN_HOUSE_API_URL = os.environ.get('SIGN_HOUSE_API_URL', 'http://127.0.0.1:5002/api')
+    # MCP HTTP auth: user = Bearer only (Loom per-user token); fallback = allow SIGN_HOUSE_JWT / MCP_BOT_*
+    MCP_AUTH_MODE = os.environ.get('MCP_AUTH_MODE', 'fallback').strip().lower()
 
 
 class DevelopmentConfig(Config):

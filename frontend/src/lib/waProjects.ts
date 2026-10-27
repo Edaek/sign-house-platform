@@ -79,6 +79,31 @@ export function bucketFolderLabel(selectedBucketCode: string): string {
   return parentBucketCodeForNas(selectedBucketCode) ?? selectedBucketCode
 }
 
+/** Map NAS parent folder label → `?bucket=` value on /wa/projects. */
+export function bucketCodeForProjectsUrl(
+  nasParentBucket: string | undefined,
+  projects: WaProject[],
+): string | null {
+  const parent = (nasParentBucket || '').trim()
+  if (!parent) return null
+  const buckets = buildProjectBuckets(projects)
+  const direct = buckets.find(
+    (b) =>
+      b.code.toUpperCase() === parent.toUpperCase()
+      || bucketFolderLabel(b.code).toUpperCase() === parent.toUpperCase()
+      || (isStandaloneBucketCode(b.code)
+        && standaloneBucketDisplayCode(b.code).toUpperCase() === parent.toUpperCase()),
+  )
+  if (direct) return direct.code
+  if (isRangeBucketCode(parent)) return parent.toUpperCase()
+  return `__standalone:${parent.toUpperCase()}`
+}
+
+export function waProjectsListPath(bucketCode: string | null | undefined): string {
+  if (!bucketCode?.trim()) return '/wa/projects'
+  return `/wa/projects?${new URLSearchParams({ bucket: bucketCode.trim() }).toString()}`
+}
+
 export function inferRangeBucketCode(siteNum: number): string {
   const lo = Math.floor(siteNum / 100) * 100
   return `PJ-${lo}-${lo + 99}`

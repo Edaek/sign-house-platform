@@ -1,0 +1,329 @@
+"""HTTP client for Sign House WA REST API (JWT from environment)."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+from typing import Any
+from urllib.parse import urljoin
+
+import requests
+
+from mcp_wa.auth_mode import USER_JWT_REQUIRED_MSG, is_user_only_mode
+from mcp_wa.context import get_request_jwt
+
+logger = logging.getLogger(__name__)
+
+JWT_ENV = 'SIGN_HOUSE_JWT'
+INTERNAL_API_URL_ENV = 'SIGN_HOUSE_INTERNAL_API_URL'
+API_URL_ENV = 'SIGN_HOUSE_API_URL'
+TIMEOUT_ENV = 'SIGN_HOUSE_HTTP_TIMEOUT'
+DEFAULT_API_URL = 'http://127.0.0.1:5000/api'
+DEFAULT_TIMEOUT = 60.0
+LONG_TIMEOUT = 300.0
+
+JWT_EXPIRED_HINT = (
+    ' JWT may be expired or missing — log in to Sign House again and update Authorization '
+    '(Cursor mcp.json, Loom Connections → wa token, Coolify SIGN_HOUSE_JWT, or MCP_BOT_* auto-login).'
+)
+
+_bot_jwt_lock = threading.Lock()
+_bot_jwt_cache: str | None = None
+_bot_jwt_cached_at: float = 0.0
+# Re-login before default 24h JWT expiry
+_BOT_JWT_REFRESH_S = int(os.environ.get('MCP_BOT_JWT_REFRESH_HOURS', '20')) * 3600
+
+
+class SignHouseApiError(Exception):
+    def __init__(self, message: str, *, status_code: int | None = None, body: Any = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
+def _jwt_from_mcp_http_request() -> str | None:
+    try:
+        from mcp_wa.server import mcp
+
+        ctx = mcp.get_context()
+        rc = ctx.request_context
+        req = getattr(rc, 'request', None) if rc else None
+        if req is not None:
+            auth = req.headers.get('authorization') or req.headers.get('Authorization')
+            if auth and str(auth).lower().startswith('bearer '):
+                return str(auth)[7:].strip()
+    except Exception:
+        pass
+    return None
+
+
+def _clear_bot_jwt_cache() -> None:
+    global _bot_jwt_cache, _bot_jwt_cached_at
+    with _bot_jwt_lock:
+        _bot_jwt_cache = None
+        _bot_jwt_cached_at = 0.0
+
+
+def _jwt_from_bot_login() -> str | None:
+    """Coolify: MCP_BOT_EMAIL + MCP_BOT_PASSWORD — auto login & cache (no manual SIGN_HOUSE_JWT)."""
+    email = os.environ.get('MCP_BOT_EMAIL', '').strip()
+    password = os.environ.get('MCP_BOT_PASSWORD', '')
+    if not email or not password:
+        return None
+
+    global _bot_jwt_cache, _bot_jwt_cached_at
+    now = time.time()
+    with _bot_jwt_lock:
+        if _bot_jwt_cache and now - _bot_jwt_cached_at < _BOT_JWT_REFRESH_S:
+            return _bot_jwt_cache
+
+    url = urljoin(internal_api_base_url() + '/', 'auth/login')
+    try:
+        resp = requests.post(
+            url,
+            json={'username': email, 'password': password},
+            timeout=30,
+            headers={'Content-Type': 'application/json', 'Accept': 'application/json'},
+        )
+    except requests.RequestException as exc:
+        raise SignHouseApiError(f'MCP bot login failed: {exc}') from exc
+
+    body: Any = None
+    if resp.content:
+        try:
+            body = resp.json()
+        except ValueError:
+            body = resp.text
+    if not resp.ok:
+        raise SignHouseApiError(
+            _format_error(resp.status_code, body),
+            status_code=resp.status_code,
+            body=body,
+        )
+    token = (body.get('access_token') or '').strip() if isinstance(body, dict) else ''
+    if not token:
+        raise SignHouseApiError('MCP bot login: response missing access_token')
+
+    with _bot_jwt_lock:
+        _bot_jwt_cache = token
+        _bot_jwt_cached_at = now
+    return token
+
+
+def _jwt_subject_unverified(token: str) -> str | None:
+    try:
+        import jwt as pyjwt
+
+        payload = pyjwt.decode(token, options={'verify_signature': False})
+        return str(payload.get('sub') or payload.get('email') or '') or None
+    except Exception:
+        return None
+
+
+def _log_auth_source(source: str, token: str) -> None:
+    if source != 'user_bearer':
+        logger.info('[MCP] auth_source=%s', source)
+        return
+    sub = _jwt_subject_unverified(token)
+    logger.info('[MCP] auth_source=%s jwt_sub=%s', source, sub or '?')
+
+
+def _resolve_jwt_and_source() -> tuple[str, str]:
+    from_ctx = get_request_jwt() or _jwt_from_mcp_http_request()
+    if from_ctx:
+        return from_ctx, 'user_bearer'
+    if is_user_only_mode():
+        raise SignHouseApiError(USER_JWT_REQUIRED_MSG)
+    raw = (os.environ.get(JWT_ENV) or os.environ.get('Authorization') or '').strip()
+    if raw.lower().startswith('bearer '):
+        raw = raw[7:].strip()
+    if raw:
+        return raw, 'server_env'
+    bot = _jwt_from_bot_login()
+    if bot:
+        return bot, 'bot_login'
+    raise SignHouseApiError(
+        f'{JWT_ENV} is not set. For HTTP MCP (Loom/Cursor): send Authorization: Bearer <JWT>, '
+        f'set {JWT_ENV} on Coolify, or set MCP_BOT_EMAIL + MCP_BOT_PASSWORD for auto-login. '
+        f'Stdio: McpPage headers.'
+    )
+
+
+def _jwt_from_env() -> str:
+    token, source = _resolve_jwt_and_source()
+    _log_auth_source(source, token)
+    return token
+
+
+def internal_api_base_url() -> str:
+    explicit = (os.environ.get(INTERNAL_API_URL_ENV) or '').strip().rstrip('/')
+    if explicit:
+        return explicit
+    port = (os.environ.get('PORT') or '5000').strip()
+    return f'http://127.0.0.1:{port}/api'
+
+
+def api_base_url() -> str:
+    explicit = (os.environ.get(API_URL_ENV) or '').strip().rstrip('/')
+    if explicit:
+        return explicit
+    if get_request_jwt():
+        return internal_api_base_url()
+    return DEFAULT_API_URL.strip().rstrip('/')
+
+
+def site_origin() -> str:
+    """Origin without /api suffix (for upload URLs)."""
+    base = api_base_url()
+    if base.endswith('/api'):
+        return base[:-4].rstrip('/')
+    return base.rsplit('/api', 1)[0] if '/api' in base else base
+
+
+def default_timeout() -> float:
+    raw = os.environ.get(TIMEOUT_ENV, '').strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_TIMEOUT
+
+
+def _format_error(status_code: int, body: Any) -> str:
+    if isinstance(body, dict):
+        msg = body.get('error') or body.get('message') or body.get('msg')
+        if msg:
+            text = str(msg)
+        else:
+            text = json.dumps(body, ensure_ascii=False)
+    elif body:
+        text = str(body)
+    else:
+        text = f'HTTP {status_code}'
+
+    if status_code in (401, 403):
+        text += JWT_EXPIRED_HINT
+    return text
+
+
+class SignHouseClient:
+    def __init__(
+        self,
+        *,
+        timeout: float | None = None,
+        long_timeout: float = LONG_TIMEOUT,
+        jwt: str | None = None,
+        api_base: str | None = None,
+    ):
+        self._timeout = timeout if timeout is not None else default_timeout()
+        self._long_timeout = long_timeout
+        self._fixed_jwt = (jwt or '').strip() or None
+        if self._fixed_jwt and self._fixed_jwt.lower().startswith('bearer '):
+            self._fixed_jwt = self._fixed_jwt[7:].strip()
+        self._api_base = (api_base or '').strip().rstrip('/') or None
+
+    def _headers(self) -> dict[str, str]:
+        token = self._fixed_jwt if self._fixed_jwt else _jwt_from_env()
+        return {
+            'Authorization': f'Bearer {token}',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        }
+
+    def _url(self, path: str) -> str:
+        path = path if path.startswith('/') else f'/{path}'
+        base = self._api_base if self._api_base else api_base_url()
+        return urljoin(base + '/', path.lstrip('/'))
+
+    def call(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+        timeout: float | None = None,
+        _auth_retry: bool = False,
+    ) -> Any:
+        clean_params = None
+        if params:
+            clean_params = {k: v for k, v in params.items() if v is not None and v != ''}
+
+        try:
+            resp = requests.request(
+                method.upper(),
+                self._url(path),
+                headers=self._headers(),
+                params=clean_params,
+                json=json_body,
+                timeout=timeout if timeout is not None else self._timeout,
+            )
+        except requests.RequestException as exc:
+            raise SignHouseApiError(f'Request failed: {exc}') from exc
+
+        body: Any = None
+        if resp.content:
+            ct = resp.headers.get('content-type', '')
+            if 'application/json' in ct:
+                try:
+                    body = resp.json()
+                except ValueError:
+                    body = resp.text
+            else:
+                body = resp.text
+
+        if not resp.ok:
+            if resp.status_code == 401 and os.environ.get('MCP_BOT_EMAIL') and not _auth_retry:
+                _clear_bot_jwt_cache()
+                return self.call(
+                    method,
+                    path,
+                    params=params,
+                    json_body=json_body,
+                    timeout=timeout,
+                    _auth_retry=True,
+                )
+            raise SignHouseApiError(
+                _format_error(resp.status_code, body),
+                status_code=resp.status_code,
+                body=body,
+            )
+        return body
+
+    def get(self, path: str, **kwargs: Any) -> Any:
+        return self.call('GET', path, **kwargs)
+
+    def post(self, path: str, **kwargs: Any) -> Any:
+        return self.call('POST', path, **kwargs)
+
+    def patch(self, path: str, **kwargs: Any) -> Any:
+        return self.call('PATCH', path, **kwargs)
+
+    def delete(self, path: str, **kwargs: Any) -> Any:
+        return self.call('DELETE', path, **kwargs)
+
+    def long_post(self, path: str, json_body: dict[str, Any] | None = None) -> Any:
+        return self.call('POST', path, json_body=json_body, timeout=self._long_timeout)
+
+
+def json_result(data: Any) -> str:
+    return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+
+
+def uploads_url(relative_path: str) -> str:
+    """Turn /uploads/wa-media/foo.jpg into full API URL."""
+    rel = relative_path.strip()
+    if not rel:
+        return ''
+    if rel.startswith('http://') or rel.startswith('https://'):
+        return rel
+    if rel.startswith('/api/'):
+        return f'{site_origin()}{rel}'
+    if rel.startswith('/uploads/'):
+        return f'{site_origin()}/api/wa{rel}'
+    if rel.startswith('uploads/'):
+        return f'{site_origin()}/api/wa/{rel}'
+    return f'{site_origin()}/api/wa/uploads/{rel.lstrip("/")}'

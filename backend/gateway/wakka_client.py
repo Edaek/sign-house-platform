@@ -111,6 +111,8 @@ class WakkaClient:
             self.url,
             auth={'apiKey': self.api_key},
             transports=['websocket', 'polling'],
+            wait=True,
+            wait_timeout=45,
         )
 
     def _handle_incoming(self, raw: dict):

@@ -10,6 +10,7 @@ import ExportPage from './pages/ExportPage'
 import AdminPage from './pages/AdminPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import DictionaryPage from './pages/DictionaryPage'
+import McpPage from './pages/McpPage'
 import WaLayout from './pages/wa/WaLayout'
 import WaDashboardPage from './pages/wa/WaDashboardPage'
 import WaProjectsPage from './pages/wa/WaProjectsPage'
@@ -24,11 +25,11 @@ import WaUsersPage from './pages/wa/WaUsersPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
-  
+
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
   }
-  
+
   return <>{children}</>
 }
 
@@ -37,12 +38,15 @@ function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
-      
-      <Route path="/" element={
-        <ProtectedRoute>
-          <Layout />
-        </ProtectedRoute>
-      }>
+
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
         <Route index element={<DashboardPage />} />
         <Route path="project/:projectId" element={<ProjectPage />} />
         <Route path="project/:projectId/floor/:floorId" element={<EditorPage />} />
@@ -50,6 +54,7 @@ function App() {
         <Route path="admin" element={<AdminPage />} />
         <Route path="audit-logs" element={<AuditLogsPage />} />
         <Route path="dictionary" element={<DictionaryPage />} />
+        <Route path="mcp" element={<McpPage />} />
 
         <Route path="wa" element={<WaLayout />}>
           <Route index element={<WaDashboardPage />} />
@@ -64,11 +69,10 @@ function App() {
           <Route path="admin/users" element={<WaUsersPage />} />
         </Route>
       </Route>
-      
+
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }
 
 export default App
-

@@ -36,6 +36,22 @@ interface AuthState {
   canModifyProject: (projectOwnerId: string) => boolean
 }
 
+function authRequestErrorMessage(error: unknown, fallback: string): string {
+  const err = error as {
+    response?: { data?: { error?: string } }
+    code?: string
+    message?: string
+  }
+  if (err.response?.data?.error) return err.response.data.error
+  if (err.code === 'ECONNABORTED') {
+    return 'Request timed out — the backend may be down or unreachable.'
+  }
+  if (!err.response) {
+    return 'Cannot reach API (network or CORS). Check backend status and ALLOWED_ORIGINS.'
+  }
+  return fallback
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -60,23 +76,11 @@ export const useAuthStore = create<AuthState>()(
           
           // Set token for future requests
           api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-        } catch (error: unknown) {
-          const ax = error as {
-            response?: { status?: number; data?: { error?: string } }
-            code?: string
-            message?: string
-          }
-          let message = ax.response?.data?.error
-          if (!message) {
-            if (ax.response?.status === 502) {
-              message = '后端未响应 (502)。请在终端执行: cd backend && .venv/bin/python run.py'
-            } else if (!ax.response || ax.code === 'ECONNABORTED' || ax.code === 'ERR_NETWORK') {
-              message = '无法连接后端 (5002)，请确认 backend 已启动'
-            } else {
-              message = 'Login failed'
-            }
-          }
-          set({ isLoading: false, error: message })
+        } catch (error: any) {
+          set({
+            isLoading: false,
+            error: authRequestErrorMessage(error, 'Login failed')
+          })
           throw error
         }
       },
@@ -98,7 +102,7 @@ export const useAuthStore = create<AuthState>()(
         } catch (error: any) {
           set({
             isLoading: false,
-            error: error.response?.data?.error || 'Registration failed'
+            error: authRequestErrorMessage(error, 'Registration failed')
           })
           throw error
         }

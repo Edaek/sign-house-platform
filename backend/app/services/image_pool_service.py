@@ -444,6 +444,18 @@ def save_to_pool(
     wa_message_raw=None,
 ):
     """Save media to the pool. Auto-assigns if caption matches project code or name."""
+    if message_id:
+        existing = mongo.db.pool_images.find_one({
+            'messageId': message_id,
+            'projectId': {'$exists': False},
+        })
+        if existing:
+            logger.info(
+                '[ImagePool] Skip duplicate pool row for messageId %s',
+                str(message_id)[:48],
+            )
+            return {'auto_assigned': False, 'pool_id': str(existing['_id']), 'duplicate': True}
+
     now = datetime.utcnow()
     media_type, file_name = infer_pool_media_meta(image_path, wa_type=wa_type, mime_type=mime_type)
     doc = {
@@ -468,7 +480,9 @@ def save_to_pool(
     result = mongo.db.pool_images.insert_one(doc)
     pool_id = str(result.inserted_id)
 
-    if caption and not defer_assign:
+    from app.services.wa_classify_mode import worker_auto_classify_enabled
+
+    if caption and not defer_assign and worker_auto_classify_enabled():
         from app.services.project_ai_resolve_service import resolve_classify_input
 
         resolved = resolve_classify_input(caption, active_only=True)
@@ -480,7 +494,7 @@ def save_to_pool(
                 'pool_id': pool_id,
             }
 
-    if not defer_reminder:
+    if not defer_reminder and worker_auto_classify_enabled():
         schedule_reminder(phone)
     return {'auto_assigned': False, 'pool_id': pool_id}
 
@@ -623,6 +637,10 @@ def assign_images_to_project(
             if cap:
                 remark = trailing_classify_remark(cap)
                 if remark:
+                    break
+                lines = [ln.strip() for ln in cap.replace('\r\n', '\n').split('\n') if ln.strip()]
+                if len(lines) > 1:
+                    remark = '\n'.join(lines[1:])
                     break
     remark = (remark or '').strip() or None
     if remark:

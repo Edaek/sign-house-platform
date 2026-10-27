@@ -64,6 +64,12 @@ def send_private_classify_nudge(
     quoted_payload=None,
 ):
     """Prefer quoting the user's media; fall back to resending that image with caption."""
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+    if wa_loomy_agent_enabled():
+        logger.debug('[PoolNudge] Skipped — Loomy agent handles classify prompts')
+        return None
+
     from app.services.wa_send_service import send_media, send_message, wakka_private_recipient
 
     recipient = wakka_private_recipient(phone)

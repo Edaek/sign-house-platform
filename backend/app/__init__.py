@@ -122,6 +122,7 @@ def create_app(config_name=None):
         mongo.db.users.create_index('username', unique=True)
         mongo.db.users.create_index('email', unique=True)
         mongo.db.users.create_index('role')
+        mongo.db.mcp_servers.create_index([('userId', 1), ('name', 1)], unique=True)
         # Projects indexes
         mongo.db.projects.create_index('user_id')
         # Floorplans indexes
@@ -154,6 +155,21 @@ def create_app(config_name=None):
         mongo.db.wa_records.create_index([('createdAt', -1)])
         mongo.db.wa_records.create_index([('senderPhone', 1), ('status', 1), ('createdAt', -1)])
         mongo.db.wa_projects.create_index('code', unique=True)
+        for _p in mongo.db.wa_projects.find({'nameNormalized': {'$exists': False}}, {'name': 1}):
+            _n = (_p.get('name') or '').strip()
+            if _n:
+                mongo.db.wa_projects.update_one(
+                    {'_id': _p['_id']},
+                    {'$set': {'nameNormalized': _n.casefold()}},
+                )
+        try:
+            mongo.db.wa_projects.create_index(
+                'nameNormalized',
+                unique=True,
+                partialFilterExpression={'status': {'$ne': 'archived'}},
+            )
+        except Exception:
+            app.logger.warning('wa_projects nameNormalized unique index not created (duplicate names?)')
         mongo.db.wa_projects.create_index('status')
         mongo.db.pool_images.create_index([('phone', 1), ('projectId', 1)])
         mongo.db.pool_images.create_index([('createdAt', -1)])
@@ -216,6 +232,19 @@ def create_app(config_name=None):
     app.register_blueprint(wa_outbound_bp, url_prefix='/api/wa')
     app.register_blueprint(wa_nas_bp, url_prefix='/api/wa/nas')
 
+    from app.api.mcp_servers import mcp_bp
+
+    app.register_blueprint(mcp_bp, url_prefix='/api/mcp')
+
+    from mcp_wa.flask_mount import mount_wa_mcp_http
+
+    mount_wa_mcp_http(app)
+
+    if os.environ.get('TRUST_PROXY', '1').strip().lower() not in ('0', 'false', 'no'):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
     # Initialize folder watcher manager with app context
     from app.services.folder_watcher import watcher_manager
     watcher_manager.init_app(app)
@@ -232,6 +261,9 @@ def create_app(config_name=None):
 
     from app.services.pool_reminder_scheduler import pool_reminder_scheduler
     pool_reminder_scheduler.init_app(app)
+
+    from app.services.loomy_pool_reminder import loomy_pool_reminder
+    loomy_pool_reminder.init_app(app)
 
     from app.services.group_reminder_runner import init_app as init_group_reminder, start as start_group_reminder
     init_group_reminder(app)
@@ -258,5 +290,11 @@ def create_app(config_name=None):
         nas_sync_scheduler.start()
         pool_reminder_scheduler.start()
         start_group_reminder()
+        loomy_pool_reminder.start()
+
+    with app.app_context():
+        from mcp_wa.inprocess_client import log_jwt_guard_on_startup
+
+        log_jwt_guard_on_startup()
 
     return app

@@ -3,14 +3,25 @@ import axios from 'axios'
 // Use environment variable for API URL, fallback to relative path for development
 // In development: VITE_API_URL should be empty/undefined, uses '/api' with Vite proxy
 // In production: VITE_API_URL should be 'https://your-backend.coolify.domain' (without /api)
+export const isProductionApiConfigured = () =>
+  Boolean(import.meta.env.VITE_API_URL?.trim())
+
 const getBaseURL = () => {
-  const apiUrl = import.meta.env.VITE_API_URL
-  if (apiUrl && apiUrl.trim()) {
-    // Production: append /api to backend URL
-    return `${apiUrl}/api`
+  const apiUrl = import.meta.env.VITE_API_URL?.trim()
+  if (apiUrl) {
+    return `${apiUrl.replace(/\/$/, '')}/api`
   }
-  // Development: use relative path with Vite proxy
+  if (import.meta.env.PROD) {
+    console.error(
+      'VITE_API_URL is missing — GitHub Pages cannot run /api. Set Actions Variable or Secret VITE_API_URL to your backend origin.',
+    )
+  }
   return '/api'
+}
+
+export function appLoginPath() {
+  const base = import.meta.env.BASE_URL || '/'
+  return `${base}login`.replace(/([^:]\/)\/+/g, '$1')
 }
 
 const api = axios.create({
@@ -31,7 +42,7 @@ api.interceptors.response.use(
       const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/register')
       if (!isAuthRequest) {
         localStorage.removeItem('auth-storage')
-        window.location.href = '/login'
+        window.location.href = appLoginPath()
       }
     }
     return Promise.reject(error)

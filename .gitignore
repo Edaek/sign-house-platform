@@ -93,6 +93,8 @@ lerna-debug.log*
 .env.test
 .env.test.local
 .env.production.local
+.mcp-token
+backend/.mcp-token
 *.local
 
 # ====================

@@ -50,14 +50,29 @@ def sync_bidirectional():
 def browse_nas():
     code = (request.args.get('code') or '').strip()
     if code:
+        if not nas_mount.is_volume_mounted():
+            return jsonify({'ok': False, 'error': 'NAS not connected'}), 503
+        nas_slow_hint = (
+            'NAS is slow — folder listing may be incomplete. Records below are still available.'
+        )
+        include_files = request.args.get('includeFiles') == '1'
+        files_only = request.args.get('filesOnly') == '1'
+        subfolders_only = request.args.get('subfoldersOnly') == '1'
+        nas_slow = not nas_mount.probe_responsive(timeout_s=2)
         if is_range_folder_code(code):
-            children = nas_mount.list_bucket_child_folders(code)
+            if nas_slow:
+                children, from_cache = nas_mount.list_bucket_child_folders_with_fallback(code)
+            else:
+                children = nas_mount.list_bucket_child_folders(code)
+                from_cache = False
             return jsonify({
                 'ok': True,
                 'code': code.upper(),
                 'rangeBucket': True,
                 'childFolders': children,
                 'siteFolders': [c for c in children if c.get('isSiteProject')],
+                'staleFromCache': from_cache if nas_slow else False,
+                'hint': nas_slow_hint if nas_slow and not children else None,
             })
         from app.services.wa_project_validation import find_project_by_code
 
@@ -69,12 +84,35 @@ def browse_nas():
             view['nasFolderName'] = fn
         if pb:
             view['nasParentBucket'] = pb
+        if files_only:
+            files = nas_mount.list_folder_files(code, project_doc=view)
+            return jsonify({
+                'ok': True,
+                'code': code.upper(),
+                'rangeBucket': False,
+                'subfolders': [],
+                'files': files,
+                'hint': nas_slow_hint if nas_slow and not files else None,
+            })
+        subfolders = nas_mount.list_project_subfolders(code, project_doc=view)
+        if subfolders_only or not include_files:
+            return jsonify({
+                'ok': True,
+                'code': code.upper(),
+                'rangeBucket': False,
+                'subfolders': subfolders,
+                'files': [],
+                'hint': nas_slow_hint if nas_slow and not subfolders else None,
+            })
+        files = nas_mount.list_folder_files(code, project_doc=view)
+        hint = nas_slow_hint if nas_slow and not subfolders and not files else None
         return jsonify({
             'ok': True,
             'code': code.upper(),
             'rangeBucket': False,
-            'subfolders': nas_mount.list_project_subfolders(code, project_doc=view),
-            'files': nas_mount.list_folder_files(code, project_doc=view),
+            'subfolders': subfolders,
+            'files': files,
+            'hint': hint,
         })
 
     folders = nas_mount.list_folders()

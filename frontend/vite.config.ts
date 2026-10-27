@@ -11,7 +11,9 @@ export default defineConfig(({ mode }) => {
   // Using custom domain, so root path for all modes
   base: '/',
   server: {
+    host: '127.0.0.1',
     port: 3000,
+    strictPort: false,
     proxy: {
       '/api': {
         target: apiProxy,

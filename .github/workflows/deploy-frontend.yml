@@ -46,10 +46,32 @@ jobs:
           echo "Checking lib directory:"
           ls -la src/lib/ || echo "No lib directory"
       
+      - name: Resolve build-time env (Variables or Secrets)
+        id: build_env
+        run: |
+          API_URL="${{ vars.VITE_API_URL }}"
+          if [ -z "$API_URL" ]; then
+            API_URL="${{ secrets.VITE_API_URL }}"
+          fi
+          if [ -z "$API_URL" ]; then
+            echo "::error::Set VITE_API_URL as an Actions Variable or Secret (backend origin, e.g. https://signhouse-v3-mcp.it9up.com — no /api suffix)."
+            exit 1
+          fi
+          MCP_URL="${{ vars.VITE_MCP_PUBLIC_URL }}"
+          if [ -z "$MCP_URL" ]; then
+            MCP_URL="${{ secrets.VITE_MCP_PUBLIC_URL }}"
+          fi
+          echo "api_url=$API_URL" >> "$GITHUB_OUTPUT"
+          echo "mcp_url=$MCP_URL" >> "$GITHUB_OUTPUT"
+          echo "VITE_API_URL is set (length ${#API_URL})"
+
       - name: Build frontend
         run: npm run build
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          GITHUB_ACTIONS: 'true'
+          VITE_BASE_PATH: /sign-house-v3-mcp/
+          VITE_API_URL: ${{ steps.build_env.outputs.api_url }}
+          VITE_MCP_PUBLIC_URL: ${{ steps.build_env.outputs.mcp_url }}
       
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

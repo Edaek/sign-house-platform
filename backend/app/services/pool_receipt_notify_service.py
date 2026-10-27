@@ -20,6 +20,22 @@ _flask_app = None
 def init_app(app) -> None:
     global _flask_app
     _flask_app = app
+    with app.app_context():
+        from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+        if wa_loomy_agent_enabled():
+            try:
+                from app import mongo
+
+                r = mongo.db.wa_system.delete_many(
+                    {'_id': {'$regex': r'^pool_receipt_pending:'}},
+                )
+                logger.info(
+                    '[PoolReceipt] Loomy agent: cleared %s stale pending receipt(s)',
+                    r.deleted_count,
+                )
+            except Exception:
+                logger.exception('[PoolReceipt] Failed to clear pending receipts')
 
 
 def _classify_reply_sent_key(phone: str, batch_id: Optional[str] = None) -> str:
@@ -134,6 +150,10 @@ def should_skip_receipt_after_classify_reply(
 
 
 def format_pool_receipt_body(count: int) -> str:
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+    if wa_loomy_agent_enabled():
+        return ''
     return (
         f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
         f'發送 *projects* 查看專案列表。'
@@ -328,6 +348,10 @@ def schedule_pool_receipt_prompt(
 ) -> None:
     """Merge receipt prompts for the same chat; flush after DEBOUNCE_S quiet period."""
     del on_sent  # recorded in flush via _record_prompt_after_send
+    from app.services.wa_classify_mode import pool_receipt_prompts_enabled
+
+    if not pool_receipt_prompts_enabled():
+        return
     if file_count <= 0 or not body.strip():
         return
 
@@ -541,10 +565,16 @@ def _flush(key: str) -> None:
         from app.services.wa_send_service import send_message, send_group_message
 
         with _flask_app.app_context():
+            from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
             doc_id = _pending_doc_id(key)
             now = datetime.utcnow()
             pending = mongo.db.wa_system.find_one({'_id': doc_id})
             if not pending:
+                return
+            if wa_loomy_agent_enabled():
+                mongo.db.wa_system.delete_one({'_id': doc_id})
+                logger.info('[PoolReceipt] Dropped legacy receipt (Loomy agent mode) for %s', key)
                 return
             flush_at = pending.get('flushAt')
             if flush_at and flush_at > now:
@@ -569,6 +599,9 @@ def _flush(key: str) -> None:
             count = _resolve_count(entry)
             if count <= 0:
                 logger.info('[PoolReceipt] Skip send — nothing left to classify for %s', key)
+                return
+
+            if wa_loomy_agent_enabled():
                 return
 
             if _duplicate_send(key, count):
@@ -603,6 +636,8 @@ def _flush(key: str) -> None:
                     )
                     return
                 body = format_pool_receipt_body(count)
+                if not (body or '').strip():
+                    return
             elif entry.get('group_id'):
                 gid = entry['group_id']
                 gs = entry.get('group_sender') or ''
@@ -621,6 +656,8 @@ def _flush(key: str) -> None:
                     body = custom.format(count=count) if '{count}' in custom else custom
                 else:
                     body = format_pool_receipt_body(count)
+                if not (body or '').strip():
+                    return
             else:
                 body = entry.get('body') or ''
                 if '{count}' in body:
