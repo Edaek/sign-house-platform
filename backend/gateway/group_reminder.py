@@ -140,9 +140,9 @@ class GroupReminderScheduler:
                 count = len(images)
                 batch_id = newest.get('batchId')
                 try:
-                    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+                    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-                    if wa_loomy_agent_enabled():
+                    if wa_inbound_loomy_dispatch_enabled():
                         continue
 
                     from app.services.pool_receipt_notify_service import (

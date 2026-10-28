@@ -499,10 +499,10 @@ def _loomy_after_pool_intake(
     from app.services.wa_classify_mode import (
         loomy_wa_pool_ack,
         mattermost_pool_notify_enabled,
-        wa_loomy_agent_enabled,
+        wa_inbound_loomy_dispatch_enabled,
     )
 
-    if not pool_ids or not wa_loomy_agent_enabled():
+    if not pool_ids or not wa_inbound_loomy_dispatch_enabled():
         return
 
     from app.services.pool_receipt_notify_service import (
@@ -810,9 +810,9 @@ def _send_private_classify_prompt(
     quote_msg_id=None,
     pool_image_ids=None,
 ):
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled():
+    if wa_inbound_loomy_dispatch_enabled():
         return False
 
     from app.services.wa_pool_nudge_service import send_private_classify_nudge
@@ -856,9 +856,9 @@ def _send_private_classify_prompt(
 
 def _send_pool_classify_nudge(sender):
     """Show the user's latest unassigned photo with a classify caption (native quote if Wakka supports it)."""
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled():
+    if wa_inbound_loomy_dispatch_enabled():
         return False
 
     from app.services.pool_receipt_notify_service import format_pool_receipt_body
@@ -1524,9 +1524,9 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                         })
 
             if not caption and not project:
-                from app.services.wa_classify_mode import wa_loomy_agent_enabled
+                from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-                if not wa_loomy_agent_enabled():
+                if not wa_inbound_loomy_dispatch_enabled():
                     if _try_apply_stored_classify_intent_private(sender, data):
                         return jsonify({
                             'handled': True,
@@ -1573,9 +1573,9 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
     if is_text:
         trimmed_text = text.strip()
 
-        from app.services.wa_classify_mode import wa_loomy_agent_enabled
+        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-        if wa_loomy_agent_enabled():
+        if wa_inbound_loomy_dispatch_enabled():
             from app.services.loomy_wa_agent_service import (
                 try_loomy_inbound_text_reply,
                 try_loomy_numeric_pick,
@@ -1596,14 +1596,14 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 resp = _handle_command(cmd, sender, text=trimmed_text, data=data)
                 return resp or jsonify({'handled': True, 'type': 'command'})
 
-        ai_resp = None if wa_loomy_agent_enabled() else _try_ai_confirm_assign(
+        ai_resp = None if wa_inbound_loomy_dispatch_enabled() else _try_ai_confirm_assign(
             None, sender, sender, trimmed_text, data,
         )
         if ai_resp is not None:
             return ai_resp
 
         # Fuzzy list selection: 1–9 only (not project numbers like 3026)
-        if not wa_loomy_agent_enabled() and trimmed_text.isdigit():
+        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text.isdigit():
             n = int(trimmed_text)
             fuzzy_doc = mongo.db.wa_system.find_one({'_id': _fuzzy_choice_key(None, sender)})
             if fuzzy_doc and fuzzy_doc.get('choices') and 1 <= n <= len(fuzzy_doc['choices']) <= 9:
@@ -1622,22 +1622,22 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
 
         has_unassigned = mongo.db.pool_images.count_documents(_open_pool_query(sender)) > 0
 
-        if not wa_loomy_agent_enabled() and has_unassigned and _is_classify_noise(trimmed_text):
+        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and _is_classify_noise(trimmed_text):
             if _send_pool_classify_nudge(sender):
                 return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-        if not wa_loomy_agent_enabled() and has_unassigned and len(trimmed_text) == 1 and trimmed_text.isdigit():
+        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and len(trimmed_text) == 1 and trimmed_text.isdigit():
             if _send_pool_classify_nudge(sender):
                 return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-        if not wa_loomy_agent_enabled() and has_unassigned and is_rejection_only(trimmed_text):
+        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and is_rejection_only(trimmed_text):
             if _send_pool_classify_nudge(sender):
                 return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-        if not wa_loomy_agent_enabled() and has_unassigned and _should_try_classify_text(trimmed_text):
+        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and _should_try_classify_text(trimmed_text):
             _clear_fuzzy_choice(None, sender)
             _cancel_scheduled_receipt(phone=sender)
             ctx = _latest_unassigned_pool_context(sender)
@@ -1671,7 +1671,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 'type': kind,
             })
 
-        if not wa_loomy_agent_enabled() and trimmed_text and not is_command(trimmed_text) and not has_unassigned:
+        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text and not is_command(trimmed_text) and not has_unassigned:
             from app.services.nas_site_remark_service import try_append_followup_site_remark
 
             if try_append_followup_site_remark(sender, trimmed_text):
@@ -1680,12 +1680,12 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             _clear_burst_project(None, sender)
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-        if not wa_loomy_agent_enabled() and trimmed_text and not is_command(trimmed_text) and has_unassigned:
+        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text and not is_command(trimmed_text) and has_unassigned:
             if _send_pool_classify_nudge(sender):
                 return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-        if wa_loomy_agent_enabled() and trimmed_text:
+        if wa_inbound_loomy_dispatch_enabled() and trimmed_text:
             active = list(mongo.db.wa_records.find({
                 'senderPhone': sender, 'status': 'followup',
             }).sort('updatedAt', -1))
@@ -1729,9 +1729,9 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
     if not is_text:
         return jsonify({'handled': True, 'type': 'ignored_silent'})
 
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled():
+    if wa_inbound_loomy_dispatch_enabled():
         return jsonify({'handled': True, 'type': 'ignored_silent'})
 
     active = list(mongo.db.wa_records.find({
@@ -1803,9 +1803,9 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
 
     if not is_media and text.strip():
         trimmed = text.strip()
-        from app.services.wa_classify_mode import wa_loomy_agent_enabled
+        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-        if wa_loomy_agent_enabled():
+        if wa_inbound_loomy_dispatch_enabled():
             from app.services.loomy_wa_agent_service import (
                 try_loomy_inbound_text_reply,
                 try_loomy_numeric_pick,
@@ -2003,7 +2003,7 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
     batch_id = _group_batch_id(group_id, sender, now)
     pending_caption = caption if caption and project is None and not _looks_like_filename(caption or '') else None
 
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled as _loomy_on
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled as _loomy_on
 
     if not _loomy_on():
         for idx, image_path in enumerate(photo_paths):
@@ -2055,9 +2055,9 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
     loomy_pool_ids = []
     from app.services.wa_classify_mode import classify_mode
 
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled() and photo_paths:
+    if wa_inbound_loomy_dispatch_enabled() and photo_paths:
         for idx, image_path in enumerate(photo_paths):
             msg_id = _pool_msg_id(data, idx, base_msg_id)
             r = save_to_pool(

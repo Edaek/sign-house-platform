@@ -6,7 +6,9 @@ from typing import Any, Mapping, Optional
 
 MODE_AUTO = 'auto'
 MODE_AGENT = 'agent'
-# Back-compat alias — now means WhatsApp agent, not Mattermost-only
+# Loom runtime / Platform HTTP as sole brain — no local Ollama MCP agent
+MODE_LOOM = 'loom'
+# Back-compat alias — local in-chat Ollama agent (Sign House)
 MODE_LOOMY = 'loomy'
 
 
@@ -20,18 +22,31 @@ def _cfg_val(config: Optional[Mapping[str, Any]], key: str, env_key: str, defaul
 
 def classify_mode(config: Optional[Mapping[str, Any]] = None) -> str:
     m = _cfg_val(config, 'WA_INBOUND_CLASSIFY_MODE', 'WA_INBOUND_CLASSIFY_MODE', MODE_AUTO)
+    if m == MODE_LOOM:
+        return MODE_LOOM
     if m in (MODE_AGENT, MODE_LOOMY):
         return MODE_AGENT
     return MODE_AUTO
 
 
 def wa_loomy_agent_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """Local Sign House Ollama + in-process MCP tools."""
     return classify_mode(config) == MODE_AGENT
 
 
+def wa_loom_runtime_brain_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """WhatsApp replies delegated to Loom (Platform HTTP); no local Ollama agent."""
+    return classify_mode(config) == MODE_LOOM
+
+
+def wa_inbound_loomy_dispatch_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """Inbound schedules Loomy worker (local agent or Loom Platform brain)."""
+    return wa_loomy_agent_enabled(config) or wa_loom_runtime_brain_enabled(config)
+
+
 def worker_auto_classify_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
-    """False when Loomy agent handles pool classify on WhatsApp."""
-    return not wa_loomy_agent_enabled(config)
+    """False when Loomy agent or Loom runtime handles pool classify on WhatsApp."""
+    return not wa_inbound_loomy_dispatch_enabled(config)
 
 
 def pool_receipt_prompts_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:

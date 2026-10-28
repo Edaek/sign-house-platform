@@ -3,8 +3,11 @@ import unittest
 
 from app.services.wa_classify_mode import (
     MODE_AGENT,
+    MODE_LOOM,
     classify_mode,
     mattermost_pool_notify_enabled,
+    wa_inbound_loomy_dispatch_enabled,
+    wa_loom_runtime_brain_enabled,
     wa_loomy_agent_enabled,
     worker_auto_classify_enabled,
 )
@@ -24,6 +27,14 @@ class WaClassifyModeTests(unittest.TestCase):
     def test_loomy_alias_is_agent(self):
         cfg = {'WA_INBOUND_CLASSIFY_MODE': 'loomy'}
         self.assertEqual(classify_mode(cfg), MODE_AGENT)
+
+    def test_loom_mode_delegates_without_local_agent(self):
+        cfg = {'WA_INBOUND_CLASSIFY_MODE': MODE_LOOM}
+        self.assertEqual(classify_mode(cfg), MODE_LOOM)
+        self.assertFalse(wa_loomy_agent_enabled(cfg))
+        self.assertTrue(wa_loom_runtime_brain_enabled(cfg))
+        self.assertTrue(wa_inbound_loomy_dispatch_enabled(cfg))
+        self.assertFalse(worker_auto_classify_enabled(cfg))
 
     def test_mattermost_notify_opt_in(self):
         cfg = {

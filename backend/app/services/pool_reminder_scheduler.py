@@ -122,9 +122,9 @@ class PoolReminderScheduler:
                 ):
                     continue
 
-                from app.services.wa_classify_mode import wa_loomy_agent_enabled
+                from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-                if wa_loomy_agent_enabled():
+                if wa_inbound_loomy_dispatch_enabled():
                     continue
 
                 from app.services.pool_receipt_notify_service import (

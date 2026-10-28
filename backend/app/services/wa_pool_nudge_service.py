@@ -64,9 +64,9 @@ def send_private_classify_nudge(
     quoted_payload=None,
 ):
     """Prefer quoting the user's media; fall back to resending that image with caption."""
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled():
+    if wa_inbound_loomy_dispatch_enabled():
         logger.debug('[PoolNudge] Skipped — Loomy agent handles classify prompts')
         return None
 

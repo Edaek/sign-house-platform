@@ -30,9 +30,9 @@ class LoomyPoolReminder:
         self._app = app
 
     def start(self):
-        from app.services.wa_classify_mode import wa_loomy_agent_enabled
+        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-        if not wa_loomy_agent_enabled():
+        if not wa_inbound_loomy_dispatch_enabled():
             logger.info('[LoomyReminder] Disabled (not in agent/loomy mode)')
             return
 

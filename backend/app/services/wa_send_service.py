@@ -17,9 +17,9 @@ def _is_legacy_pool_receipt_text(text: str) -> bool:
 
 
 def _block_legacy_receipt_outbound(text: str, *, channel: str, target: str):
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if not text or not wa_loomy_agent_enabled():
+    if not text or not wa_inbound_loomy_dispatch_enabled():
         return False
     if not _is_legacy_pool_receipt_text(text):
         return False

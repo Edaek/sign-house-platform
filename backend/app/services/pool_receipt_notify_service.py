@@ -21,9 +21,9 @@ def init_app(app) -> None:
     global _flask_app
     _flask_app = app
     with app.app_context():
-        from app.services.wa_classify_mode import wa_loomy_agent_enabled
+        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-        if wa_loomy_agent_enabled():
+        if wa_inbound_loomy_dispatch_enabled():
             try:
                 from app import mongo
 
@@ -150,9 +150,9 @@ def should_skip_receipt_after_classify_reply(
 
 
 def format_pool_receipt_body(count: int) -> str:
-    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
-    if wa_loomy_agent_enabled():
+    if wa_inbound_loomy_dispatch_enabled():
         return ''
     return (
         f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
@@ -565,14 +565,14 @@ def _flush(key: str) -> None:
         from app.services.wa_send_service import send_message, send_group_message
 
         with _flask_app.app_context():
-            from app.services.wa_classify_mode import wa_loomy_agent_enabled
+            from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
             doc_id = _pending_doc_id(key)
             now = datetime.utcnow()
             pending = mongo.db.wa_system.find_one({'_id': doc_id})
             if not pending:
                 return
-            if wa_loomy_agent_enabled():
+            if wa_inbound_loomy_dispatch_enabled():
                 mongo.db.wa_system.delete_one({'_id': doc_id})
                 logger.info('[PoolReceipt] Dropped legacy receipt (Loomy agent mode) for %s', key)
                 return
@@ -601,7 +601,7 @@ def _flush(key: str) -> None:
                 logger.info('[PoolReceipt] Skip send — nothing left to classify for %s', key)
                 return
 
-            if wa_loomy_agent_enabled():
+            if wa_inbound_loomy_dispatch_enabled():
                 return
 
             if _duplicate_send(key, count):
