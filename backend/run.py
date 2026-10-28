@@ -10,6 +10,15 @@ import logging
 import os
 import sys
 
+if sys.version_info < (3, 10):
+    print(
+        f'Sign House backend requires Python 3.10+ (this interpreter is {sys.version.split()[0]}).\n'
+        'On Mac mini: rm -rf .venv && python3.12 -m venv .venv && source .venv/bin/activate\n'
+        '  pip install -r requirements.txt && pip install mcp a2wsgi',
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
 logging.basicConfig(level=logging.INFO)
 
 if '--all' in sys.argv:
