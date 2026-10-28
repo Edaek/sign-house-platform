@@ -70,6 +70,16 @@ export default function WaImagePoolPage() {
     fetchProjects()
   }, [loadData, fetchPoolStats, fetchProjects])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const params: Record<string, string> = { status: statusFilter }
+      if (phoneFilter) params.phone = phoneFilter
+      fetchPoolImages(params)
+      fetchPoolStats()
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [statusFilter, phoneFilter, fetchPoolImages, fetchPoolStats])
+
   function toggleSelect(id: string) {
     setSelected((prev) => {
       const next = new Set(prev)

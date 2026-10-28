@@ -7,6 +7,13 @@ from app.models import serialize_doc
 
 wa_records_bp = Blueprint('wa_records', __name__)
 
+_REMARK_FIELDS = {'remark', 'rawmessage', 'caption', '备注', '備註', '備注'}
+
+
+def _is_remark_field(name: str) -> bool:
+    key = (name or '').strip()
+    return key.lower() in _REMARK_FIELDS or key in _REMARK_FIELDS
+
 @wa_records_bp.route('/<record_id>', methods=['GET'])
 @jwt_required()
 def get_record(record_id):
@@ -39,12 +46,38 @@ def update_record_field(record_id):
             f['editedAt'] = now
             break
     
+    sets = {
+        'extractedFields': fields,
+        'updatedAt': now,
+    }
+    remark_result = None
+    if _is_remark_field(field_name):
+        from app.services.message_parser_service import site_note_from_text
+        from app.services.nas_site_remark_service import append_site_remark_to_nas, hk_today_str
+
+        note = site_note_from_text(str(value or '')) or str(value or '').strip()
+        if note and note.lower() != '[pool media]':
+            sets['rawMessage'] = note
+            project = None
+            if record.get('projectId'):
+                project = mongo.db.wa_projects.find_one({'_id': record['projectId']})
+            if project:
+                remark_result = append_site_remark_to_nas(
+                    project.get('code') or '',
+                    note,
+                    day_str=hk_today_str(),
+                    preferred_folder_name=(project.get('nasFolderName') or '').strip() or None,
+                    preferred_parent_bucket=(project.get('nasParentBucket') or '').strip() or None,
+                )
+                sets['nasRemarkOk'] = bool(remark_result.get('ok') and not remark_result.get('skipped'))
+                if remark_result.get('path'):
+                    sets['nasRemarkPath'] = remark_result.get('path')
+                if remark_result.get('error'):
+                    sets['nasRemarkError'] = remark_result.get('error')
+
     mongo.db.wa_records.update_one(
         {'_id': ObjectId(record_id)},
-        {'$set': {
-            'extractedFields': fields,
-            'updatedAt': now,
-        }, '$push': {
+        {'$set': sets, '$push': {
             'editHistory': {
                 'field': field_name,
                 'oldValue': old_value,
@@ -54,7 +87,10 @@ def update_record_field(record_id):
             }
         }}
     )
-    return jsonify({'message': 'Field updated'})
+    body = {'message': 'Field updated'}
+    if remark_result is not None:
+        body['siteRemark'] = remark_result
+    return jsonify(body)
 
 @wa_records_bp.route('/<record_id>/confirm', methods=['POST'])
 @jwt_required()

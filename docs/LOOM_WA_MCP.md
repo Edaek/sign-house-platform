@@ -116,6 +116,17 @@ curl -s https://HOST/api/mcp/hosted-wa/status
 | WA 无 Turn，Sign House 有 Gateway 日志 | Wakka 还在喂 Sign House；改 **Wakka→Loom** 并 `SIGNHOUSE_WA_GATEWAY=false` |
 | Turn 有，归类失败 | Loom Connections token、MCP URL 尾斜杠 `/mcp/` |
 | MM 通、WA 不通 | 群 JID / @ 规则；Loom Wakka 配置 |
+| Loom 能看到图，**Media Pool 没有** | 必须 **Gateway 入 pool**（`SIGNHOUSE_WA_GATEWAY=true` + `run.py --all`）；仅 Loom Wakka 不会写 `pool_images` |
+| 备注在 Web 有，**NAS 无 .txt** | 部署含 `remark`/`site-remark`/`site_note_from_text` 的后端；Loom 须 `wa_assign_pool_images(remark=…)`，不要用 `wa_update_record_field` |
+| Gateway `consumer lease` 报错 | 同机只跑一个 `--all`；或等 lease 过期再启 |
+
+## Demo 部署清单（Pool + txt）
+
+1. `git pull` 含 remark/txt 与 Gateway 入 pool 修复的版本  
+2. Mini：`SIGNHOUSE_WA_GATEWAY=true`，`WA_INBOUND_CLASSIFY_MODE=loom`，`python run.py --all`  
+3. Loom：Wakka **不要**与 Gateway 双消费同一号码（或 Wakka 只推 Gateway，Loom 只 MCP）  
+4. Loom Connections → wa：`loom-wa@local` org JWT  
+5. Loom 系统提示：贴 [WA_BOT_PERSONA.md](./WA_BOT_PERSONA.md) 第六节  
 
 ---
 

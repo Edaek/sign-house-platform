@@ -210,8 +210,9 @@ def wa_assign_pool_images(
     When the user includes a note (备注、備註、caption after the project code, e.g. 「歸到 1005 備註是 Test」),
     pass that note as remark — the note text only, without the project code or the words 备注/備註.
     remark is stored on the WA record and written to NAS as Photo/YYYY-MM-DD/PJ-<code>_YYYY-MM-DD.txt.
-    siteRemarkQueued in the result is true only when remark was accepted. Do not tell the user a
-    remark was saved when it is false.
+    siteRemarkQueued in the result means a remark was accepted for NAS write (async after photos copy).
+    Do not tell the user a remark or txt was saved when siteRemarkQueued is false or assigned is 0.
+    Never use wa_update_record_field to store classify remarks — that does not create the day .txt file.
     When notify_whatsapp is true, send a short 繁中 confirmation to group_id after assign.
     For duplicate NAS site folders, pass nas_folder_name (and optional nas_parent_bucket).
     """

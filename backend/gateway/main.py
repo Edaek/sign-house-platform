@@ -228,14 +228,23 @@ def on_message(msg: WAMessage):
             media_failed = True
 
     if media_failed and msg.from_jid.endswith('@g.us') and msg.type in ('image', 'video'):
-        logger.warning('[Gateway] Skipping forward for failed media in group %s', msg.from_jid)
+        logger.warning(
+            '[Gateway] Group media download failed for %s — forwarding for pool retry',
+            msg.from_jid,
+        )
+        forward_to_app(msg, [], True)
         return
 
     if msg.has_media and len(photos) > 1:
         logger.info('[Gateway] Downloaded %d media file(s) for message %s', len(photos), msg.id)
 
     if msg.has_media and not photos:
-        logger.info('[Gateway] Skip media message %s (download produced no files)', msg.id)
+        # Still tell the API so a pool row appears; inbound can retry the download.
+        if not msg.from_jid.endswith('@g.us'):
+            logger.info('[Gateway] Forward private media %s without a local file', msg.id)
+            forward_to_app(msg, [], True)
+        else:
+            logger.info('[Gateway] Skip media message %s (download produced no files)', msg.id)
         return
 
     is_group = msg.from_jid.endswith('@g.us')

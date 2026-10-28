@@ -98,6 +98,14 @@ class SplitClassifyLabelTests(unittest.TestCase):
         self.assertEqual(remark, '123123123123')
         self.assertEqual(trailing_classify_remark('3027 这是备注'), '这是备注')
         self.assertIsNone(trailing_classify_remark('3027'))
+        from app.services.message_parser_service import site_note_from_text
+
+        self.assertEqual(
+            site_note_from_text('归类到1005备注是 这是一条备注信息'),
+            '这是一条备注信息',
+        )
+        self.assertEqual(site_note_from_text('1005 Test'), 'Test')
+        self.assertIsNone(site_note_from_text('1005'))
 
 
 if __name__ == '__main__':

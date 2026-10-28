@@ -1418,6 +1418,28 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             caption = text.strip() or classify_hint or None
             photo_paths = [p for p in final_photos if p]
             if not photo_paths:
+                msg_id = (data.get('messageId') or '').strip()
+                if has_media and msg_id:
+                    from app.services.image_pool_service import save_to_pool
+
+                    saved = save_to_pool(
+                        sender,
+                        None,
+                        caption,
+                        msg_id,
+                        from_name,
+                        defer_assign=True,
+                        defer_reminder=True,
+                        wa_type=data.get('type'),
+                        mime_type=data.get('mimeType'),
+                        chat_jid=(data.get('from') or '').strip() or None,
+                        wa_message_raw=data.get('waRaw') if isinstance(data.get('waRaw'), dict) else None,
+                    )
+                    return jsonify({
+                        'handled': True,
+                        'type': 'pool_media_pending',
+                        'pool_id': saved.get('pool_id'),
+                    })
                 return jsonify({'handled': True, 'type': 'media_unavailable'})
 
             caption, project = _resolve_media_project(data, sender, group_id=None)
@@ -2047,6 +2069,28 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
         return jsonify({'handled': True, 'type': 'group_auto_assigned', 'count': len(pool_ids)})
 
     if not photo_paths:
+        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
+
+        msg_id = (data.get('messageId') or '').strip()
+        if data.get('hasMedia') and msg_id and wa_inbound_loomy_dispatch_enabled():
+            saved = save_to_pool(
+                sender,
+                None,
+                caption,
+                msg_id,
+                from_name,
+                defer_assign=True,
+                defer_reminder=True,
+                batch_id=base_msg_id or None,
+                chat_jid=(group_id or '').strip() or None,
+                wa_message_raw=data.get('waRaw') if isinstance(data.get('waRaw'), dict) else None,
+                **_pool_media_kwargs(data),
+            )
+            return jsonify({
+                'handled': True,
+                'type': 'pool_media_pending',
+                'pool_id': saved.get('pool_id'),
+            })
         if project:
             _notify_group_media_failed(group_id)
         return jsonify({'handled': True, 'type': 'group_media_unavailable'})

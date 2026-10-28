@@ -628,14 +628,16 @@ def assign_images_to_project(
     if not images:
         return 0
 
+    from app.services.message_parser_service import site_note_from_text
+
     remark = (remark or '').strip() or None
     if remark:
-        remark = trailing_classify_remark(remark) or remark.strip() or None
+        remark = site_note_from_text(remark) or remark.strip() or None
     if not remark:
         for img in images:
             cap = (img.get('caption') or '').strip()
             if cap:
-                remark = trailing_classify_remark(cap)
+                remark = site_note_from_text(cap)
                 if remark:
                     break
                 lines = [ln.strip() for ln in cap.replace('\r\n', '\n').split('\n') if ln.strip()]
@@ -845,17 +847,27 @@ def assign_images_to_project(
                     if sync_status == 'failed' and expected:
                         update['nasSyncError'] = 'NAS copy/upload failed for all files'
 
-                    mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
                     if _assign_remark and (nas_photos or expected == 0):
                         from app.services.nas_site_remark_service import append_site_remark_to_nas
 
-                        append_site_remark_to_nas(
+                        remark_result = append_site_remark_to_nas(
                             _project_code,
                             _assign_remark,
                             day_str=_assign_day,
                             preferred_folder_name=_pref_folder,
                             preferred_parent_bucket=_pref_bucket,
                         )
+                        update['nasRemarkOk'] = bool(remark_result.get('ok') and not remark_result.get('skipped'))
+                        if remark_result.get('path'):
+                            update['nasRemarkPath'] = remark_result.get('path')
+                        if remark_result.get('error'):
+                            update['nasRemarkError'] = remark_result.get('error')
+                            logger.warning(
+                                '[ImagePool] Site remark txt not written: %s',
+                                remark_result.get('error'),
+                            )
+
+                    mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
                     if expected > 0 and len(nas_photos) == 0:
                         phone = (_images[0].get('phone') or '').strip()
                         if phone:

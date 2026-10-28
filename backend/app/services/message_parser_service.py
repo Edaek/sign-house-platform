@@ -44,6 +44,32 @@ def split_classify_label_and_remark(text):
     return trimmed, ''
 
 
+_EXPLICIT_NOTE_RE = re.compile(
+    r'(?:备注|備註|remark)\s*(?:是|為|为|[:：])\s*(.+)$',
+    re.I,
+)
+
+
+def site_note_from_text(text):
+    """Site-log note for the NAS day txt.
+
+    ``归类到1005备注是 这是一条备注信息`` → ``这是一条备注信息``
+    ``1005 Test`` → ``Test``
+    A bare project code → None.
+    """
+    raw = (text or '').strip()
+    if not raw or raw.lower() == '[pool media]':
+        return None
+    collapsed = ' '.join(raw.split())
+    matched = _EXPLICIT_NOTE_RE.search(collapsed)
+    if matched and matched.group(1).strip():
+        return matched.group(1).strip()
+    extracted = trailing_classify_remark(collapsed)
+    if extracted:
+        return extracted
+    return None
+
+
 def trailing_classify_remark(text):
     """User-facing remark only — drop leading project code (e.g. ``3027 备注`` → ``备注``)."""
     trimmed = ' '.join((text or '').strip().split())
