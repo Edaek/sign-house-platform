@@ -62,35 +62,6 @@ def _run_agent_sync(ctx: Dict[str, Any]) -> None:
     if not (user_text or caption or pool_ids):
         return
 
-    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
-
-    if wa_loom_runtime_brain_enabled():
-        ctx_for_loom = {
-            **ctx,
-            'quoted_msg_id': ctx.get('quoted_msg_id') or '',
-            'has_quoted': bool(ctx.get('has_quoted')),
-        }
-        from app.services.loomy_loom_platform_bridge import (
-            loom_platform_fallback_local,
-            try_loom_platform_classify,
-        )
-
-        loom = try_loom_platform_classify(ctx_for_loom)
-        if loom:
-            if pool_ids:
-                from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
-
-                mark_pool_classify_reply(pool_ids, loom)
-            _send_wa(phone, group_id, loom)
-            return
-        if loom_platform_fallback_local():
-            logger.warning(
-                '[LoomyWA] WA_INBOUND_CLASSIFY_MODE=loom: platform had no reply; '
-                'local Ollama fallback is disabled (use agent mode for local brain)',
-            )
-        _send_wa(phone, group_id, 'Loom 暫時無法回應，請稍後再試或聯絡管理員。')
-        return
-
     from app.services.loomy_wa_smart_classify import get_active_batch, try_loomy_smart_text
 
     active = get_active_batch(phone=phone, group_id=group_id)
@@ -307,9 +278,9 @@ def schedule_loomy_wa_agent(
     agent_extra: Optional[Dict[str, Any]] = None,
     flush_immediately: bool = False,
 ) -> None:
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
 
-    if not wa_inbound_loomy_dispatch_enabled():
+    if not wa_loomy_agent_enabled():
         return
 
     key = _task_key(phone=phone, group_id=group_id)
@@ -367,6 +338,11 @@ def try_loomy_inbound_text_reply(
     data: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Synchronous Loomy text handling (batch pick, direct assign) — returns WA body if handled."""
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+    if wa_loom_runtime_brain_enabled():
+        return None
+
     from app.services.loomy_wa_smart_classify import (
         get_active_batch,
         try_implicit_batch_pick,

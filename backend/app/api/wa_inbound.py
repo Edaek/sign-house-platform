@@ -500,6 +500,7 @@ def _loomy_after_pool_intake(
         loomy_wa_pool_ack,
         mattermost_pool_notify_enabled,
         wa_inbound_loomy_dispatch_enabled,
+        wa_loomy_agent_enabled,
     )
 
     if not pool_ids or not wa_inbound_loomy_dispatch_enabled():
@@ -524,82 +525,83 @@ def _loomy_after_pool_intake(
     sender_phone = phone or group_sender or ''
     classify_handled = False
 
-    if cap and pool_ids:
-        try:
-            from app.services.loomy_loom_platform_bridge import try_loom_platform_classify
+    if wa_loomy_agent_enabled():
+        if cap and pool_ids:
+            try:
+                from app.services.loomy_loom_platform_bridge import try_loom_platform_classify
 
-            loom_reply = try_loom_platform_classify({
-                'phone': sender_phone,
-                'group_id': group_id,
-                'caption': cap,
-                'pool_ids': pool_ids,
-                'sender_name': sender_name,
-            })
-            if loom_reply:
+                loom_reply = try_loom_platform_classify({
+                    'phone': sender_phone,
+                    'group_id': group_id,
+                    'caption': cap,
+                    'pool_ids': pool_ids,
+                    'sender_name': sender_name,
+                })
+                if loom_reply:
+                    if group_id:
+                        send_group_message(group_id, loom_reply, quoted_msg_id=quote_msg_id)
+                    else:
+                        send_message(sender_phone, loom_reply, quoted_msg_id=quote_msg_id)
+                    classify_handled = True
+            except Exception:
+                logger.exception('[Inbound] Loom platform classify failed')
+
+        if cap and pool_ids and not classify_handled:
+            try:
+                import os
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+                from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
+                from app.services.loomy_wa_mongo_site_classify import try_loomy_mongo_site_classify_reply
+
+                sync_timeout = float(os.environ.get('LOOMY_WA_SYNC_CLASSIFY_TIMEOUT_S', '8'))
+
+                def _sync_classify():
+                    return try_loomy_mongo_site_classify_reply(
+                        phone=sender_phone,
+                        caption=cap,
+                        pool_ids=pool_ids,
+                        group_id=group_id,
+                    )
+
+                reply = None
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    fut = pool.submit(_sync_classify)
+                    try:
+                        reply = fut.result(timeout=sync_timeout)
+                    except FuturesTimeout:
+                        logger.warning('[Inbound] Loomy sync classify timed out after %ss', sync_timeout)
+
+                if reply:
+                    mark_pool_classify_reply(pool_ids, reply)
+                    if group_id:
+                        send_group_message(group_id, reply, quoted_msg_id=quote_msg_id)
+                    else:
+                        send_message(sender_phone, reply, quoted_msg_id=quote_msg_id)
+                    classify_handled = True
+            except Exception:
+                logger.exception('[Inbound] Loomy sync mongo classify failed')
+
+        if processing and not classify_handled:
+            try:
                 if group_id:
-                    send_group_message(group_id, loom_reply, quoted_msg_id=quote_msg_id)
+                    send_group_message(group_id, processing, quoted_msg_id=quote_msg_id)
                 else:
-                    send_message(sender_phone, loom_reply, quoted_msg_id=quote_msg_id)
-                classify_handled = True
-        except Exception:
-            logger.exception('[Inbound] Loom platform classify failed')
+                    send_message(sender_phone, processing, quoted_msg_id=quote_msg_id)
+            except Exception:
+                logger.exception('[Inbound] Loomy processing ack failed')
 
-    if cap and pool_ids and not classify_handled:
-        try:
-            import os
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        if not classify_handled:
+            from app.services.loomy_wa_agent_service import schedule_loomy_wa_agent
 
-            from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
-            from app.services.loomy_wa_mongo_site_classify import try_loomy_mongo_site_classify_reply
-
-            sync_timeout = float(os.environ.get('LOOMY_WA_SYNC_CLASSIFY_TIMEOUT_S', '8'))
-
-            def _sync_classify():
-                return try_loomy_mongo_site_classify_reply(
-                    phone=sender_phone,
-                    caption=cap,
-                    pool_ids=pool_ids,
-                    group_id=group_id,
-                )
-
-            reply = None
-            with ThreadPoolExecutor(max_workers=1) as pool:
-                fut = pool.submit(_sync_classify)
-                try:
-                    reply = fut.result(timeout=sync_timeout)
-                except FuturesTimeout:
-                    logger.warning('[Inbound] Loomy sync classify timed out after %ss', sync_timeout)
-
-            if reply:
-                mark_pool_classify_reply(pool_ids, reply)
-                if group_id:
-                    send_group_message(group_id, reply, quoted_msg_id=quote_msg_id)
-                else:
-                    send_message(sender_phone, reply, quoted_msg_id=quote_msg_id)
-                classify_handled = True
-        except Exception:
-            logger.exception('[Inbound] Loomy sync mongo classify failed')
-
-    if processing and not classify_handled:
-        try:
-            if group_id:
-                send_group_message(group_id, processing, quoted_msg_id=quote_msg_id)
-            else:
-                send_message(sender_phone, processing, quoted_msg_id=quote_msg_id)
-        except Exception:
-            logger.exception('[Inbound] Loomy processing ack failed')
-
-    if not classify_handled:
-        from app.services.loomy_wa_agent_service import schedule_loomy_wa_agent
-
-        schedule_loomy_wa_agent(
-            phone=sender_phone,
-            group_id=group_id,
-            caption=cap,
-            pool_ids=pool_ids,
-            sender_name=sender_name,
-            flush_immediately=bool(cap and pool_ids),
-        )
+            schedule_loomy_wa_agent(
+                phone=sender_phone,
+                group_id=group_id,
+                caption=cap,
+                pool_ids=pool_ids,
+                sender_name=sender_name,
+                flush_immediately=bool(cap and pool_ids),
+            )
 
     ack = loomy_wa_pool_ack()
     if ack:
@@ -1573,24 +1575,28 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
     if is_text:
         trimmed_text = text.strip()
 
-        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
+        from app.services.wa_classify_mode import (
+            wa_inbound_loomy_dispatch_enabled,
+            wa_loomy_agent_enabled,
+        )
 
         if wa_inbound_loomy_dispatch_enabled():
-            from app.services.loomy_wa_agent_service import (
-                try_loomy_inbound_text_reply,
-                try_loomy_numeric_pick,
-            )
+            if wa_loomy_agent_enabled():
+                from app.services.loomy_wa_agent_service import (
+                    try_loomy_inbound_text_reply,
+                    try_loomy_numeric_pick,
+                )
 
-            ctx = _latest_unassigned_pool_context(sender)
-            fast = try_loomy_inbound_text_reply(
-                sender, trimmed_text, pool_ids=ctx.get('pool_ids'), data=data,
-            )
-            if fast:
-                _safe_send(sender, fast, quoted_msg_id=data.get('quotedMsgId'))
-                return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
+                ctx = _latest_unassigned_pool_context(sender)
+                fast = try_loomy_inbound_text_reply(
+                    sender, trimmed_text, pool_ids=ctx.get('pool_ids'), data=data,
+                )
+                if fast:
+                    _safe_send(sender, fast, quoted_msg_id=data.get('quotedMsgId'))
+                    return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
 
-            if try_loomy_numeric_pick(sender, trimmed_text):
-                return jsonify({'handled': True, 'type': 'loomy_wa_pick'})
+                if try_loomy_numeric_pick(sender, trimmed_text):
+                    return jsonify({'handled': True, 'type': 'loomy_wa_pick'})
             cmd = is_command(trimmed_text)
             if cmd:
                 resp = _handle_command(cmd, sender, text=trimmed_text, data=data)
@@ -1686,6 +1692,8 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             return jsonify({'handled': True, 'type': 'ignored_silent'})
 
         if wa_inbound_loomy_dispatch_enabled() and trimmed_text:
+            from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
             active = list(mongo.db.wa_records.find({
                 'senderPhone': sender, 'status': 'followup',
             }).sort('updatedAt', -1))
@@ -1707,24 +1715,26 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 )
                 _safe_send(sender, '好的，紀錄已提交（部分資訊待補）。')
                 return jsonify({'handled': True, 'type': 'skip'})
-            ctx = _latest_unassigned_pool_context(sender)
-            from app.services.loomy_loom_platform_bridge import should_use_loom_platform
+            if wa_loomy_agent_enabled():
+                ctx = _latest_unassigned_pool_context(sender)
+                from app.services.loomy_loom_platform_bridge import should_use_loom_platform
 
-            loom_ctx = {
-                'phone': sender,
-                'user_text': trimmed_text,
-                'pool_ids': ctx.get('pool_ids'),
-            }
-            _schedule_loomy_from_inbound(
-                phone=sender,
-                user_text=trimmed_text,
-                pool_ids=ctx.get('pool_ids'),
-                sender_name=data.get('fromName') or data.get('senderName'),
-                data=data,
-                active_record=active_record,
-                loom_classify_attempted=should_use_loom_platform(loom_ctx),
-            )
-            return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
+                loom_ctx = {
+                    'phone': sender,
+                    'user_text': trimmed_text,
+                    'pool_ids': ctx.get('pool_ids'),
+                }
+                _schedule_loomy_from_inbound(
+                    phone=sender,
+                    user_text=trimmed_text,
+                    pool_ids=ctx.get('pool_ids'),
+                    sender_name=data.get('fromName') or data.get('senderName'),
+                    data=data,
+                    active_record=active_record,
+                    loom_classify_attempted=should_use_loom_platform(loom_ctx),
+                )
+                return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
+            return jsonify({'handled': True, 'type': 'loom_runtime_deferred'})
 
     if not is_text:
         return jsonify({'handled': True, 'type': 'ignored_silent'})
@@ -1806,45 +1816,50 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
         from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
 
         if wa_inbound_loomy_dispatch_enabled():
-            from app.services.loomy_wa_agent_service import (
-                try_loomy_inbound_text_reply,
-                try_loomy_numeric_pick,
-            )
+            from app.services.wa_classify_mode import wa_loomy_agent_enabled
             from app.services.loomy_pool_batch import latest_unassigned_pool_ids
 
             pids = latest_unassigned_pool_ids(phone=sender, group_id=group_id)
-            fast = try_loomy_inbound_text_reply(
-                sender, trimmed, group_id=group_id, pool_ids=pids, data=data,
-            )
-            if fast:
-                from app.services.wa_send_service import send_group_message
+            if wa_loomy_agent_enabled():
+                from app.services.loomy_wa_agent_service import (
+                    try_loomy_inbound_text_reply,
+                    try_loomy_numeric_pick,
+                )
 
-                send_group_message(group_id, fast, quoted_msg_id=data.get('quotedMsgId'))
-                return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
+                fast = try_loomy_inbound_text_reply(
+                    sender, trimmed, group_id=group_id, pool_ids=pids, data=data,
+                )
+                if fast:
+                    from app.services.wa_send_service import send_group_message
 
-            if try_loomy_numeric_pick(sender, trimmed, group_id=group_id):
-                return jsonify({'handled': True, 'type': 'loomy_wa_pick'})
+                    send_group_message(group_id, fast, quoted_msg_id=data.get('quotedMsgId'))
+                    return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
+
+                if try_loomy_numeric_pick(sender, trimmed, group_id=group_id):
+                    return jsonify({'handled': True, 'type': 'loomy_wa_pick'})
             cmd = is_command(trimmed)
             if cmd:
                 resp = _handle_command(cmd, sender, text=trimmed, data=data, group_id=group_id)
                 return resp or jsonify({'handled': True, 'type': 'group_command'})
-            from app.services.loomy_loom_platform_bridge import should_use_loom_platform
+            if wa_loomy_agent_enabled():
+                from app.services.loomy_loom_platform_bridge import should_use_loom_platform
 
-            loom_ctx = {
-                'phone': sender,
-                'group_id': group_id,
-                'user_text': trimmed,
-                'pool_ids': pids,
-            }
-            _schedule_loomy_from_inbound(
-                phone=sender,
-                group_id=group_id,
-                user_text=trimmed,
-                sender_name=from_name,
-                data=data,
-                loom_classify_attempted=should_use_loom_platform(loom_ctx),
-            )
-            return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
+                loom_ctx = {
+                    'phone': sender,
+                    'group_id': group_id,
+                    'user_text': trimmed,
+                    'pool_ids': pids,
+                }
+                _schedule_loomy_from_inbound(
+                    phone=sender,
+                    group_id=group_id,
+                    user_text=trimmed,
+                    sender_name=from_name,
+                    data=data,
+                    loom_classify_attempted=should_use_loom_platform(loom_ctx),
+                )
+                return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
+            return jsonify({'handled': True, 'type': 'loom_runtime_deferred'})
 
         if trimmed.lower() == 'projects':
             from app.services.project_number_match_service import (

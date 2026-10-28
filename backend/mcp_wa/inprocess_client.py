@@ -55,9 +55,9 @@ def try_get_inprocess_client() -> SignHouseClient | None:
 
 
 def log_jwt_guard_on_startup() -> None:
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
 
-    if not wa_inbound_loomy_dispatch_enabled():
+    if not wa_loomy_agent_enabled():
         return
     if inprocess_tools_enabled():
         logger.info(

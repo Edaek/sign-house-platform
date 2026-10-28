@@ -18,15 +18,11 @@ _CLASSIFY_HINT = re.compile(
 
 
 def wa_loom_platform_classify_enabled() -> bool:
-    url = (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
-    if not url:
-        return False
-    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
-
-    if wa_loom_runtime_brain_enabled():
-        return True
+    """Optional Jeff HTTP bridge — not used by WA_INBOUND_CLASSIFY_MODE=loom (MCP per-user JWT)."""
     raw = (os.environ.get('LOOMY_WA_LOOM_PLATFORM_CLASSIFY') or '').strip().lower()
-    return raw in ('1', 'true', 'yes', 'on')
+    if raw not in ('1', 'true', 'yes', 'on'):
+        return False
+    return bool((os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip())
 
 
 def loom_platform_fallback_local() -> bool:
@@ -43,13 +39,6 @@ def loom_platform_all_turns_enabled() -> bool:
 def should_use_loom_platform(ctx: Dict[str, Any]) -> bool:
     if not wa_loom_platform_classify_enabled():
         return False
-    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
-
-    if wa_loom_runtime_brain_enabled():
-        return bool(
-            (ctx.get('user_text') or ctx.get('caption') or '').strip()
-            or ctx.get('pool_ids')
-        )
     if loom_platform_all_turns_enabled():
         return bool(
             (ctx.get('user_text') or ctx.get('caption') or '').strip()

@@ -35,7 +35,7 @@ def wa_loomy_agent_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
 
 
 def wa_loom_runtime_brain_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
-    """WhatsApp replies delegated to Loom (Platform HTTP); no local Ollama agent."""
+    """Loom runtime owns replies (per-user Bearer → /mcp); Sign House intake only."""
     return classify_mode(config) == MODE_LOOM
 
 
