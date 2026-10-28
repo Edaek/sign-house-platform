@@ -2,19 +2,41 @@
 
 ## 目标架构（生产）
 
-- **每人**在 Loom 绑定 **自己的** Sign House JWT（Connections → wa）。
-- Loom 每次调用 `https://HOST/mcp` 时转发 **`Authorization: Bearer <JWT>`**。
-- Coolify **不设** `SIGN_HOUSE_JWT`、`MCP_BOT_EMAIL`、`MCP_BOT_PASSWORD`。
-- 设 **`MCP_AUTH_MODE=user`**，强制仅接受请求内 Bearer。
+Sign House 暴露 **`https://HOST/mcp/`**；Loom 用 **Bearer JWT** 调工具。依场景分两种 token 策略：
+
+### A. 工人 WhatsApp（`WA_INBOUND_CLASSIFY_MODE=loom`）
+
+- Sign House **只入库**，不在 inbound 里用 Ollama 抢答。
+- Loom **Connections → wa** 配置 **一个** 长期 org token（服务账号，建议 `manager`），**工人不用**各自 JWT。
+- 工人是谁：由 Loom 调 MCP 时在工具参数里带 **`phone` / `group_id`**（来自 Gateway inbound），与 JWT 的 `sub` 无关。
+- 签发长期 token：`backend/scripts/mint_mcp_token.py --email … --role manager`（见 `.env.example` 的 `MCP_SERVICE_TOKEN_HOURS`）。
+- 服务器：**可不设** `SIGN_HOUSE_JWT` / `MCP_BOT_*`；设 **`MCP_AUTH_MODE=user`** 表示只接受 Loom 转发来的那一个 Bearer。
 
 ```env
+WA_INBOUND_CLASSIFY_MODE=loom
 MCP_AUTH_MODE=user
-SIGN_HOUSE_API_URL=http://127.0.0.1:8000/api
+SIGN_HOUSE_API_URL=http://127.0.0.1:5001/api
 ```
+
+### B. Mattermost 内勤（可选 per-user）
+
+- 每位内勤在 Loom 绑 **自己的** JWT → `wa_whoami` 应对应本人 email，RBAC 与 Web 一致。
+- 见 [LOOM_PLATFORM_REQUIREMENTS.md](./LOOM_PLATFORM_REQUIREMENTS.md)（Loom 需按 MM 用户选 token）。
 
 ---
 
-## 内勤 SOP
+## 内勤 SOP（org token，WhatsApp / Loom 主路径）
+
+1. 管理员执行 `mint_mcp_token.py`，创建或指定 **专用 MCP 账号**（如 `loom-wa@…`，role `manager`）。
+2. [loom.naton.io](https://loom.naton.io) → **Connections → wa** → 粘贴 **这一条** access_token → Connect。
+3. Demo/Coolify：`WA_INBOUND_CLASSIFY_MODE=loom`，`MCP_AUTH_MODE=user`，**不要**在服务器再配第二份 `SIGN_HOUSE_JWT`（避免双身份）。
+4. Loom 侧：`wa_whoami` 应显示 **服务账号** email；工人 WhatsApp 归类靠 `wa_assign_pool_images(phone=…)` 等参数。
+
+---
+
+## 内勤 SOP（per-user，Mattermost）
+
+## 内勤 SOP（per-user，Mattermost）
 
 1. Sign House Web 登录（本人账号，建议 manager/admin 若需 NAS/keywords）。
 2. 复制 JWT：`auth-storage` → `state.token`，或 `/api/auth/login` 的 `access_token`。
