@@ -133,6 +133,8 @@ For *help*, *projects*, *keywords*: use wa_list_projects, wa_list_keywords, wa_g
 For *move <project>*: output action move with target_project_label (uses quoted photo or recent assign); explain steps if unclear.
 If active_wa_record is set, use wa_get_record and wa_update_record_field to collect missing fields; one question at a time.
 For photo classify: use wa_list_pool_images then wa_assign_pool_images with correct project_id and nas_folder_name when duplicates exist.
+If the user included a note (备注/備註/text after the project code), pass it as remark on wa_assign_pool_images — note text only. That writes the NAS day .txt. Say the remark was saved only when siteRemarkQueued is true.
+If photos were already filed and the user adds a note later, call wa_append_site_remark with project_code and text (same nas folder as the assign).
 If media_caption already contains a site/project code (e.g. 2991, PJ-xxxx), resolve via wa_list_projects / wa_get_project and assign — do not ask the user to repeat obvious caption info.
 Only one concise reply per turn; do not repeat the legacy「收到照片请回覆专案编码」template.
 Do NOT use blocked tools; user-facing text goes in reply_zh (not wa_send_message).

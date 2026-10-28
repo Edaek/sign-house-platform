@@ -203,9 +203,15 @@ def wa_assign_pool_images(
     notify_whatsapp: bool = False,
     nas_folder_name: str = '',
     nas_parent_bucket: str = '',
+    remark: str = '',
 ) -> str:
-    """Assign pool images to an active WA project.
+    """Assign pool images to an active WA project and optionally write the site remark.
 
+    When the user includes a note (备注、備註、caption after the project code, e.g. 「歸到 1005 備註是 Test」),
+    pass that note as remark — the note text only, without the project code or the words 备注/備註.
+    remark is stored on the WA record and written to NAS as Photo/YYYY-MM-DD/PJ-<code>_YYYY-MM-DD.txt.
+    siteRemarkQueued in the result is true only when remark was accepted. Do not tell the user a
+    remark was saved when it is false.
     When notify_whatsapp is true, send a short 繁中 confirmation to group_id after assign.
     For duplicate NAS site folders, pass nas_folder_name (and optional nas_parent_bucket).
     """
@@ -221,7 +227,43 @@ def wa_assign_pool_images(
             body['nasFolderName'] = nas_folder_name.strip()
         if nas_parent_bucket.strip():
             body['nasParentBucket'] = nas_parent_bucket.strip()
+        if remark.strip():
+            body['remark'] = remark.strip()
         return json_result(_client().post('/wa/image-pool/assign', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_append_site_remark(
+    project_code: str,
+    text: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    phone: str = '',
+    day: str = '',
+) -> str:
+    """Append an on-site note to the NAS day remark file after photos were already filed.
+
+    Writes Photo/YYYY-MM-DD/PJ-<code>_YYYY-MM-DD.txt (same file as classify-time remarks).
+    Use when the user adds or corrects a note after wa_assign_pool_images, and that call
+    did not include remark. Pass the same nas_folder_name / nas_parent_bucket used at assign
+    when the site folder is not unique. text is the note only.
+    """
+    try:
+        body: dict[str, Any] = {
+            'projectCode': project_code.strip(),
+            'text': text.strip(),
+        }
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if phone.strip():
+            body['phone'] = phone.strip()
+        if day.strip():
+            body['day'] = day.strip()
+        return json_result(_client().post('/wa/image-pool/site-remark', json_body=body))
     except SignHouseApiError as exc:
         return str(exc)
 

@@ -89,10 +89,11 @@ def assign_images():
         proj['nasParentBucket'] = nas_bucket
     group_id = (data.get('groupId') or '').strip() or None
     notify_whatsapp = bool(data.get('notifyWhatsApp'))
+    remark = (data.get('remark') or '').strip() or None
 
     try:
         count = assign_images_to_project(
-            image_ids, proj, 'operator', group_id=group_id,
+            image_ids, proj, 'operator', remark=remark, group_id=group_id,
         )
     except Exception as exc:
         logger.exception('[ImagePool] Manual assign failed')
@@ -113,7 +114,46 @@ def assign_images():
         'assigned': count,
         'projectCode': project['code'],
         'whatsappNotified': bool(notify_whatsapp and group_id),
+        'remark': remark,
+        'siteRemarkQueued': bool(remark),
     })
+
+@wa_image_pool_bp.route('/site-remark', methods=['POST'])
+@jwt_required()
+def append_site_remark():
+    """Append a note to Photo/YYYY-MM-DD/<code>_date.txt after photos were filed."""
+    data = request.get_json() or {}
+    project_code = (data.get('projectCode') or data.get('project_code') or '').strip()
+    text = (data.get('text') or data.get('remark') or '').strip()
+    if not project_code or not text:
+        return jsonify({'error': 'projectCode and text required'}), 400
+
+    from app.services.nas_site_remark_service import (
+        append_site_remark_to_nas,
+        _merge_remark_into_latest_record,
+    )
+
+    nas_folder = (data.get('nasFolderName') or '').strip() or None
+    nas_bucket = (data.get('nasParentBucket') or '').strip() or None
+    day = (data.get('day') or '').strip() or None
+    phone = (data.get('phone') or '').strip() or None
+    group_id = (data.get('groupId') or '').strip() or None
+
+    result = append_site_remark_to_nas(
+        project_code,
+        text,
+        day_str=day,
+        preferred_folder_name=nas_folder,
+        preferred_parent_bucket=nas_bucket,
+    )
+    if not result.get('ok'):
+        return jsonify(result), 503
+
+    if phone and not result.get('skipped'):
+        _merge_remark_into_latest_record(phone, text, project_code, group_id=group_id)
+
+    return jsonify(result)
+
 
 @wa_image_pool_bp.route('/retry-download', methods=['POST'])
 @jwt_required()

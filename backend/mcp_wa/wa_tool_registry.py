@@ -37,6 +37,7 @@ DEFAULT_ALLOW = frozenset({
     'wa_list_projects',
     'wa_get_project',
     'wa_assign_pool_images',
+    'wa_append_site_remark',
     'wa_get_whatsapp_status',
     'wa_get_infra_status',
     'wa_browse_nas',
@@ -168,7 +169,31 @@ def _exec_wa_assign_pool_images(c: SignHouseClient, a: dict) -> str:
         body['nasFolderName'] = fn
     if pb:
         body['nasParentBucket'] = pb
+    remark = (a.get('remark') or '').strip()
+    if remark:
+        body['remark'] = remark
     return json_result(c.post('/wa/image-pool/assign', json_body=body))
+
+
+def _exec_wa_append_site_remark(c: SignHouseClient, a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    text = (a.get('text') or a.get('remark') or '').strip()
+    if not code or not text:
+        return 'Error: project_code and text required'
+    body: dict[str, Any] = {'projectCode': code, 'text': text}
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    phone = (a.get('phone') or '').strip()
+    day = (a.get('day') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    if phone:
+        body['phone'] = phone
+    if day:
+        body['day'] = day
+    return json_result(c.post('/wa/image-pool/site-remark', json_body=body))
 
 
 def _exec_wa_whoami(c: SignHouseClient, _a: dict) -> str:
@@ -273,6 +298,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_list_projects': _exec_wa_list_projects,
     'wa_get_project': _exec_wa_get_project,
     'wa_assign_pool_images': _exec_wa_assign_pool_images,
+    'wa_append_site_remark': _exec_wa_append_site_remark,
     'wa_whoami': _exec_wa_whoami,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
@@ -301,8 +327,13 @@ TOOL_SPECS: List[dict] = [
     {'name': 'wa_get_project', 'description': 'Get project by id', 'args_hint': '{project_id}'},
     {
         'name': 'wa_assign_pool_images',
-        'description': 'Assign pool images to project',
-        'args_hint': '{image_ids, project_id, nas_folder_name, group_id, notify_whatsapp}',
+        'description': 'Assign pool images to a project. Pass remark to save the note and write the NAS day .txt.',
+        'args_hint': '{image_ids, project_id, remark, nas_folder_name, nas_parent_bucket, group_id, notify_whatsapp}',
+    },
+    {
+        'name': 'wa_append_site_remark',
+        'description': 'Append a site note to Photo/YYYY-MM-DD/<code>_date.txt after photos were already filed.',
+        'args_hint': '{project_code, text, nas_folder_name, nas_parent_bucket, phone, day}',
     },
     {'name': 'wa_browse_nas', 'description': 'Browse NAS folders', 'args_hint': '{code}'},
     {'name': 'wa_whoami', 'description': 'Current API user', 'args_hint': '{}'},

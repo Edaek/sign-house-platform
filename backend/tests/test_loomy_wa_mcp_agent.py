@@ -11,6 +11,7 @@ class WaToolAllowlistTests(unittest.TestCase):
     def test_default_allows_nas_and_assign(self):
         self.assertTrue(is_tool_allowed('wa_get_nas_status'))
         self.assertTrue(is_tool_allowed('wa_assign_pool_images'))
+        self.assertTrue(is_tool_allowed('wa_append_site_remark'))
         self.assertTrue(is_tool_allowed('wa_list_pool_images'))
 
     def test_default_denies_send_and_sync(self):
@@ -22,6 +23,36 @@ class WaToolAllowlistTests(unittest.TestCase):
     def test_env_deny_overrides(self):
         # Re-import would cache; allowed_tools reads env each call
         self.assertFalse(is_tool_allowed('wa_get_nas_status'))
+
+    def test_assign_posts_site_remark(self):
+        from mcp_wa.wa_tool_registry import _exec_wa_append_site_remark, _exec_wa_assign_pool_images
+
+        client = MagicMock()
+        client.post.return_value = {'assigned': 1, 'siteRemarkQueued': True}
+        _exec_wa_assign_pool_images(client, {
+            'image_ids': ['a'],
+            'project_id': 'p',
+            'remark': 'Test',
+            'nas_folder_name': '1005',
+            'nas_parent_bucket': 'T-1000-2002',
+        })
+        body = client.post.call_args.kwargs['json_body']
+        self.assertEqual(body['remark'], 'Test')
+        self.assertEqual(body['nasFolderName'], '1005')
+        self.assertEqual(body['nasParentBucket'], 'T-1000-2002')
+        self.assertEqual(client.post.call_args.args[0], '/wa/image-pool/assign')
+
+        client.post.reset_mock()
+        client.post.return_value = {'ok': True, 'path': '/nas/1005/Photo/2026-10-28/PJ-1005_2026-10-28.txt'}
+        _exec_wa_append_site_remark(client, {
+            'project_code': '1005',
+            'text': '补一句',
+            'nas_folder_name': '1005',
+        })
+        body = client.post.call_args.kwargs['json_body']
+        self.assertEqual(body['projectCode'], '1005')
+        self.assertEqual(body['text'], '补一句')
+        self.assertEqual(client.post.call_args.args[0], '/wa/image-pool/site-remark')
 
     def test_execute_rejects_blocked_tool(self):
         client = MagicMock()

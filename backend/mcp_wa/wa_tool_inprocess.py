@@ -21,6 +21,7 @@ INPROCESS_TOOL_NAMES = frozenset({
     'wa_list_projects',
     'wa_get_project',
     'wa_assign_pool_images',
+    'wa_append_site_remark',
     'wa_list_keywords',
     'wa_get_record',
 })
@@ -184,8 +185,11 @@ def _exec_assign_pool(a: dict) -> str:
     group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
     notify = bool(a.get('notify_whatsapp') or a.get('notifyWhatsApp'))
     phone = (a.get('phone') or '').strip() or None
+    remark = (a.get('remark') or '').strip() or None
 
-    count = assign_images_to_project(ids, proj, 'loomy_agent', group_id=group_id)
+    count = assign_images_to_project(
+        ids, proj, 'loomy_agent', remark=remark, group_id=group_id,
+    )
     notified = False
     if notify and count > 0:
         from app.services.assignment_notify_service import schedule_assignment_confirmation
@@ -201,7 +205,33 @@ def _exec_assign_pool(a: dict) -> str:
         'assigned': count,
         'projectCode': project.get('code'),
         'whatsappNotified': notified,
+        'remark': remark,
+        'siteRemarkQueued': bool(remark),
     })
+
+
+def _exec_append_site_remark(a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    text = (a.get('text') or a.get('remark') or '').strip()
+    if not code or not text:
+        return 'Error: project_code and text required'
+    from app.services.nas_site_remark_service import (
+        append_site_remark_to_nas,
+        _merge_remark_into_latest_record,
+    )
+
+    result = append_site_remark_to_nas(
+        code,
+        text,
+        day_str=(a.get('day') or '').strip() or None,
+        preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+        preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+    )
+    phone = (a.get('phone') or '').strip()
+    group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
+    if phone and result.get('ok') and not result.get('skipped'):
+        _merge_remark_into_latest_record(phone, text, code, group_id=group_id)
+    return json_result(result)
 
 
 def _exec_list_keywords(_a: dict) -> str:
@@ -230,6 +260,7 @@ _HANDLERS = {
     'wa_list_projects': _exec_list_projects,
     'wa_get_project': _exec_get_project,
     'wa_assign_pool_images': _exec_assign_pool,
+    'wa_append_site_remark': _exec_append_site_remark,
     'wa_list_keywords': _exec_list_keywords,
     'wa_get_record': _exec_get_record,
 }
