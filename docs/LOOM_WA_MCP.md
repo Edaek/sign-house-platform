@@ -1,83 +1,111 @@
 # Loom（Signhouse Loomy）+ WA MCP
 
-## 目标架构（生产）
+## 目标架构（signhouseloomy + 工人 WhatsApp）
 
-Sign House 暴露 **`https://HOST/mcp/`**；Loom 用 **Bearer JWT** 调工具。依场景分两种 token 策略：
+**定案：Wakka 直接 push 到 Loom → signhouseloomy Turn；Sign House 提供 MCP/API 执行归类。**
 
-### A. 工人 WhatsApp（`WA_INBOUND_CLASSIFY_MODE=loom`）
+```
+工人 WhatsApp
+  → Wakka（Loom/NOps 上配置，非 Sign House Gateway）
+  → Loom Turn（signhouseloomy）
+  → org JWT → https://HOST/mcp/（wa_assign_pool_images、wa_list_projects…）
+  → 回复经 Loom 同一 Wakka session（或 MCP wa_send_*）
+```
 
-- 每条 WA inbound 会 **POST** 到 Loom（`LOOM_WA_INBOUND_NOTIFY_URL` 或 `LOOM_PLATFORM_CHAT_URL`）；Loom 跑 agent 后 **`reply_zh` + actions** 或仅用 MCP `wa_send_*` 回工人。
-- Sign House **不用**本地 Ollama 抢答。
-- Loom **Connections → wa** 配置 **一个** 长期 org token（服务账号，建议 `manager`），**工人不用**各自 JWT。
-- 工人是谁：由 Loom 调 MCP 时在工具参数里带 **`phone` / `group_id`**（来自 Gateway inbound），与 JWT 的 `sub` 无关。
-- 签发长期 token：`backend/scripts/mint_mcp_token.py --email … --role manager`（见 `.env.example` 的 `MCP_SERVICE_TOKEN_HOURS`）。
-- 服务器：**可不设** `SIGN_HOUSE_JWT` / `MCP_BOT_*`；设 **`MCP_AUTH_MODE=user`** 表示只接受 Loom 转发来的那一个 Bearer。
+| 组件 | 职责 |
+|------|------|
+| **Loom + Wakka** | 收/发 WA、Turn、大脑 |
+| **Sign House** | Mongo 图池/专案、NAS、**MCP 工具**（已写好的归类程序） |
+| **Sign House Gateway** | **不要**与 Loom 同号双开（`SIGNHOUSE_WA_GATEWAY=false`） |
+
+同一 WA 号码 **只能一个消费者**：要么 Gateway（旧方案 B），要么 Loom Wakka（方案 A）。
+
+---
+
+## Sign House 配置（demo / mini）
 
 ```env
 WA_INBOUND_CLASSIFY_MODE=loom
 MCP_AUTH_MODE=user
-LOOM_WA_INBOUND_NOTIFY_URL=https://loom.example.com/api/wa-inbound   # Jeff 提供
-LOOM_WA_INBOUND_NOTIFY_BEARER=…   # 可与 Loom MCP 同一条 org JWT
-SIGN_HOUSE_API_URL=http://127.0.0.1:5001/api
+SIGNHOUSE_WA_GATEWAY=false
+
+# 不要在本机再跑 Wakka Gateway（run.py 不要 --all，或 --all 且 GATEWAY=false 只起 API）
+# 可不设 LOOM_WA_INBOUND_NOTIFY_*（Wakka 已喂 Loom）
+# 不要设 SIGN_HOUSE_JWT / MCP_BOT_*（token 只在 Loom Connections → wa）
 ```
 
-未配置 notify URL 时启动日志会警告，WhatsApp **不会**自动回复。
+启动：
 
-### B. Mattermost 内勤（可选 per-user）
+```bash
+cd backend && source .venv/bin/activate
+export PYTHONPATH=.
+python run.py          # 仅 API + /mcp/
+# 或：python run.py --all  # 在 SIGNHOUSE_WA_GATEWAY=false 时同样只起 API
+```
 
-- 每位内勤在 Loom 绑 **自己的** JWT → `wa_whoami` 应对应本人 email，RBAC 与 Web 一致。
-- 见 [LOOM_PLATFORM_REQUIREMENTS.md](./LOOM_PLATFORM_REQUIREMENTS.md)（Loom 需按 MM 用户选 token）。
+Loom：
+
+1. **NOps / signhouseloomy**：配置 **Wakka**（URL、key、与 852… 会话一致）— 入口问 Horsy。  
+2. **Connections → wa**：`https://signhousedemo.cynthai.com/mcp/` + `mint_mcp_token.py` 的 org JWT。  
+3. 验证：WA **私聊**发一句 → Loom **Turns** 出现；再测群 / @ 规则。
 
 ---
 
-## 内勤 SOP（org token，WhatsApp / Loom 主路径）
+## 备选：Wakka 仍在 Sign House（Jeff 文档 Gateway 独占）
 
-1. 管理员执行 `mint_mcp_token.py`，创建或指定 **专用 MCP 账号**（如 `loom-wa@…`，role `manager`）。
-2. [loom.naton.io](https://loom.naton.io) → **Connections → wa** → 粘贴 **这一条** access_token → Connect。
-3. Demo/Coolify：`WA_INBOUND_CLASSIFY_MODE=loom`，`MCP_AUTH_MODE=user`，**不要**在服务器再配第二份 `SIGN_HOUSE_JWT`（避免双身份）。
-4. Loom 侧：`wa_whoami` 应显示 **服务账号** email；工人 WhatsApp 归类靠 `wa_assign_pool_images(phone=…)` 等参数。
+若暂时 **不能** 把 Wakka 移到 Loom：
+
+```env
+SIGNHOUSE_WA_GATEWAY=true
+LOOM_WA_INBOUND_NOTIFY_URL=…
+LOOM_WA_INBOUND_NOTIFY_BEARER=…
+python run.py --all
+```
+
+Sign House 收到 inbound 后 **POST** Loom。见 `LOOM_WA_PLATFORM_BRIDGE.md` 与 `loomy_loom_inbound_notify.py`。
+
+---
+
+## Token
+
+### 工人 WhatsApp（org token）
+
+- Loom **Connections → wa** 一条长期 JWT（`mint_mcp_token.py --role manager`）。  
+- 工人 **不需要** JWT；`phone` / `group_id` 在 MCP 工具参数里。
+
+### Mattermost 内勤（可选 per-user）
+
+- 每人自己的 JWT → `wa_whoami` 为本人。见 [LOOM_PLATFORM_REQUIREMENTS.md](./LOOM_PLATFORM_REQUIREMENTS.md)。
+
+---
+
+## 内勤 SOP（Wakka → Loom）
+
+1. Mint org token → Loom Connections → wa。  
+2. Horsy 在 signhouseloomy 接 Wakka。  
+3. Mini：`SIGNHOUSE_WA_GATEWAY=false`，`python run.py`。  
+4. MM 测 MCP；WA 测 Turns + 归类。
 
 ---
 
 ## 内勤 SOP（per-user，Mattermost）
 
-1. Sign House Web 登录（本人账号，建议 manager/admin 若需 NAS/keywords）。
-2. 复制 JWT：`auth-storage` → `state.token`，或 `/api/auth/login` 的 `access_token`。
-3. [loom.naton.io](https://loom.naton.io) → **My Connections → wa** → Your token → **Connect**。
-4. Mattermost `@signhouseloomy`：**「执行 wa_whoami，贴原文」** → 应看到你的 **email**。
-5. JWT 过期（默认约 24h）→ **本人**更新 Loom token，无需改 Coolify。
-
----
-
-## 自测后端
-
-```bash
-curl -s -m 5 https://signhouse-v3-mcp.it9up.com/api/auth/me
-# 401 + Missing Authorization Header（几秒内）
-```
+1. Sign House Web 登录 → JWT → Loom Connections → wa。  
+2. `@signhouseloomy` → `wa_whoami` 见本人 email。
 
 ---
 
 ## 过渡方案（deprecated）
 
-在 Loom **尚未**按 Mattermost 用户转发 Bearer 前，可临时使用服务器兜底。**不应**作为长期方案。
-
-| 方式 | 环境变量 | 说明 |
-|------|----------|------|
-| 手动 JWT | `SIGN_HOUSE_JWT` | 约 24h 需手换 |
-| 机器人自动登录 | `MCP_BOT_EMAIL` + `MCP_BOT_PASSWORD` | 全员同一身份 |
-
-此模式使用 **`MCP_AUTH_MODE=fallback`**（默认）。日志中 `auth_source=server_env` 或 `bot_login` 表示未走用户 Bearer。
+服务器 `SIGN_HOUSE_JWT` / `MCP_BOT_*`、`MCP_AUTH_MODE=fallback` — 见下文「迁移」。
 
 ---
 
-## 迁移到 per-user（Coolify）
+## 自测
 
-见 [LOOM_PLATFORM_REQUIREMENTS.md](./LOOM_PLATFORM_REQUIREMENTS.md) 验收 Loom 侧完成后：
-
-1. **阶段 2**：2～3 名内勤各绑 Loom token，`wa_whoami` 应返回 **不同** email（与兜底账号不同）。
-2. **阶段 3**：设 `MCP_AUTH_MODE=user`，**暂时保留**兜底 env；看 Runtime Logs 是否均为 `auth_source=user_bearer`。
-3. **阶段 4**：删除 `SIGN_HOUSE_JWT` / `MCP_BOT_*`，Redeploy；全员完成 Loom 绑定。
+```bash
+curl -s https://HOST/api/mcp/hosted-wa/status
+```
 
 ---
 
@@ -85,21 +113,12 @@ curl -s -m 5 https://signhouse-v3-mcp.it9up.com/api/auth/me
 
 | 现象 | 处理 |
 |------|------|
-| `MCP_AUTH_MODE=user` + 无 Bearer | 去 Loom Connections 绑 token |
-| Loom Connected 仍失败 | Personal Bot 未转发 token → 找 Loom 管理员（见 LOOM_PLATFORM_REQUIREMENTS） |
-| 401 / JWT hint | 重新登录 Sign House，更新 Loom token |
-| 无 Bearer 仍返回固定 admin | Coolify 仍设 `SIGN_HOUSE_JWT` 或 `MCP_BOT_*` 且 `MCP_AUTH_MODE=fallback` → 见迁移阶段 3/4 |
-| MCP URL 用 `/mcp` 无尾斜杠 | 用 **`/mcp/`**；旧部署曾 307 到 `http://…` 并丢 Authorization（Loom PR #32 + 服务端内部 rewrite） |
-
-自检（不暴露 token 值）：
-
-```bash
-curl -s https://signhouse-v3-mcp.it9up.com/api/mcp/hosted-wa/status
-# 看 mcpAuthMode、serverJwtFallbackConfigured、botLoginFallbackConfigured
-```
+| WA 无 Turn，Sign House 有 Gateway 日志 | Wakka 还在喂 Sign House；改 **Wakka→Loom** 并 `SIGNHOUSE_WA_GATEWAY=false` |
+| Turn 有，归类失败 | Loom Connections token、MCP URL 尾斜杠 `/mcp/` |
+| MM 通、WA 不通 | 群 JID / @ 规则；Loom Wakka 配置 |
 
 ---
 
 ## Cursor
 
-同 Loom：`Authorization: Bearer` 指向 `https://HOST/mcp/`。本地见 [backend/mcp_wa/README.md](../backend/mcp_wa/README.md)。
+`Authorization: Bearer` → `https://HOST/mcp/`。本地见 [backend/mcp_wa/README.md](../backend/mcp_wa/README.md).

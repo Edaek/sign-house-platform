@@ -131,16 +131,24 @@ def schedule_loom_runtime_inbound(
 
 
 def log_loom_runtime_notify_on_startup() -> None:
+    import os
+
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
     from app.services.loomy_loom_platform_bridge import loom_inbound_notify_url
 
     if not wa_loom_runtime_brain_enabled():
+        return
+    if os.environ.get('SIGNHOUSE_WA_GATEWAY', 'true').strip().lower() in ('0', 'false', 'no', 'off'):
+        logger.info(
+            '[LoomNotify] SIGNHOUSE_WA_GATEWAY=false — expect Wakka push → Loom Turn; '
+            'Sign House serves /mcp/ only (notify URL optional).',
+        )
         return
     url = loom_inbound_notify_url()
     if url:
         logger.info('[LoomNotify] WA inbound → Loom runtime at %s', url.split('?')[0][:120])
     else:
         logger.warning(
-            '[LoomNotify] WA_INBOUND_CLASSIFY_MODE=loom but LOOM_WA_INBOUND_NOTIFY_URL '
-            '(or LOOM_PLATFORM_CHAT_URL) is unset — WhatsApp will not auto-reply',
+            '[LoomNotify] Gateway on but LOOM_WA_INBOUND_NOTIFY_URL unset — '
+            'either set notify URL or use Wakka→Loom with SIGNHOUSE_WA_GATEWAY=false',
         )

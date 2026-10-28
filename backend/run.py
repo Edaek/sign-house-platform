@@ -67,9 +67,23 @@ def run_gateway():
     gateway_main()
 
 
+def _wa_gateway_enabled() -> bool:
+    raw = os.environ.get('SIGNHOUSE_WA_GATEWAY', 'true').strip().lower()
+    return raw not in ('0', 'false', 'no', 'off')
+
+
 def run_all():
     import threading
     import time
+
+    if not _wa_gateway_enabled():
+        print(
+            'SIGNHOUSE_WA_GATEWAY=false — WhatsApp inbound via Loom+Wakka; '
+            'Gateway not started (API + /mcp only).',
+            file=sys.stderr,
+        )
+        run_backend()
+        return
 
     host = app.config.get('HOST', '0.0.0.0')
     port = int(app.config.get('PORT', 5002))
