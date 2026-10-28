@@ -10,11 +10,15 @@ from app.services.nas_watcher_service import NasMountService
 
 
 class SiteRemarkFilenameTests(unittest.TestCase):
-    def test_pj_code_and_date(self):
-        self.assertEqual(site_remark_filename('PJ-3009', '2026-10-09'), 'PJ-3009_2026-10-09.txt')
-
-    def test_numeric_code_expanded(self):
-        self.assertTrue(site_remark_filename('3009', '2026-10-09').startswith('PJ-3009_'))
+    def test_folder_name_and_date(self):
+        self.assertEqual(
+            site_remark_filename(folder_name='1005', day_str='2026-10-28'),
+            '1005_2026-10-28.txt',
+        )
+        self.assertEqual(
+            site_remark_filename(folder_name='PJ-3010 Test', day_str='2026-10-09'),
+            'PJ-3010 Test_2026-10-09.txt',
+        )
 
 
 class NasLayoutTests(unittest.TestCase):
@@ -48,7 +52,9 @@ class NasLayoutTests(unittest.TestCase):
                 self.assertTrue(r1.get('ok'))
                 r2 = append_site_remark_to_nas('PJ-3010', '第二行备注', day_str='2026-10-09')
                 self.assertTrue(r2.get('ok'))
-            txt = Path(day_dir) / site_remark_filename('PJ-3010', '2026-10-09')
+            txt = Path(day_dir) / site_remark_filename(
+                folder_name='PJ-3010 Test', day_str='2026-10-09',
+            )
             content = txt.read_text(encoding='utf-8')
             self.assertIn('第一行备注', content)
             self.assertIn('第二行备注', content)
@@ -77,10 +83,14 @@ class NasLayoutTests(unittest.TestCase):
                     preferred_folder_name='PJ-3051',
                 )
                 self.assertTrue(r.get('ok'), r)
-            txt_bare = Path(day_bare) / site_remark_filename('PJ-3051', '2026-10-22')
+            txt_bare = Path(day_bare) / site_remark_filename(
+                folder_name='PJ-3051', day_str='2026-10-22',
+            )
             self.assertTrue(txt_bare.is_file(), 'txt should sit beside photos in bare folder')
             self.assertIn('驗樓用 Foamboard', txt_bare.read_text(encoding='utf-8'))
-            txt_long = long_name / 'Photo' / '2026-10-22' / site_remark_filename('PJ-3051', '2026-10-22')
+            txt_long = long_name / 'Photo' / '2026-10-22' / site_remark_filename(
+                folder_name='PJ-3051 唐人新村_Hanison (SC)', day_str='2026-10-22',
+            )
             self.assertFalse(txt_long.is_file(), 'must not write remark to the other physical folder')
 
 

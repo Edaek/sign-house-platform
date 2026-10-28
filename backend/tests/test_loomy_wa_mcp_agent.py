@@ -43,7 +43,7 @@ class WaToolAllowlistTests(unittest.TestCase):
         self.assertEqual(client.post.call_args.args[0], '/wa/image-pool/assign')
 
         client.post.reset_mock()
-        client.post.return_value = {'ok': True, 'path': '/nas/1005/Photo/2026-10-28/PJ-1005_2026-10-28.txt'}
+        client.post.return_value = {'ok': True, 'path': '/nas/1005/Photo/2026-10-28/1005_2026-10-28.txt'}
         _exec_wa_append_site_remark(client, {
             'project_code': '1005',
             'text': '补一句',

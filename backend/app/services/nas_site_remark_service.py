@@ -1,4 +1,4 @@
-"""NAS on-site layout: Photo/YYYY-MM-DD/ images + PJ-code_date.txt remarks."""
+"""NAS on-site layout: Photo/YYYY-MM-DD/ images + <site-folder>_<date>.txt remarks."""
 from __future__ import annotations
 
 import logging
@@ -19,12 +19,24 @@ def hk_today_str() -> str:
     return datetime.now(HK).date().isoformat()
 
 
-def site_remark_filename(project_code: str, day_str: Optional[str] = None) -> str:
-    code = (project_code or '').strip()
-    if not code.upper().startswith('PJ-') and code.isdigit():
-        code = f'PJ-{code}'
+def site_folder_name_from_day_dir(day_dir: str) -> str:
+    """…/<site-folder>/Photo/YYYY-MM-DD → site-folder basename."""
+    return os.path.basename(os.path.dirname(os.path.dirname(day_dir)))
+
+
+def site_remark_filename(
+    *,
+    folder_name: str,
+    day_str: Optional[str] = None,
+) -> str:
+    """Remark file name = NAS site folder label + date (no PJ- prefix normalization)."""
+    stem = (folder_name or '').strip()
+    for ch in '/\\:*?"<>|':
+        stem = stem.replace(ch, '_')
+    if not stem:
+        stem = 'site'
     day = day_str or hk_today_str()
-    return f'{code}_{day}.txt'
+    return f'{stem}_{day}.txt'
 
 
 def _remark_context_key(group_id: Optional[str], sender: str) -> str:
@@ -82,7 +94,7 @@ def append_site_remark_to_nas(
     preferred_folder_name: Optional[str] = None,
     preferred_parent_bucket: Optional[str] = None,
 ) -> dict:
-    """Append remark text to Photo/YYYY-MM-DD/PJ-xxx_YYYY-MM-DD.txt on NAS mount."""
+    """Append remark text to Photo/YYYY-MM-DD/<site-folder>_YYYY-MM-DD.txt on NAS mount."""
     body = (text or '').strip()
     if not body:
         return {'ok': True, 'skipped': True}
@@ -104,7 +116,8 @@ def append_site_remark_to_nas(
         )
         if not day_dir:
             return {'ok': False, 'error': 'project folder not found on NAS'}
-        fname = site_remark_filename(project_code, day)
+        folder_label = site_folder_name_from_day_dir(day_dir)
+        fname = site_remark_filename(folder_name=folder_label, day_str=day)
         path = os.path.join(day_dir, fname)
         prefix = ''
         if os.path.isfile(path) and os.path.getsize(path) > 0:

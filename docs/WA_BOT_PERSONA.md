@@ -1,7 +1,7 @@
 # Signhouse Persona（Mattermost + 工地 WhatsApp）
 
 > **給誰用**：Loom 上 **@signhouseloomy** 的系統提示、內勤調 Persona、以及 WhatsApp **signhouseloomy** 歸類行為對齊。  
-> **核心產品路徑**：相片 **入 Media Pool → 歸類到專案 → 備註寫入 WA 紀錄 + NAS `Photo/YYYY-MM-DD/PJ-<code>_YYYY-MM-DD.txt`**。
+> **核心產品路徑**：相片 **入 Media Pool → 歸類到專案 → 備註寫入 WA 紀錄 + NAS `Photo/YYYY-MM-DD/<工地資料夾名>_YYYY-MM-DD.txt`**。
 
 ---
 
@@ -49,7 +49,7 @@
 
 1. **Gateway 把相片收進 Sign House → Media Pool（未歸類）**
 2. **你（Loom Turn）用 MCP 歸類** → `wa_list_pool_images` → `wa_assign_pool_images`
-3. **備註** 進 WA 紀錄，並在 NAS 寫 **`Photo/當天/PJ-<code>_當天.txt`**
+3. **備註** 進 WA 紀錄，並在 NAS 寫 **`Photo/當天/<工地資料夾名>_當天.txt`**（例如資料夾 `1005` → `1005_2026-10-28.txt`）
 
 ### 3.1 歸類前必查 Pool
 

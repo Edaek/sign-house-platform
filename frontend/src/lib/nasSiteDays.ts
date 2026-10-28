@@ -16,7 +16,7 @@ export interface SiteDayGroup {
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i
 
-/** Site folder date from `Photo/YYYY-MM-DD/...` or `PJ-xxx_YYYY-MM-DD.txt`. */
+/** Site folder date from `Photo/YYYY-MM-DD/...` or `*_YYYY-MM-DD.txt` remark files. */
 export function siteDayFromNasPath(relativePath: string): string | null {
   const normalized = relativePath.replace(/\\/g, '/')
   const inPhoto = normalized.match(/Photo\/(\d{4}-\d{2}-\d{2})(?:\/|$)/i)
