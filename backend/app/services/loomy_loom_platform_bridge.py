@@ -77,8 +77,26 @@ def _session_id(ctx: Dict[str, Any]) -> str:
     return f'wa:p:{phone}'
 
 
+def loom_inbound_notify_url() -> str:
+    """Loom runtime webhook (inbound push). Falls back to LOOM_PLATFORM_CHAT_URL."""
+    return (
+        (os.environ.get('LOOM_WA_INBOUND_NOTIFY_URL') or '').strip()
+        or (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
+    )
+
+
+def wa_loom_runtime_notify_configured() -> bool:
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+    return wa_loom_runtime_brain_enabled() and bool(loom_inbound_notify_url())
+
+
 def _auth_headers() -> dict:
-    token = (os.environ.get('LOOM_PLATFORM_SERVICE_TOKEN') or os.environ.get('LOOM_PLATFORM_API_KEY') or '').strip()
+    token = (
+        (os.environ.get('LOOM_WA_INBOUND_NOTIFY_BEARER') or '').strip()
+        or (os.environ.get('LOOM_PLATFORM_SERVICE_TOKEN') or '').strip()
+        or (os.environ.get('LOOM_PLATFORM_API_KEY') or '').strip()
+    )
     if token.lower().startswith('bearer '):
         token = token[7:].strip()
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
@@ -224,9 +242,14 @@ def build_loom_classify_payload(ctx: Dict[str, Any]) -> dict:
 
     pending = get_pending_assignment(phone=phone, group_id=group_id)
 
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
     channel = (os.environ.get('LOOM_PLATFORM_WA_CHANNEL') or '').strip()
     if not channel:
-        channel = 'whatsapp_chat' if loom_platform_all_turns_enabled() else 'whatsapp_pool_classify'
+        if wa_loom_runtime_brain_enabled() or loom_platform_all_turns_enabled():
+            channel = 'whatsapp_chat'
+        else:
+            channel = 'whatsapp_pool_classify'
     intent = 'general' if channel == 'whatsapp_chat' else 'pool_classify'
 
     payload: Dict[str, Any] = {
@@ -253,6 +276,9 @@ def build_loom_classify_payload(ctx: Dict[str, Any]) -> dict:
         catalogue = fetch_project_catalogue_for_loom()
         payload['projectCatalogue'] = catalogue
         payload['context']['projectCatalogue'] = catalogue
+    if wa_loom_runtime_brain_enabled():
+        payload['event'] = 'wa_inbound'
+        payload['context']['event'] = 'wa_inbound'
     return payload
 
 
@@ -286,29 +312,14 @@ def _apply_loom_response_state(body: dict, ctx: Dict[str, Any], *, assigned: boo
         )
 
 
-def try_loom_platform_classify(ctx: Dict[str, Any]) -> Optional[str]:
-    """
-    POST to Loom platform chat API. Server uses LOOM_PLATFORM_SERVICE_TOKEN only.
-    Returns WhatsApp reply text, or None to fall back to local classify.
-    """
-    if not should_use_loom_platform(ctx):
-        return None
+def _loom_chat_timeout_s() -> float:
+    raw = (os.environ.get('LOOM_WA_INBOUND_NOTIFY_TIMEOUT_S') or '').strip()
+    if raw:
+        return float(raw)
+    return float(os.environ.get('LOOM_PLATFORM_CHAT_TIMEOUT_S', '90'))
 
-    url = (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
-    timeout = float(os.environ.get('LOOM_PLATFORM_CHAT_TIMEOUT_S', '90'))
-    payload = build_loom_classify_payload(ctx)
 
-    try:
-        resp = requests.post(url, headers=_auth_headers(), json=payload, timeout=timeout)
-        resp.raise_for_status()
-        body = resp.json() if resp.content else {}
-    except requests.Timeout:
-        logger.warning('[LoomPlatform] Chat API timed out after %ss', timeout)
-        return None if loom_platform_fallback_local() else 'Loom 歸類服務逾時，請稍後再試。'
-    except Exception:
-        logger.exception('[LoomPlatform] Chat API request failed')
-        return None if loom_platform_fallback_local() else 'Loom 歸類服務暫不可用。'
-
+def _process_loom_chat_response(body: Any, ctx: Dict[str, Any]) -> Optional[str]:
     if isinstance(body, str):
         try:
             body = json.loads(body)
@@ -350,5 +361,55 @@ def try_loom_platform_classify(ctx: Dict[str, Any]) -> Optional[str]:
 
     if actions:
         return '已依 Loom 指示處理歸類，請稍候確認訊息。'
+    return None
 
+
+def _post_loom_chat_turn(ctx: Dict[str, Any], *, runtime_inbound: bool) -> Optional[str]:
+    url = loom_inbound_notify_url() if runtime_inbound else (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
+    if not url:
+        return None
+    timeout = _loom_chat_timeout_s()
+    payload = build_loom_classify_payload(ctx)
+    try:
+        resp = requests.post(url, headers=_auth_headers(), json=payload, timeout=timeout)
+        resp.raise_for_status()
+        body = resp.json() if resp.content else {}
+    except requests.Timeout:
+        logger.warning('[LoomPlatform] Chat API timed out after %ss', timeout)
+        if runtime_inbound:
+            return None
+        return None if loom_platform_fallback_local() else 'Loom 歸類服務逾時，請稍後再試。'
+    except Exception:
+        logger.exception('[LoomPlatform] Chat API request failed')
+        if runtime_inbound:
+            return None
+        return None if loom_platform_fallback_local() else 'Loom 歸類服務暫不可用。'
+
+    reply = _process_loom_chat_response(body, ctx)
+    if reply:
+        return reply
+    if runtime_inbound:
+        return None
     return None if loom_platform_fallback_local() else 'Loom 未返回可發送的回覆。'
+
+
+def try_loom_inbound_turn(ctx: Dict[str, Any]) -> Optional[str]:
+    """Push WA inbound to Loom runtime (loom mode); return reply text for WhatsApp if any."""
+    if not wa_loom_runtime_notify_configured():
+        return None
+    if not (
+        (ctx.get('user_text') or ctx.get('caption') or '').strip()
+        or ctx.get('pool_ids')
+    ):
+        return None
+    return _post_loom_chat_turn(ctx, runtime_inbound=True)
+
+
+def try_loom_platform_classify(ctx: Dict[str, Any]) -> Optional[str]:
+    """
+    POST to Loom platform chat API (agent mode + LOOMY_WA_LOOM_PLATFORM_CLASSIFY).
+    Returns WhatsApp reply text, or None to fall back to local classify.
+    """
+    if not should_use_loom_platform(ctx):
+        return None
+    return _post_loom_chat_turn(ctx, runtime_inbound=False)

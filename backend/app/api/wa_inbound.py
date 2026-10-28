@@ -484,6 +484,12 @@ def _pool_receipt_body():
     return format_pool_receipt_template()
 
 
+def _schedule_loom_runtime_inbound(**kwargs):
+    from app.services.loomy_loom_inbound_notify import schedule_loom_runtime_inbound
+
+    return schedule_loom_runtime_inbound(flush_immediately=True, **kwargs)
+
+
 def _loomy_after_pool_intake(
     pool_ids,
     *,
@@ -500,6 +506,7 @@ def _loomy_after_pool_intake(
         loomy_wa_pool_ack,
         mattermost_pool_notify_enabled,
         wa_inbound_loomy_dispatch_enabled,
+        wa_loom_runtime_brain_enabled,
         wa_loomy_agent_enabled,
     )
 
@@ -602,6 +609,15 @@ def _loomy_after_pool_intake(
                 sender_name=sender_name,
                 flush_immediately=bool(cap and pool_ids),
             )
+    elif wa_loom_runtime_brain_enabled():
+        _schedule_loom_runtime_inbound(
+            phone=sender_phone,
+            group_id=group_id,
+            caption=cap,
+            pool_ids=pool_ids,
+            sender_name=sender_name,
+            quoted_msg_id=quote_msg_id,
+        )
 
     ack = loomy_wa_pool_ack()
     if ack:
@@ -1734,7 +1750,17 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     loom_classify_attempted=should_use_loom_platform(loom_ctx),
                 )
                 return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
-            return jsonify({'handled': True, 'type': 'loom_runtime_deferred'})
+            notified = _schedule_loom_runtime_inbound(
+                phone=sender,
+                user_text=trimmed_text,
+                sender_name=data.get('fromName') or data.get('senderName'),
+                quoted_msg_id=data.get('quotedMsgId'),
+                has_quoted=bool(data.get('hasQuotedMsg')),
+            )
+            return jsonify({
+                'handled': True,
+                'type': 'loom_runtime_notify_scheduled' if notified else 'loom_runtime_deferred',
+            })
 
     if not is_text:
         return jsonify({'handled': True, 'type': 'ignored_silent'})
@@ -1859,7 +1885,18 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                     loom_classify_attempted=should_use_loom_platform(loom_ctx),
                 )
                 return jsonify({'handled': True, 'type': 'loomy_wa_agent'})
-            return jsonify({'handled': True, 'type': 'loom_runtime_deferred'})
+            notified = _schedule_loom_runtime_inbound(
+                phone=sender,
+                group_id=group_id,
+                user_text=trimmed,
+                sender_name=from_name,
+                quoted_msg_id=data.get('quotedMsgId'),
+                has_quoted=bool(data.get('hasQuotedMsg')),
+            )
+            return jsonify({
+                'handled': True,
+                'type': 'loom_runtime_notify_scheduled' if notified else 'loom_runtime_deferred',
+            })
 
         if trimmed.lower() == 'projects':
             from app.services.project_number_match_service import (

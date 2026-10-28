@@ -296,5 +296,8 @@ def create_app(config_name=None):
         from mcp_wa.inprocess_client import log_jwt_guard_on_startup
 
         log_jwt_guard_on_startup()
+        from app.services.loomy_loom_inbound_notify import log_loom_runtime_notify_on_startup
+
+        log_loom_runtime_notify_on_startup()
 
     return app

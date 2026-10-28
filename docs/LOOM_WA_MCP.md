@@ -6,7 +6,8 @@ Sign House 暴露 **`https://HOST/mcp/`**；Loom 用 **Bearer JWT** 调工具。
 
 ### A. 工人 WhatsApp（`WA_INBOUND_CLASSIFY_MODE=loom`）
 
-- Sign House **只入库**，不在 inbound 里用 Ollama 抢答。
+- 每条 WA inbound 会 **POST** 到 Loom（`LOOM_WA_INBOUND_NOTIFY_URL` 或 `LOOM_PLATFORM_CHAT_URL`）；Loom 跑 agent 后 **`reply_zh` + actions** 或仅用 MCP `wa_send_*` 回工人。
+- Sign House **不用**本地 Ollama 抢答。
 - Loom **Connections → wa** 配置 **一个** 长期 org token（服务账号，建议 `manager`），**工人不用**各自 JWT。
 - 工人是谁：由 Loom 调 MCP 时在工具参数里带 **`phone` / `group_id`**（来自 Gateway inbound），与 JWT 的 `sub` 无关。
 - 签发长期 token：`backend/scripts/mint_mcp_token.py --email … --role manager`（见 `.env.example` 的 `MCP_SERVICE_TOKEN_HOURS`）。
@@ -15,8 +16,12 @@ Sign House 暴露 **`https://HOST/mcp/`**；Loom 用 **Bearer JWT** 调工具。
 ```env
 WA_INBOUND_CLASSIFY_MODE=loom
 MCP_AUTH_MODE=user
+LOOM_WA_INBOUND_NOTIFY_URL=https://loom.example.com/api/wa-inbound   # Jeff 提供
+LOOM_WA_INBOUND_NOTIFY_BEARER=…   # 可与 Loom MCP 同一条 org JWT
 SIGN_HOUSE_API_URL=http://127.0.0.1:5001/api
 ```
+
+未配置 notify URL 时启动日志会警告，WhatsApp **不会**自动回复。
 
 ### B. Mattermost 内勤（可选 per-user）
 
@@ -33,8 +38,6 @@ SIGN_HOUSE_API_URL=http://127.0.0.1:5001/api
 4. Loom 侧：`wa_whoami` 应显示 **服务账号** email；工人 WhatsApp 归类靠 `wa_assign_pool_images(phone=…)` 等参数。
 
 ---
-
-## 内勤 SOP（per-user，Mattermost）
 
 ## 内勤 SOP（per-user，Mattermost）
 
