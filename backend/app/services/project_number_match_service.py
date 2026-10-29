@@ -11,8 +11,10 @@ RANGE_FOLDER_RE = re.compile(r'^PJ-(\d+)-(\d+)$', re.I)
 # Any prefix + lo-hi by numeric range (T-1000-2000, S-1000-2000, …) — not site PJ-3026.
 GENERIC_RANGE_BUCKET_RE = re.compile(r'^(.+)-(\d+)-(\d+)$', re.I)
 PJ_NUM_RE = re.compile(r'^[Pp][Jj][-]?(\d{1,6})$')
-SITE_FOLDER_CODE_RE = re.compile(r'^PJ-(\d{1,6})(?:$|\s|_.*)', re.I)
-PROJECT_CODE_RE = re.compile(r'^PJ-(\d{1,6})$', re.I)
+PJ_NUM_SUFFIX_RE = re.compile(r'^[Pp][Jj][-]?(\d{1,6})([A-Za-z])\b')
+SITE_KEY_RE = re.compile(r'^(\d{1,6})([A-Za-z])?$')
+SITE_FOLDER_CODE_RE = re.compile(r'^PJ-(\d{1,6})([A-Za-z])?(?:$|\s|_.*)', re.I)
+PROJECT_CODE_RE = re.compile(r'^PJ-(\d{1,6})([A-Za-z])?$', re.I)
 NUMERIC_SITE_FOLDER_RE = re.compile(r'^\d{3,6}$')
 
 
@@ -130,15 +132,27 @@ def is_nas_bucket_dir_name(dir_name):
     return parse_range_bucket(dir_name) is not None
 
 
+def canonical_pj_code(digits: str, suffix: str = '') -> str:
+    suf = (suffix or '').upper()
+    return f'PJ-{digits}{suf}'
+
+
+def site_letter_suffix_from_project_code(code) -> str:
+    m = PROJECT_CODE_RE.match((code or '').strip())
+    if not m or not m.group(2):
+        return ''
+    return m.group(2).upper()
+
+
 def parse_site_folder_code(dir_name):
-    """NAS directory name → canonical PJ-xxxx (excludes range buckets)."""
+    """NAS directory name → canonical PJ-xxxx or PJ-xxxxA (excludes range buckets)."""
     name = (dir_name or '').strip()
     if not name or is_nas_bucket_dir_name(name):
         return None
     m = SITE_FOLDER_CODE_RE.match(name)
     if not m:
         return None
-    return f'PJ-{m.group(1)}'.upper()
+    return canonical_pj_code(m.group(1), m.group(2) or '').upper()
 
 
 def parse_nas_site_folder_code(dir_name):
@@ -159,6 +173,28 @@ def pj_number_from_project_code(code):
     if not m:
         return None
     return int(m.group(1))
+
+
+def classify_site_key_from_text(text) -> str | None:
+    """Classify token like 3014, 3014A, PJ-3014A → site key 3014 or 3014A (no PJ- prefix)."""
+    trimmed = ' '.join((text or '').strip().split())
+    if not trimmed:
+        return None
+    stripped = re.sub(r'^[^\d\w]+', '', trimmed, flags=re.UNICODE)
+    stripped = ' '.join(stripped.split())
+    m = PJ_NUM_SUFFIX_RE.match(stripped)
+    if m:
+        return f'{m.group(1)}{m.group(2).upper()}'
+    m = PJ_NUM_RE.match(stripped)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(\d{3,6})([A-Za-z])\b', stripped)
+    if m:
+        return f'{m.group(1)}{m.group(2).upper()}'
+    m = re.match(r'^(\d{3,6})\b', stripped)
+    if m:
+        return m.group(1)
+    return None
 
 
 def find_range_bucket_dir(watch_root, pj_number):
@@ -197,18 +233,10 @@ def primary_site_number(text):
 
 def loomy_primary_site_number(text):
     """Site number for WA pool captions — prefer leading digits, not longest in remark."""
-    trimmed = ' '.join((text or '').strip().split())
-    if not trimmed:
-        return None
-    stripped = re.sub(r'^[^\d\w]+', '', trimmed, flags=re.UNICODE)
-    stripped = ' '.join(stripped.split())
-    m = PJ_NUM_RE.match(stripped)
-    if m:
-        return m.group(1)
-    m = re.match(r'^(\d{3,6})\b', stripped)
-    if m:
-        return m.group(1)
-    return primary_site_number(trimmed)
+    key = classify_site_key_from_text(text)
+    if key:
+        return key
+    return primary_site_number(text)
 
 
 def _active_query(active_only=True):
@@ -262,16 +290,24 @@ def loomy_caption_site_matches_project(caption, project) -> bool:
     """Mongo-only: caption contains site number matching project code (no NAS I/O)."""
     if not project:
         return False
-    num = loomy_primary_site_number(caption or '')
-    if num is None:
+    key = classify_site_key_from_text(caption or '')
+    if key is None:
         return False
-    proj_num = pj_number_from_project_code((project.get('code') or '').strip())
-    if proj_num is None:
+    km = SITE_KEY_RE.match(key)
+    if not km:
         return False
-    try:
-        return int(proj_num) == int(num)
-    except (TypeError, ValueError):
-        return str(proj_num) == str(num)
+    code = (project.get('code') or '').strip().upper()
+    canonical = canonical_pj_code(km.group(1), km.group(2) or '').upper()
+    if km.group(2):
+        return code == canonical
+    if code == canonical:
+        return True
+    if code.isdigit() and int(code) == int(km.group(1)):
+        return True
+    if site_letter_suffix_from_project_code(code):
+        return False
+    pj_n = pj_number_from_project_code(code)
+    return pj_n is not None and pj_n == int(km.group(1))
 
 
 def wa_classify_display_label_mongo_only(proj, *, max_len=_WA_LABEL_MAX):
@@ -362,23 +398,36 @@ def list_wa_classify_target_projects(*, active_only=True, limit=None):
 
 
 def match_classify_targets_by_site_number(num_str, *, active_only=True):
-    """Strict site-number match for WA classify (1007 matches PJ-1007/1007, not PJ-3007)."""
-    if not num_str or not str(num_str).isdigit():
+    """Strict site match: 3014A → PJ-3014A only; 3014 → PJ-3014 not PJ-3014A."""
+    key = (num_str or '').strip().upper()
+    m = SITE_KEY_RE.match(key)
+    if not m:
         return []
+
+    digits, suffix = m.group(1), m.group(2) or ''
     try:
-        n = int(num_str)
+        n = int(digits)
     except ValueError:
         return []
 
     query = _active_query(active_only)
-    canonical = f'PJ-{n}'
+    canonical = canonical_pj_code(digits, suffix)
     hits = []
     seen = set()
+
+    if suffix:
+        for proj in mongo.db.wa_projects.find({**query, 'code': {'$regex': f'^{re.escape(canonical)}$', '$options': 'i'}}):
+            if is_wa_classify_target(proj):
+                hits.append((proj, 100))
+        return hits
+
     for proj in mongo.db.wa_projects.find(query):
         if not is_wa_classify_target(proj):
             continue
         pid = str(proj.get('_id', ''))
         code = (proj.get('code') or '').strip()
+        if site_letter_suffix_from_project_code(code):
+            continue
         score = None
         if code.isdigit() and int(code) == n:
             score = 100

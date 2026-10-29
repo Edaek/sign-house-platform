@@ -77,7 +77,7 @@
 
 | 能力 | 狀態 |
 |------|------|
-| **move** 搬已歸類圖到另一專案 | MCP 尚未提供；引導 Web 或內勤 |
+| **move** 已歸類 record 搬到另一專案 | **wa_move_record_to_project**（相片搬走；**只 strip 該 SUB 備註段落**，不整份刪舊 txt） |
 | **不歸類 / dismiss** 圖池 | 本地 agent 有；Loom MCP 白名單暫無 |
 | **skip** 追問 | 舊 inbound 有；Loom 路徑需 Web / record 流程 |
 | confirm / void / 刪池 / NAS 全量 sync | Web 或需二次確認 |
@@ -122,7 +122,7 @@ MCP: https://signhousedemo.cynthai.com/mcp/  凭据在 Loom Connections → sign
 2) 归类 wa_assign_pool_images：remark 只填备注正文（如「这是一条备注」），不要带专案号或「备注是」。多 NAS 文件夹要带 nas_folder_name / nas_parent_bucket。
 3) 只有 siteRemarkQueued 为 true 或 wa_append_site_remark 返回 ok 才说 txt 已写入。禁止用 wa_update_record_field 代替写 txt。
 4) 事后补备注用 wa_append_site_remark。
-5) 不要承诺 move/dismiss/skip/confirm/void/删池/NAS 全量 sync，除非工具存在且成功。
+5) 已归类整单搬专案用 wa_move_record_to_project；不要承诺 dismiss/skip/confirm/void/删池/NAS 全量 sync，除非工具成功。
 
 WhatsApp 回复用繁体、短。查完再答 NAS/专案/池状态。
 ```

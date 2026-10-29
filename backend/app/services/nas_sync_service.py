@@ -310,8 +310,11 @@ def _merge_site_folder_row(by_code: dict, row: dict) -> None:
 def _list_physical_site_folders_impl(site_code_or_num):
     """Uncached NAS scan for one site code — may hang on stale SMB."""
     from app.services.project_number_match_service import (
+        PROJECT_CODE_RE,
+        SITE_KEY_RE,
+        canonical_pj_code,
+        classify_site_key_from_text,
         pj_number_from_project_code,
-        primary_site_number,
     )
 
     raw = (site_code_or_num or '').strip()
@@ -320,12 +323,14 @@ def _list_physical_site_folders_impl(site_code_or_num):
     site_code = None
     if raw.upper().startswith('PJ-'):
         site_code = raw.upper()
-        if not pj_number_from_project_code(site_code):
+        if not PROJECT_CODE_RE.match(site_code):
             site_code = None
     if not site_code:
-        num = primary_site_number(raw)
-        if num is not None:
-            site_code = f'PJ-{num}'
+        key = classify_site_key_from_text(raw)
+        if key:
+            km = SITE_KEY_RE.match(key)
+            if km:
+                site_code = canonical_pj_code(km.group(1), km.group(2) or '').upper()
     if not site_code or not nas_mount.is_available():
         return []
 
@@ -872,6 +877,19 @@ def _delete_local_upload_paths(record, media_dir=None):
                 logger.warning('[NASSync] Local upload delete failed %s: %s', local, e)
 
 
+def delete_nas_paths(paths):
+    """Delete NAS files by absolute/share path; returns paths successfully removed."""
+    deleted = []
+    for p in paths or []:
+        path = (p or '').strip()
+        if not path:
+            continue
+        result = nas_mount.delete_path(path)
+        if result.get('ok'):
+            deleted.append(path)
+    return deleted
+
+
 def remove_nas_files_for_record(record):
     """Web → NAS: remove files on the share linked to a record."""
     paths = set()
@@ -880,12 +898,7 @@ def remove_nas_files_for_record(record):
     for p in record.get('nasPhotos') or []:
         if p:
             paths.add(p)
-    deleted = []
-    for p in paths:
-        result = nas_mount.delete_path(p)
-        if result.get('ok'):
-            deleted.append(p)
-    return deleted
+    return delete_nas_paths(list(paths))
 
 
 def delete_web_record(record, *, remove_nas=True, media_dir=None):

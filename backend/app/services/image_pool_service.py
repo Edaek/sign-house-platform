@@ -617,6 +617,10 @@ def assign_images_to_project(
     *,
     remark=None,
     group_id=None,
+    nas_delete_after_sync=None,
+    remark_override=None,
+    nas_relocate_remark_days=None,
+    nas_strip_remark_txt=None,
 ):
     """Assign pool images to a project. Creates a WA record with all photos."""
     object_ids = [ObjectId(i) for i in image_ids]
@@ -630,7 +634,7 @@ def assign_images_to_project(
 
     from app.services.message_parser_service import site_note_from_text
 
-    remark = (remark or '').strip() or None
+    remark = (remark_override or remark or '').strip() or None
     if remark:
         remark = site_note_from_text(remark) or remark.strip() or None
     if not remark:
@@ -763,6 +767,9 @@ def assign_images_to_project(
         _use_local = use_local
         _assign_day = assign_day
         _assign_remark = remark
+        _nas_delete_after = list(nas_delete_after_sync or [])
+        _reloc_remark_days = list(nas_relocate_remark_days or [])
+        _strip_remark = dict(nas_strip_remark_txt or {})
 
         def _bg_nas():
             with _app.app_context():
@@ -850,24 +857,56 @@ def assign_images_to_project(
                     if _assign_remark and (nas_photos or expected == 0):
                         from app.services.nas_site_remark_service import append_site_remark_to_nas
 
-                        remark_result = append_site_remark_to_nas(
-                            _project_code,
-                            _assign_remark,
-                            day_str=_assign_day,
-                            preferred_folder_name=_pref_folder,
-                            preferred_parent_bucket=_pref_bucket,
-                        )
-                        update['nasRemarkOk'] = bool(remark_result.get('ok') and not remark_result.get('skipped'))
-                        if remark_result.get('path'):
-                            update['nasRemarkPath'] = remark_result.get('path')
-                        if remark_result.get('error'):
-                            update['nasRemarkError'] = remark_result.get('error')
-                            logger.warning(
-                                '[ImagePool] Site remark txt not written: %s',
-                                remark_result.get('error'),
+                        remark_days = _reloc_remark_days or [_assign_day]
+                        last_remark_result = None
+                        for day in remark_days:
+                            remark_result = append_site_remark_to_nas(
+                                _project_code,
+                                _assign_remark,
+                                day_str=day,
+                                preferred_folder_name=_pref_folder,
+                                preferred_parent_bucket=_pref_bucket,
                             )
+                            last_remark_result = remark_result
+                        if last_remark_result:
+                            update['nasRemarkOk'] = bool(
+                                last_remark_result.get('ok') and not last_remark_result.get('skipped'),
+                            )
+                            if last_remark_result.get('path'):
+                                update['nasRemarkPath'] = last_remark_result.get('path')
+                            if last_remark_result.get('error'):
+                                update['nasRemarkError'] = last_remark_result.get('error')
+                                logger.warning(
+                                    '[ImagePool] Site remark txt not written: %s',
+                                    last_remark_result.get('error'),
+                                )
 
                     mongo.db.wa_records.update_one({'_id': _record_id}, {'$set': update})
+                    if (
+                        _nas_delete_after
+                        and nas_photos
+                        and sync_status in ('synced', 'partial')
+                    ):
+                        from app.services.nas_sync_service import delete_nas_paths
+
+                        photo_only = [
+                            p for p in _nas_delete_after
+                            if p and not str(p).lower().endswith('.txt')
+                        ]
+                        removed = delete_nas_paths(photo_only)
+                        if removed:
+                            logger.info(
+                                '[ImagePool] Relocated NAS: removed %d old photo path(s) after move',
+                                len(removed),
+                            )
+                        strip_text = (_strip_remark.get('text') or '').strip()
+                        strip_paths = _strip_remark.get('paths') or []
+                        if strip_text and strip_paths:
+                            from app.services.nas_site_remark_service import (
+                                strip_remark_from_txt_files,
+                            )
+
+                            strip_remark_from_txt_files(strip_paths, strip_text)
                     if expected > 0 and len(nas_photos) == 0:
                         phone = (_images[0].get('phone') or '').strip()
                         if phone:
@@ -949,7 +988,13 @@ def assign_all_unassigned(phone, project, assigned_by='user', *, remark=None):
     return count
 
 
-def move_images_to_project(image_ids, new_project, moved_by='user'):
+def move_images_to_project(
+    image_ids,
+    new_project,
+    moved_by='user',
+    *,
+    relocate_nas=False,
+):
     """Move already-assigned pool images to a different project.
 
     Steps:
@@ -959,12 +1004,50 @@ def move_images_to_project(image_ids, new_project, moved_by='user'):
     3. Call :func:`assign_images_to_project` to create a new wa_record under
        *new_project* and trigger NAS copy.
 
-    Returns ``{'moved': int, 'errors': list[str]}``.
+    Returns ``{'moved': int, 'errors': list[str], 'newRecordId': str|None}``.
     """
     object_ids = [ObjectId(i) for i in image_ids]
     images = list(mongo.db.pool_images.find({'_id': {'$in': object_ids}}))
     if not images:
-        return {'moved': 0, 'errors': ['找不到指定的照片']}
+        return {'moved': 0, 'errors': ['找不到指定的照片'], 'newRecordId': None}
+
+    nas_paths_to_remove = []
+    remark_bundle = {'text': '', 'days': [], 'oldTxtPaths': []}
+    old_records_for_remark = []
+    if relocate_nas:
+        seen_paths = set()
+        seen_recs = set()
+        for img in images:
+            for path in (img.get('nasPath'),):
+                if path and path not in seen_paths:
+                    seen_paths.add(path)
+                    nas_paths_to_remove.append(path)
+            old_record_id = img.get('recordId')
+            if old_record_id:
+                rid = old_record_id
+                if rid not in seen_recs:
+                    seen_recs.add(rid)
+                    rec = mongo.db.wa_records.find_one({'_id': rid})
+                    if rec:
+                        old_records_for_remark.append(rec)
+                rec = mongo.db.wa_records.find_one(
+                    {'_id': old_record_id},
+                    {'nasPhotos': 1, 'nasSourcePath': 1},
+                )
+                if rec:
+                    for p in rec.get('nasPhotos') or []:
+                        if p and p not in seen_paths:
+                            seen_paths.add(p)
+                            nas_paths_to_remove.append(p)
+                    sp = rec.get('nasSourcePath')
+                    if sp and sp not in seen_paths:
+                        seen_paths.add(sp)
+                        nas_paths_to_remove.append(sp)
+        from app.services.nas_site_remark_service import collect_move_remark_bundle
+
+        remark_bundle = collect_move_remark_bundle(
+            old_records_for_remark, nas_paths_to_remove,
+        )
 
     errors = []
     now = datetime.utcnow()
@@ -1008,12 +1091,79 @@ def move_images_to_project(image_ids, new_project, moved_by='user'):
         )
 
     reset_ids = [str(img['_id']) for img in images]
-    count = assign_images_to_project(reset_ids, new_project, moved_by)
+    move_remark = (remark_bundle.get('text') or '').strip() or None
+    reloc_days = remark_bundle.get('days') or []
+    strip_txt = (remark_bundle.get('stripText') or '').strip()
+    count = assign_images_to_project(
+        reset_ids,
+        new_project,
+        moved_by,
+        nas_delete_after_sync=nas_paths_to_remove if relocate_nas else None,
+        remark_override=move_remark if relocate_nas else None,
+        nas_relocate_remark_days=reloc_days if relocate_nas and move_remark else None,
+        nas_strip_remark_txt={
+            'text': strip_txt,
+            'paths': remark_bundle.get('oldTxtPaths') or [],
+        } if relocate_nas and strip_txt else None,
+    )
 
     if count == 0:
         errors.append('重新歸類失敗，請檢查照片狀態')
+        return {'moved': 0, 'errors': errors, 'newRecordId': None}
 
-    return {'moved': count, 'errors': errors}
+    new_rec = mongo.db.wa_records.find_one(
+        {'projectId': new_project['_id']},
+        sort=[('createdAt', -1)],
+        projection={'_id': 1, 'referenceNumber': 1},
+    )
+    new_record_id = str(new_rec['_id']) if new_rec else None
+    return {
+        'moved': count,
+        'errors': errors,
+        'newRecordId': new_record_id,
+        'newReferenceNumber': (new_rec or {}).get('referenceNumber'),
+        'nasRelocateQueued': bool(relocate_nas and nas_paths_to_remove),
+        'remarkRelocated': bool(relocate_nas and move_remark),
+        'remarkDays': remark_bundle.get('days') or [],
+    }
+
+
+def move_record_to_project(
+    record_ref,
+    new_project,
+    *,
+    moved_by='operator',
+    relocate_nas=True,
+):
+    """Move all pool images on a WA record to another project."""
+    from app.services.project_number_match_service import is_wa_classify_target
+
+    ref = (record_ref or '').strip()
+    if not ref:
+        return {'moved': 0, 'errors': ['record reference required'], 'newRecordId': None}
+
+    record = None
+    if ObjectId.is_valid(ref):
+        record = mongo.db.wa_records.find_one({'_id': ObjectId(ref)})
+    if not record:
+        record = mongo.db.wa_records.find_one({'referenceNumber': ref})
+    if not record:
+        return {'moved': 0, 'errors': [f'找不到紀錄 {ref}'], 'newRecordId': None}
+
+    if not new_project or not is_wa_classify_target(new_project):
+        return {'moved': 0, 'errors': ['目標專案無效或不可歸類'], 'newRecordId': None}
+
+    images = list(mongo.db.pool_images.find({'recordId': record['_id']}))
+    if not images:
+        return {'moved': 0, 'errors': ['此紀錄沒有關聯的圖池照片'], 'newRecordId': None}
+
+    image_ids = [str(img['_id']) for img in images]
+    return move_images_to_project(
+        image_ids,
+        new_project,
+        moved_by=moved_by,
+        relocate_nas=relocate_nas,
+    )
 
 
 def get_pool_stats():

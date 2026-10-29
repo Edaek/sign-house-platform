@@ -4,6 +4,7 @@ from bson import ObjectId
 from datetime import datetime
 from app import mongo
 from app.models import serialize_doc
+from app.utils.permissions import require_role
 
 wa_records_bp = Blueprint('wa_records', __name__)
 
@@ -149,6 +150,57 @@ def void_record(record_id):
          }}}
     )
     return jsonify({'message': 'Record voided'})
+
+@wa_records_bp.route('/<record_id>/move-project', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def move_record_project(record_id):
+    data = request.get_json() or {}
+    target_code = (data.get('targetProjectCode') or data.get('projectCode') or '').strip()
+    project_id = (data.get('projectId') or '').strip()
+    relocate_nas = data.get('relocateNas', True)
+    if isinstance(relocate_nas, str):
+        relocate_nas = relocate_nas.strip().lower() not in ('0', 'false', 'no')
+
+    project = None
+    if project_id:
+        project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
+    elif target_code:
+        import re
+
+        project = mongo.db.wa_projects.find_one({
+            'code': {'$regex': f'^{re.escape(target_code.strip())}$', '$options': 'i'},
+            'status': 'active',
+        })
+    if not project:
+        return jsonify({'error': 'Target project not found'}), 404
+
+    proj = dict(project)
+    nas_folder = (data.get('nasFolderName') or '').strip()
+    nas_bucket = (data.get('nasParentBucket') or '').strip()
+    if nas_folder:
+        proj['nasFolderName'] = nas_folder
+    if nas_bucket:
+        proj['nasParentBucket'] = nas_bucket
+
+    from app.services.image_pool_service import move_record_to_project
+
+    ref = (data.get('recordReference') or record_id or '').strip()
+    try:
+        result = move_record_to_project(
+            ref,
+            proj,
+            moved_by='operator',
+            relocate_nas=bool(relocate_nas),
+        )
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+    if result.get('moved', 0) <= 0:
+        return jsonify({**result, 'error': '; '.join(result.get('errors') or ['move failed'])}), 409
+
+    return jsonify({**result, 'targetProjectCode': proj.get('code')})
+
 
 @wa_records_bp.route('/<record_id>/request-info', methods=['POST'])
 @jwt_required()

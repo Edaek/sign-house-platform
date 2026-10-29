@@ -12,6 +12,7 @@ class WaToolAllowlistTests(unittest.TestCase):
         self.assertTrue(is_tool_allowed('wa_get_nas_status'))
         self.assertTrue(is_tool_allowed('wa_assign_pool_images'))
         self.assertTrue(is_tool_allowed('wa_append_site_remark'))
+        self.assertTrue(is_tool_allowed('wa_move_record_to_project'))
         self.assertTrue(is_tool_allowed('wa_list_pool_images'))
 
     def test_default_denies_send_and_sync(self):

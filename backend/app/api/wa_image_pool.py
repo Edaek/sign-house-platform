@@ -1,4 +1,5 @@
 import logging
+import re
 
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
@@ -6,6 +7,7 @@ from bson import ObjectId
 from datetime import datetime
 from app import mongo
 from app.models import serialize_doc
+from app.utils.permissions import require_role
 
 logger = logging.getLogger(__name__)
 wa_image_pool_bp = Blueprint('wa_image_pool', __name__)
@@ -153,6 +155,72 @@ def append_site_remark():
         _merge_remark_into_latest_record(phone, text, project_code, group_id=group_id)
 
     return jsonify(result)
+
+
+@wa_image_pool_bp.route('/move', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def move_images():
+    """Move assigned pool images (or whole record) to another project."""
+    data = request.get_json() or {}
+    record_ref = (data.get('recordReference') or data.get('recordId') or '').strip()
+    image_ids = data.get('imageIds') or data.get('poolImageIds') or []
+    target_code = (data.get('targetProjectCode') or data.get('projectCode') or '').strip()
+    project_id = (data.get('projectId') or '').strip()
+    relocate_nas = data.get('relocateNas', True)
+    if isinstance(relocate_nas, str):
+        relocate_nas = relocate_nas.strip().lower() not in ('0', 'false', 'no')
+
+    project = None
+    if project_id:
+        project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
+    elif target_code:
+        code = target_code.strip()
+        project = mongo.db.wa_projects.find_one({
+            'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+            'status': 'active',
+        })
+    if not project:
+        return jsonify({'error': 'Target project not found'}), 404
+
+    proj = dict(project)
+    nas_folder = (data.get('nasFolderName') or '').strip()
+    nas_bucket = (data.get('nasParentBucket') or '').strip()
+    if nas_folder:
+        proj['nasFolderName'] = nas_folder
+    if nas_bucket:
+        proj['nasParentBucket'] = nas_bucket
+
+    from app.services.image_pool_service import move_images_to_project, move_record_to_project
+
+    try:
+        if record_ref:
+            result = move_record_to_project(
+                record_ref,
+                proj,
+                moved_by='operator',
+                relocate_nas=bool(relocate_nas),
+            )
+        elif image_ids:
+            result = move_images_to_project(
+                image_ids,
+                proj,
+                moved_by='operator',
+                relocate_nas=bool(relocate_nas),
+            )
+        else:
+            return jsonify({'error': 'recordReference or imageIds required'}), 400
+    except Exception as exc:
+        logger.exception('[ImagePool] Move failed')
+        return jsonify({'error': str(exc)}), 500
+
+    if result.get('moved', 0) <= 0:
+        return jsonify({**result, 'error': '; '.join(result.get('errors') or ['move failed'])}), 409
+
+    return jsonify({
+        **result,
+        'targetProjectCode': proj.get('code'),
+    })
 
 
 @wa_image_pool_bp.route('/retry-download', methods=['POST'])

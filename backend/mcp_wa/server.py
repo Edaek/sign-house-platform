@@ -336,10 +336,46 @@ def wa_create_template(type_name: str, fields: list[dict[str, Any]] | None = Non
 
 
 @mcp.tool()
-def wa_create_project(code: str, location: str = '', stage: str = 'active', parent_bucket_code: str = '') -> str:
-    """Create WA project (admin/manager). Creates NAS folder when mount is available."""
+def wa_move_record_to_project(
+    record_reference: str,
+    project_code: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    relocate_nas: bool = True,
+) -> str:
+    """Move an already-filed WA record (all pool photos) to another project.
+
+    record_reference is SUB-xxxx-xxx or Mongo record id. Removes NAS photo + day .txt files
+    from the old site after copy succeeds; merges remark text into the new project's
+    Photo/<day>/<folder>_<day>.txt (relocate_nas=true).
+    Target must exist in wa_projects (e.g. PJ-3014A). Pass nas_folder_name when duplicate folders.
+    """
     try:
-        body: dict = {'code': code, 'location': location, 'stage': stage}
+        body: dict[str, Any] = {
+            'recordReference': record_reference.strip(),
+            'targetProjectCode': project_code.strip(),
+            'relocateNas': bool(relocate_nas),
+        }
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        return json_result(_client().post('/wa/image-pool/move', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_create_project(
+    code: str,
+    name: str,
+    location: str = '',
+    stage: str = 'active',
+    parent_bucket_code: str = '',
+) -> str:
+    """Create WA project (admin/manager). name is required (use NAS folder display name)."""
+    try:
+        body: dict = {'code': code, 'name': name, 'location': location, 'stage': stage}
         if parent_bucket_code.strip():
             body['parentBucketCode'] = parent_bucket_code.strip()
         return json_result(_client().post('/wa/admin/projects', json_body=body))

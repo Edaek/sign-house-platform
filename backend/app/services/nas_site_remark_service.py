@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -22,6 +23,143 @@ def hk_today_str() -> str:
 def site_folder_name_from_day_dir(day_dir: str) -> str:
     """…/<site-folder>/Photo/YYYY-MM-DD → site-folder basename."""
     return os.path.basename(os.path.dirname(os.path.dirname(day_dir)))
+
+
+def site_day_from_nas_path(relative_path: str) -> Optional[str]:
+    normalized = (relative_path or '').replace('\\', '/')
+    in_photo = re.search(r'/Photo/(\d{4}-\d{2}-\d{2})(?:/|$)', normalized, re.I)
+    if in_photo:
+        return in_photo.group(1)
+    in_txt = re.search(r'_(\d{4}-\d{2}-\d{2})\.txt$', normalized, re.I)
+    if in_txt:
+        return in_txt.group(1)
+    return None
+
+
+def read_remark_txt_file(path: str) -> str:
+    p = (path or '').strip()
+    if not p or not os.path.isfile(p):
+        return ''
+    try:
+        with open(p, encoding='utf-8') as fh:
+            return fh.read().strip()
+    except OSError:
+        return ''
+
+
+def remark_txt_paths_for_nas_photos(nas_photo_paths) -> list[str]:
+    """Photo paths under Photo/YYYY-MM-DD/ → sibling day remark txt paths."""
+    out = []
+    seen = set()
+    for photo_path in nas_photo_paths or []:
+        p = (photo_path or '').strip()
+        if not p:
+            continue
+        day = site_day_from_nas_path(p)
+        if not day:
+            continue
+        day_dir = os.path.dirname(p)
+        if not day_dir or not os.path.isdir(day_dir):
+            continue
+        folder = site_folder_name_from_day_dir(day_dir)
+        txt = os.path.join(day_dir, site_remark_filename(folder_name=folder, day_str=day))
+        if txt not in seen:
+            seen.add(txt)
+            out.append(txt)
+    return out
+
+
+def merge_remark_texts(*parts: str) -> str:
+    blocks = []
+    seen_norm = set()
+    for part in parts:
+        t = (part or '').strip()
+        if not t:
+            continue
+        key = t.casefold()
+        if key in seen_norm:
+            continue
+        seen_norm.add(key)
+        blocks.append(t)
+    return '\n\n'.join(blocks)
+
+
+def _remark_paragraphs(text: str) -> list[str]:
+    return [p.strip() for p in re.split(r'\n\s*\n', (text or '').strip()) if p.strip()]
+
+
+def strip_remark_from_txt_file(path: str, text_to_remove: str) -> dict:
+    """Remove matching remark paragraph(s) from a day txt; delete file only if empty."""
+    p = (path or '').strip()
+    remove = (text_to_remove or '').strip()
+    if not p or not remove:
+        return {'ok': True, 'skipped': True}
+    if not os.path.isfile(p):
+        return {'ok': True, 'skipped': True}
+
+    current = read_remark_txt_file(p)
+    if not current:
+        return {'ok': True, 'skipped': True}
+
+    remove_keys = {b.casefold() for b in _remark_paragraphs(remove)}
+    remove_keys.add(remove.casefold())
+    kept = [para for para in _remark_paragraphs(current) if para.casefold() not in remove_keys]
+
+    if not kept and remove.casefold() in current.casefold():
+        trimmed = current
+        for block in _remark_paragraphs(remove):
+            trimmed = re.sub(re.escape(block), '', trimmed, flags=re.I).strip()
+        trimmed = re.sub(r'\n{3,}', '\n\n', trimmed).strip()
+        if trimmed:
+            kept = _remark_paragraphs(trimmed)
+
+    try:
+        if not kept:
+            os.remove(p)
+            logger.info('[NAS] Removed empty remark txt after strip → %s', p)
+            return {'ok': True, 'removedFile': True, 'path': p}
+        new_body = '\n\n'.join(kept) + '\n'
+        with open(p, 'w', encoding='utf-8') as fh:
+            fh.write(new_body)
+        logger.info('[NAS] Stripped remark from txt → %s', p)
+        return {'ok': True, 'path': p, 'removedFile': False}
+    except OSError as exc:
+        logger.error('[NAS] Strip remark txt failed %s: %s', p, exc)
+        return {'ok': False, 'error': str(exc), 'path': p}
+
+
+def strip_remark_from_txt_files(paths, text_to_remove: str) -> list[dict]:
+    return [strip_remark_from_txt_file(p, text_to_remove) for p in (paths or [])]
+
+
+def collect_move_remark_bundle(old_records, nas_photo_paths) -> dict:
+    """Gather remark to move (record-scoped) and old NAS txt paths to strip — not whole-file delete."""
+    txt_paths = remark_txt_paths_for_nas_photos(nas_photo_paths)
+    for rec in old_records or []:
+        rp = (rec.get('nasRemarkPath') or '').strip()
+        if rp and rp not in txt_paths:
+            txt_paths.append(rp)
+    record_texts = []
+    try:
+        from app.services.image_pool_service import resolve_record_remark
+
+        for rec in old_records or []:
+            record_texts.append(resolve_record_remark(rec))
+    except Exception:
+        pass
+    text_to_move = merge_remark_texts(*record_texts)
+    days = []
+    for p in nas_photo_paths or []:
+        d = site_day_from_nas_path(p)
+        if d and d not in days:
+            days.append(d)
+    days.sort()
+    return {
+        'text': text_to_move,
+        'stripText': text_to_move,
+        'days': days,
+        'oldTxtPaths': txt_paths,
+    }
 
 
 def site_remark_filename(

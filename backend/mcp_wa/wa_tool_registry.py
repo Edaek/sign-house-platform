@@ -38,6 +38,7 @@ DEFAULT_ALLOW = frozenset({
     'wa_get_project',
     'wa_assign_pool_images',
     'wa_append_site_remark',
+    'wa_move_record_to_project',
     'wa_get_whatsapp_status',
     'wa_get_infra_status',
     'wa_browse_nas',
@@ -175,6 +176,25 @@ def _exec_wa_assign_pool_images(c: SignHouseClient, a: dict) -> str:
     return json_result(c.post('/wa/image-pool/assign', json_body=body))
 
 
+def _exec_wa_move_record_to_project(c: SignHouseClient, a: dict) -> str:
+    ref = (a.get('record_reference') or a.get('recordReference') or a.get('record_id') or '').strip()
+    code = (a.get('project_code') or a.get('projectCode') or a.get('target_project_code') or '').strip()
+    if not ref or not code:
+        return 'Error: record_reference and project_code required'
+    body: dict[str, Any] = {
+        'recordReference': ref,
+        'targetProjectCode': code,
+        'relocateNas': a.get('relocate_nas', a.get('relocateNas', True)),
+    }
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    return json_result(c.post('/wa/image-pool/move', json_body=body))
+
+
 def _exec_wa_append_site_remark(c: SignHouseClient, a: dict) -> str:
     code = (a.get('project_code') or a.get('projectCode') or '').strip()
     text = (a.get('text') or a.get('remark') or '').strip()
@@ -299,6 +319,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_get_project': _exec_wa_get_project,
     'wa_assign_pool_images': _exec_wa_assign_pool_images,
     'wa_append_site_remark': _exec_wa_append_site_remark,
+    'wa_move_record_to_project': _exec_wa_move_record_to_project,
     'wa_whoami': _exec_wa_whoami,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
@@ -334,6 +355,11 @@ TOOL_SPECS: List[dict] = [
         'name': 'wa_append_site_remark',
         'description': 'Append a site note to Photo/YYYY-MM-DD/<code>_date.txt after photos were already filed.',
         'args_hint': '{project_code, text, nas_folder_name, nas_parent_bucket, phone, day}',
+    },
+    {
+        'name': 'wa_move_record_to_project',
+        'description': 'Move a filed record (SUB-… or id) and all its photos to another project; relocates NAS files.',
+        'args_hint': '{record_reference, project_code, nas_folder_name, nas_parent_bucket, relocate_nas}',
     },
     {'name': 'wa_browse_nas', 'description': 'Browse NAS folders', 'args_hint': '{code}'},
     {'name': 'wa_whoami', 'description': 'Current API user', 'args_hint': '{}'},
