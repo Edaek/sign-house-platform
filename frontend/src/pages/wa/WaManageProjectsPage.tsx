@@ -152,8 +152,10 @@ export default function WaManageProjectsPage() {
     setCreating(true)
     const form = new FormData(e.currentTarget)
     try {
+      const code = (form.get('code') as string) || ''
       await createProject({
-        code: form.get('code') as string,
+        code,
+        name: code,
         location: (form.get('location') as string) || undefined,
         stage: form.get('stage') as string,
         ...(createParentFolder ? { parentBucketCode: createParentFolder } : {}),

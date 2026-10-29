@@ -88,7 +88,7 @@ def create_project():
     )
 
     code = normalize_code(data.get('code'))
-    name = normalize_name(data.get('name'))
+    name = normalize_name(data.get('name') or data.get('code'))
     if not code:
         return jsonify({'error': 'Project code is required'}), 400
     if not name:
@@ -101,6 +101,17 @@ def create_project():
     name_err = assert_name_available(name)
     if name_err:
         return jsonify({'error': name_err}), 409
+
+    from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+    parent_raw = (
+        data.get('parentBucketCode')
+        or data.get('nasParentBucket')
+        or data.get('nasParentFolder')
+        or ''
+    ).strip()
+    parent_bucket = nas_path_from_web_bucket(parent_raw) if parent_raw else None
+    nas_folder_name = (data.get('nasFolderName') or name or code).strip()
 
     now = datetime.utcnow()
     doc = {
@@ -115,6 +126,10 @@ def create_project():
         'createdAt': now,
         'updatedAt': now,
     }
+    if parent_bucket:
+        doc['nasParentBucket'] = parent_bucket
+    if nas_folder_name:
+        doc['nasFolderName'] = nas_folder_name
     try:
         insert = mongo.db.wa_projects.insert_one(doc)
     except DuplicateKeyError as exc:
@@ -129,15 +144,46 @@ def create_project():
 
     from app.services.nas_watcher_service import nas_mount
     if nas_mount.is_available():
-        nas_result = nas_mount.create_folder(code)
+        nas_result = nas_mount.create_folder(
+            code,
+            parent_bucket_code=parent_bucket,
+            skip_deep_resolve=True,
+        )
         if nas_result.get('ok'):
             mongo.db.wa_projects.update_one(
                 {'_id': insert.inserted_id},
-                {'$set': {'nasFolder': nas_result['path']}},
+                {'$set': {
+                    'nasFolder': nas_result['path'],
+                    'nasImportedAt': now,
+                }},
             )
             doc['nasFolder'] = nas_result['path']
+            doc['nasImportedAt'] = now
 
     return jsonify(serialize_doc(doc)), 201
+
+
+@wa_admin_bp.route('/projects/<project_id>', methods=['PATCH'])
+@jwt_required()
+@require_role('admin', 'manager')
+def patch_project(project_id):
+    from app.services.nas_sync_service import update_web_project
+
+    try:
+        oid = ObjectId(project_id)
+    except Exception:
+        return jsonify({'error': 'Invalid project id'}), 400
+    project = mongo.db.wa_projects.find_one({'_id': oid, 'status': {'$ne': 'archived'}})
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    data = request.get_json(silent=True) or {}
+    sync_nas = bool(data.get('syncNas'))
+    result = update_web_project(project, data, sync_nas=sync_nas)
+    if not result.get('ok'):
+        return jsonify({'error': result.get('error') or 'Update failed'}), 400
+    updated = result.get('project') or project
+    return jsonify(serialize_doc(updated))
 
 
 @wa_admin_bp.route('/projects/<project_id>', methods=['DELETE'])

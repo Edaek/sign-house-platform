@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useWaStore, type WaProject } from '../../store/waStore'
 import {
   buildProjectBuckets,
+  mergeProjectsWithNasRootBuckets,
   bucketSiteProjects,
   bucketFolderLabel,
   filterWaProjects,
@@ -73,6 +74,7 @@ export default function WaProjectsPage() {
     fetchNasStatus,
     syncNasFromDrive,
     fetchNasBucketSites,
+    fetchNasRootBuckets,
   } = useWaStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedBucketCode = useMemo(() => {
@@ -99,11 +101,28 @@ export default function WaProjectsPage() {
   const [bucketSitesHint, setBucketSitesHint] = useState<string | null>(null)
   /** Physical NAS folder count per bucket (from shared drive scan, not MongoDB). */
   const [nasFolderCountsByBucket, setNasFolderCountsByBucket] = useState<Record<string, number>>({})
+  const [nasRootBuckets, setNasRootBuckets] = useState<
+    Array<{ bucketCode: string; nasName: string; childCount?: number }>
+  >([])
 
   useEffect(() => {
     fetchProjects()
     fetchNasStatus()
   }, [fetchProjects, fetchNasStatus])
+
+  useEffect(() => {
+    if (!nasStatus?.connected) {
+      setNasRootBuckets([])
+      return
+    }
+    let cancelled = false
+    fetchNasRootBuckets().then((rows) => {
+      if (!cancelled) setNasRootBuckets(rows)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [nasStatus?.connected, fetchNasRootBuckets, projects.length, syncingNas])
 
   useEffect(() => {
     if (!nasStatus?.connected) return
@@ -112,9 +131,16 @@ export default function WaProjectsPage() {
     const timer = window.setInterval(() => {
       fetchProjects()
       fetchNasStatus()
+      fetchNasRootBuckets().then(setNasRootBuckets)
     }, ms)
     return () => window.clearInterval(timer)
-  }, [nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjects, fetchNasStatus])
+  }, [
+    nasStatus?.connected,
+    nasStatus?.autoSyncIntervalSec,
+    fetchProjects,
+    fetchNasStatus,
+    fetchNasRootBuckets,
+  ])
 
   useEffect(() => {
     if (!selectedBucketCode || !nasStatus?.connected) {
@@ -123,7 +149,7 @@ export default function WaProjectsPage() {
       setBucketSitesHint(null)
       return
     }
-    const nasBucket = bucketFolderLabel(selectedBucketCode)
+    const nasBucket = selectedBucketCode
     let cancelled = false
     let sitesShown = 0
     const applySites = (sites: WaProject[], staleFromCache: boolean, hint?: string) => {
@@ -195,7 +221,16 @@ export default function WaProjectsPage() {
     }
   }, [selectedBucketCode, nasStatus?.connected, fetchNasBucketSites, fetchProjects])
 
-  const buckets = useMemo(() => buildProjectBuckets(projects), [projects])
+  const buckets = useMemo(
+    () => mergeProjectsWithNasRootBuckets(projects, nasRootBuckets).buckets,
+    [projects, nasRootBuckets],
+  )
+
+  useEffect(() => {
+    const { nasFolderCounts } = mergeProjectsWithNasRootBuckets(projects, nasRootBuckets)
+    if (Object.keys(nasFolderCounts).length === 0) return
+    setNasFolderCountsByBucket((prev) => ({ ...prev, ...nasFolderCounts }))
+  }, [projects, nasRootBuckets])
 
   useEffect(() => {
     if (!selectedBucketCode || loading || projects.length === 0) return

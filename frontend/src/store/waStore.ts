@@ -195,6 +195,9 @@ interface WaStore {
     updated: number
     scanned: number
   }>
+  fetchNasRootBuckets: () => Promise<
+    Array<{ bucketCode: string; nasName: string; childCount?: number }>
+  >
   fetchNasBucketSites: (
     bucketCode: string,
     opts?: { cacheOnly?: boolean; liveScan?: boolean; timeoutMs?: number },
@@ -205,6 +208,7 @@ interface WaStore {
   }>
   createProject: (data: {
     code: string
+    name?: string
     location?: string
     stage: string
     parentBucketCode?: string
@@ -451,13 +455,26 @@ export const useWaStore = create<WaStore>((set) => ({
     }
   },
 
+  fetchNasRootBuckets: async () => {
+    try {
+      const { data } = await api.get('/wa/projects/nas-root-buckets', { timeout: 45000 })
+      if (data.ok === false) return []
+      return (data.buckets || []) as Array<{
+        bucketCode: string
+        nasName: string
+        childCount?: number
+      }>
+    } catch {
+      return []
+    }
+  },
+
   fetchNasBucketSites: async (bucketCode, opts) => {
     const { data } = await api.get('/wa/projects/nas-bucket-sites', {
       params: {
         bucket: bucketCode,
-        sync: '0',
+        ...(opts?.liveScan ? { liveScan: '1' } : { sync: '0' }),
         ...(opts?.cacheOnly ? { cacheOnly: '1' } : {}),
-        ...(opts?.liveScan ? { liveScan: '1' } : {}),
       },
       timeout: opts?.timeoutMs ?? 60000,
     })

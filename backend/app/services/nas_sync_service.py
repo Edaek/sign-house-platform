@@ -29,6 +29,17 @@ _NAS_INDEX_TTL_S = 90
 _nas_sync_lock = threading.Lock()
 
 
+def _bucket_child_site_code(child: dict) -> str | None:
+    """Site project code for a direct child of a NAS bucket (PJ-xxxx or plain folder name)."""
+    site_code = (child.get('code') or '').strip()
+    folder_name = (child.get('folderName') or '').strip()
+    if not site_code:
+        site_code = folder_name
+    if not site_code or is_range_folder_code(site_code):
+        return None
+    return site_code
+
+
 def _list_nas_folders_timed(timeout_s: float = 12.0):
     cached = nas_mount.get_cached_folders()
     if cached is not None:
@@ -444,7 +455,7 @@ def collect_nas_site_folder_rows():
     for name in bucket_names[:_NAS_BUCKET_SCAN_LIMIT]:
         # Direct iterdir — avoid SMB timeout wrapper dropping bucket children.
         for child in nas_mount._list_bucket_child_folders_sync(name):
-            site_code = (child.get('code') or '').strip()
+            site_code = _bucket_child_site_code(child)
             if not site_code:
                 continue
             _merge_site_folder_row(by_code, {
@@ -520,8 +531,10 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
     if not code:
         return {'ok': False, 'error': 'bucketCode required'}
 
+    from app.services.nas_bucket_code import nas_path_from_web_bucket
     from app.services.wa_project_validation import find_project_by_code
 
+    parent_bucket = nas_path_from_web_bucket(code)
     now = datetime.utcnow()
     children = sorted(
         nas_mount._list_bucket_child_folders_sync(code),
@@ -531,13 +544,13 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
     created = []
     updated = 0
     for child in children:
-        site_code = (child.get('code') or '').strip()
+        site_code = _bucket_child_site_code(child)
         if not site_code:
             continue
         folder_name = (child.get('folderName') or site_code).strip()
         existing = find_project_by_code(site_code)
         if existing:
-            patch = {'updatedAt': now, 'nasParentBucket': code}
+            patch = {'updatedAt': now, 'nasParentBucket': parent_bucket}
             if folder_name:
                 patch['nasFolderName'] = folder_name
                 patch['nasFolder'] = folder_name
@@ -553,7 +566,7 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
             'members': [owner_id],
             'nasFolder': folder_name,
             'nasFolderName': folder_name,
-            'nasParentBucket': code,
+            'nasParentBucket': parent_bucket,
             'nasImportedAt': now,
             'createdAt': now,
             'updatedAt': now,
@@ -564,6 +577,7 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
     return {
         'ok': True,
         'bucketCode': code,
+        'nasParentBucket': parent_bucket,
         'scanned': len(children),
         'created': created,
         'updated': updated,
@@ -922,7 +936,10 @@ def delete_web_project(project, *, remove_nas_folder=False):
                 'ok': False,
                 'error': 'NAS is not connected — uncheck “delete NAS folder” or mount the share first.',
             }
-        nas_result = nas_mount.delete_project_folder(project['code'])
+        nas_result = nas_mount.delete_project_folder(
+            project['code'],
+            project_doc=project,
+        )
         if not nas_result.get('ok') and not nas_result.get('missing'):
             return {
                 'ok': False,
@@ -1005,7 +1022,10 @@ def update_web_project(project, data, *, sync_nas=True):
         return {'ok': False, 'error': 'Project not found'}
 
     old_code = (project.get('code') or '').strip()
-    is_bucket = is_nas_bucket_folder_code(old_code)
+    parent_on_row = (project.get('nasParentBucket') or '').strip()
+    is_bucket = is_nas_bucket_folder_code(old_code) or (
+        not parent_on_row and _is_nas_root_bucket_dir(old_code)
+    )
 
     new_code = normalize_code(data.get('code', old_code)) if data.get('code') is not None else normalize_code(old_code)
     if not new_code:
@@ -1046,8 +1066,15 @@ def update_web_project(project, data, *, sync_nas=True):
         mongo_updates['stage'] = data.get('stage') or project.get('stage', 'active')
     if data.get('status') is not None:
         mongo_updates['status'] = data.get('status') or project.get('status', 'active')
+    if nas_folder_label is not None:
+        mongo_updates['nasFolderName'] = nas_folder_label
 
-    parent_bucket = (project.get('nasParentBucket') or '').strip() or None
+    parent_bucket = parent_on_row or None
+    if data.get('nasParentBucket') is not None:
+        from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+        parent_bucket = nas_path_from_web_bucket(data.get('nasParentBucket') or '') or None
+        mongo_updates['nasParentBucket'] = parent_bucket
 
     if sync_nas and is_bucket:
         current = nas_mount._resolve_bucket_dir(old_code) if nas_mount.is_available() else None
@@ -1103,8 +1130,19 @@ def update_web_project(project, data, *, sync_nas=True):
             mongo_updates['nasFolder'] = r.get('path')
         elif current is not None and nas_mount.is_available():
             mongo_updates['nasFolder'] = str(current.resolve())
-        elif nas_mount.is_available() and wants_nas_change:
-            return {'ok': False, 'error': 'NAS site folder not found under parent bucket'}
+        elif nas_mount.is_available():
+            created = nas_mount.create_folder(
+                new_code,
+                parent_bucket_code=parent_bucket,
+                skip_deep_resolve=True,
+            )
+            if created.get('ok'):
+                mongo_updates['nasFolder'] = created['path']
+            elif wants_nas_change:
+                return {
+                    'ok': False,
+                    'error': created.get('error') or 'NAS site folder not found under parent bucket',
+                }
 
     if new_code != normalize_code(old_code):
         mongo_updates['code'] = new_code
@@ -1238,21 +1276,63 @@ def reconcile_project_from_nas(project, *, media_dir=None):
     }
 
 
+def _purge_web_projects_for_nas_bucket(bucket_name: str, *, media_dir=None) -> list[str]:
+    """NAS → web: remove bucket container + all site rows under a deleted top-level folder."""
+    from app.services.nas_bucket_code import nas_parent_bucket_match_values
+
+    path = (bucket_name or '').strip()
+    if not path:
+        return []
+    match_vals = {v.upper() for v in nas_parent_bucket_match_values(path)}
+    removed: list[str] = []
+    for proj in list(mongo.db.wa_projects.find({'status': {'$ne': 'archived'}})):
+        code = (proj.get('code') or '').strip()
+        parent = (proj.get('nasParentBucket') or '').strip()
+        is_container = (
+            code.upper() == path.upper()
+            and _is_nas_root_bucket_dir(path)
+            and not parent
+        )
+        under_bucket = bool(parent and parent.upper() in match_vals)
+        if not (is_container or under_bucket):
+            continue
+        delete_web_project(proj, remove_nas_folder=False)
+        removed.append(code or str(proj['_id']))
+    return removed
+
+
 def reconcile_after_nas_folder_deleted(folder_name, *, media_dir=None):
     """After manual NAS folder delete — drop matching web project/records."""
     name = (folder_name or '').strip()
     if not name:
         return reconcile_deletions_from_nas(media_dir=media_dir)
 
+    bucket_removed: list[str] = []
+    if _is_nas_root_bucket_dir(name):
+        bucket_removed = _purge_web_projects_for_nas_bucket(name, media_dir=media_dir)
+        nas_folder_index(force_refresh=True)
+        base = reconcile_deletions_from_nas(media_dir=media_dir)
+        base['projectsRemoved'] = list({
+            *(base.get('projectsRemoved') or []),
+            *bucket_removed,
+        })
+        return base
+
     site_code = parse_nas_site_folder_code(name)
+    project = None
     if site_code:
         project = mongo.db.wa_projects.find_one({
             'code': {'$regex': f'^{re.escape(site_code)}$', '$options': 'i'},
             'status': {'$ne': 'archived'},
         })
-        if project and _project_linked_to_nas(project):
-            reconcile_project_from_nas(project, media_dir=media_dir)
-            return reconcile_deletions_from_nas(media_dir=media_dir)
+    if project is None:
+        project = mongo.db.wa_projects.find_one({
+            'nasFolderName': {'$regex': f'^{re.escape(name)}$', '$options': 'i'},
+            'status': {'$ne': 'archived'},
+        })
+    if project and _project_linked_to_nas(project):
+        reconcile_project_from_nas(project, media_dir=media_dir)
+        return reconcile_deletions_from_nas(media_dir=media_dir)
 
     if is_nas_bucket_dir_name(name) or is_range_folder_code(name):
         nas_folder_index(force_refresh=True)
@@ -1289,6 +1369,29 @@ def reconcile_deletions_from_nas(media_dir=None):
     }
 
 
+def list_nas_root_bucket_summaries():
+    """Top-level NAS bucket folders for Projects UI (merge with Mongo buckets)."""
+    from app.services.nas_bucket_code import web_bucket_key_for_nas_root
+
+    if not nas_mount.is_volume_mounted():
+        return []
+    out = []
+    for name in nas_mount.list_watch_root_dir_names() or []:
+        if not _is_nas_root_bucket_dir(name):
+            continue
+        web_key = web_bucket_key_for_nas_root(name)
+        cached = (
+            nas_mount.peek_bucket_children_cache(web_key)
+            or nas_mount.peek_bucket_children_cache(name)
+        )
+        row = {'nasName': name, 'bucketCode': web_key}
+        if cached is not None:
+            row['childCount'] = len(cached)
+        out.append(row)
+    out.sort(key=lambda r: (r.get('nasName') or '').lower())
+    return out
+
+
 def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
     """NAS ↔ web: reconcile deletes; optional full photo import (manual Sync NAS only)."""
     if not nas_mount.is_available():
@@ -1312,6 +1415,11 @@ def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
         if import_files:
             imports = import_all_projects_from_nas()
             records_imported = sum(r.get('created', 0) for r in imports if r.get('ok'))
+
+        try:
+            nas_mount._refresh_bucket_children_caches()
+        except Exception:
+            logger.exception('[NAS] Bucket cache refresh after bidirectional sync failed')
 
         result = {
             'ok': True,

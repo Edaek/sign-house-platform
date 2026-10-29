@@ -12,7 +12,10 @@ from app.services.nas_sync_service import (
     run_bidirectional_nas_sync,
     get_last_nas_sync_status,
     reconcile_after_nas_folder_deleted,
+    list_nas_root_bucket_summaries,
+    _is_nas_root_bucket_dir,
 )
+from app.services.nas_bucket_code import nas_path_from_web_bucket
 from app.utils.permissions import require_role
 
 wa_nas_bp = Blueprint('wa_nas', __name__)
@@ -59,7 +62,14 @@ def browse_nas():
         files_only = request.args.get('filesOnly') == '1'
         subfolders_only = request.args.get('subfoldersOnly') == '1'
         nas_slow = not nas_mount.probe_responsive(timeout_s=2)
-        if is_range_folder_code(code):
+        path = nas_path_from_web_bucket(code)
+        bucket_dir = nas_mount._resolve_bucket_dir(code)
+        is_root_bucket = bool(
+            bucket_dir
+            and bucket_dir.is_dir()
+            and _is_nas_root_bucket_dir(path)
+        )
+        if is_range_folder_code(code) or is_root_bucket:
             if nas_slow:
                 children, from_cache = nas_mount.list_bucket_child_folders_with_fallback(code)
             else:
@@ -68,9 +78,10 @@ def browse_nas():
             return jsonify({
                 'ok': True,
                 'code': code.upper(),
-                'rangeBucket': True,
+                'rangeBucket': is_range_folder_code(code),
+                'standaloneBucket': is_root_bucket and not is_range_folder_code(code),
                 'childFolders': children,
-                'siteFolders': [c for c in children if c.get('isSiteProject')],
+                'siteFolders': [c for c in children if c.get('isSiteProject') or c.get('folderName')],
                 'staleFromCache': from_cache if nas_slow else False,
                 'hint': nas_slow_hint if nas_slow and not children else None,
             })

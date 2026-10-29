@@ -236,12 +236,14 @@ class NasMountService:
 
     def peek_bucket_children_cache(self, range_code: str):
         """Full child folder list for one range bucket (no SMB)."""
-        key = (range_code or '').strip().lower()
-        if not key:
-            return None
-        with self._cache_lock:
-            rows = self._bucket_children_cache.get(key)
-        return list(rows) if rows else None
+        from app.services.nas_bucket_code import bucket_lookup_keys
+
+        for key in bucket_lookup_keys(range_code):
+            with self._cache_lock:
+                rows = self._bucket_children_cache.get(key)
+            if rows:
+                return list(rows)
+        return None
 
     def refresh_bucket_children_cache_for(self, range_code: str) -> bool:
         """Time-boxed SMB scan for one bucket → updates in-memory bucket cache."""
@@ -250,17 +252,22 @@ class NasMountService:
             return False
         children = self.list_bucket_child_folders(code)
         if children:
-            self._set_bucket_children_cache_entry(code, children)
+            from app.services.nas_bucket_code import bucket_lookup_keys
+
+            for cache_key in bucket_lookup_keys(code):
+                self._set_bucket_children_cache_entry(cache_key, children)
             logger.info('[NAS] Bucket children cache updated for %s (%d folders)', code, len(children))
             return True
         return False
 
     def _refresh_bucket_children_caches(self) -> None:
         """Populate per-bucket child lists (all physical folders, not deduped by site code)."""
+        from app.services.nas_sync_service import _is_nas_root_bucket_dir
+
         root_names = self.list_watch_root_dir_names(timeout_s=8) or []
         refreshed = 0
         for name in root_names:
-            if not (is_range_folder_code(name) or is_nas_bucket_dir_name(name)):
+            if not _is_nas_root_bucket_dir(name):
                 continue
             if self.refresh_bucket_children_cache_for(name):
                 refreshed += 1
@@ -362,7 +369,9 @@ class NasMountService:
 
     def _resolve_parent_dir(self, parent_key):
         """Parent directory for nested create (site folder, range bucket, or top-level name)."""
-        key = (parent_key or '').strip()
+        from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+        key = nas_path_from_web_bucket(parent_key)
         if not key:
             return None
         hit = self._resolve_project_folder(key)
@@ -372,10 +381,12 @@ class NasMountService:
 
     def _resolve_bucket_dir(self, bucket_code):
         """NAS directory for a range bucket or top-level folder (e.g. PJ-2800-2899, ABC)."""
+        from app.services.nas_bucket_code import nas_path_from_web_bucket
+
         watch_dir = self._resolved_watch_dir()
         if not watch_dir:
             return None
-        key = (bucket_code or '').strip()
+        key = nas_path_from_web_bucket(bucket_code)
         if not key:
             return None
         root = Path(watch_dir)
@@ -783,8 +794,10 @@ class NasMountService:
         return find_under(root, 0)
 
     def _list_bucket_child_folders_sync(self, range_code):
-        code = (range_code or '').strip()
-        if not (is_range_folder_code(code) or is_nas_bucket_dir_name(code)):
+        from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+        code = nas_path_from_web_bucket(range_code)
+        if not code:
             return []
         bucket = self._resolve_bucket_dir(code)
         if bucket is None or not bucket.is_dir():
@@ -828,10 +841,13 @@ class NasMountService:
         cached = self.peek_folder_cache() or self.get_cached_folders(max_age_s=86400) or []
         if not cached:
             return []
-        bucket_key = bucket.lower()
+        from app.services.nas_bucket_code import bucket_lookup_keys
+
+        bucket_keys = set(bucket_lookup_keys(bucket))
         out = []
         for row in cached:
-            if (row.get('parentBucket') or '').strip().lower() != bucket_key:
+            parent = (row.get('parentBucket') or '').strip().lower()
+            if parent not in bucket_keys:
                 continue
             folder_name = (row.get('folderName') or '').strip()
             if not folder_name:
@@ -1096,8 +1112,10 @@ class NasMountService:
                 ),
             }
 
-    def delete_project_folder(self, project_code):
-        folder = self._resolve_project_folder(project_code)
+    def delete_project_folder(self, project_code, *, project_doc=None):
+        folder = self._folder_for_project(project_code, project_doc)
+        if folder is None:
+            folder = self._resolve_project_folder(project_code)
         if not folder:
             return {'ok': True, 'missing': True}
         return self.delete_path(str(folder))

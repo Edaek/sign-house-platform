@@ -75,9 +75,17 @@ def _mongo_bucket_child_rows_compute(bucket: str) -> list:
             'isSiteProject': True,
         })
 
+    from app.services.nas_bucket_code import nas_parent_bucket_match_values
+
+    parent_or = [
+        {'nasParentBucket': {'$regex': f'^{re.escape(v)}$', '$options': 'i'}}
+        for v in nas_parent_bucket_match_values(bucket)
+    ]
+    if not parent_or:
+        return []
     for proj in mongo.db.wa_projects.find({
         'status': {'$ne': 'archived'},
-        'nasParentBucket': {'$regex': f'^{re.escape(bucket)}$', '$options': 'i'},
+        '$or': parent_or,
     }):
         _append(proj)
 
@@ -123,8 +131,10 @@ def _merge_bucket_children(nas_children: list, extra: list) -> list:
 
 
 def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: bool) -> dict:
+    from app.services.nas_bucket_code import nas_path_from_web_bucket
     from app.services.nas_watcher_service import nas_mount
 
+    parent_bucket = nas_path_from_web_bucket(bucket)
     children = sorted(children, key=lambda c: (c.get('folderName') or '').lower())
     unique_codes = list({
         (c.get('code') or '').strip()
@@ -181,10 +191,13 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
                 'totalRecords': record_counts.get(proj['_id'], 0),
                 'todayRecords': 0,
                 'location': d.get('location'),
-                'nasParentBucket': bucket,
+                'nasParentBucket': parent_bucket,
             })
         elif code:
-            row['nasParentBucket'] = bucket
+            row['nasParentBucket'] = parent_bucket
+        elif folder_name:
+            row['code'] = folder_name
+            row['nasParentBucket'] = parent_bucket
         sites.append(row)
 
     site_rows = [s for s in sites if s.get('code')]
@@ -279,6 +292,19 @@ def _schedule_bucket_nas_refresh(bucket: str) -> None:
                 nas_mount.refresh_bucket_children_cache_for(bucket)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+@wa_projects_bp.route('/nas-root-buckets', methods=['GET'])
+@jwt_required()
+def list_nas_root_buckets():
+    """Top-level NAS folders (PJ-lo-hi, LIGHT, …) for merging into Projects bucket grid."""
+    from app.services.nas_sync_service import list_nas_root_bucket_summaries
+    from app.services.nas_watcher_service import nas_mount
+
+    if not nas_mount.is_volume_mounted():
+        return jsonify({'ok': False, 'error': 'NAS not connected', 'buckets': []}), 503
+    buckets = list_nas_root_bucket_summaries()
+    return jsonify({'ok': True, 'buckets': buckets})
 
 
 @wa_projects_bp.route('/nas-bucket-sites', methods=['GET'])

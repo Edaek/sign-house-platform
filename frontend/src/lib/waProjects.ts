@@ -136,6 +136,37 @@ export function bucketSiteProjects(bucket: WaProjectBucket): WaProject[] {
   return bucket.siteProjects.filter((p) => !isBucketContainerSite(bucket.code, p))
 }
 
+export type NasRootBucketRow = {
+  bucketCode: string
+  nasName: string
+  childCount?: number
+}
+
+/** Merge live NAS top-level folders into the bucket grid (NAS-only buckets appear before sync). */
+export function mergeProjectsWithNasRootBuckets(
+  projects: WaProject[],
+  nasRoots: NasRootBucketRow[],
+): { buckets: WaProjectBucket[]; nasFolderCounts: Record<string, number> } {
+  const buckets = buildProjectBuckets(projects)
+  const byCode = new Map(buckets.map((b) => [b.code, b]))
+  const nasFolderCounts: Record<string, number> = {}
+  for (const row of nasRoots) {
+    const code = (row.bucketCode || '').trim()
+    if (!code) continue
+    if (row.childCount != null) {
+      nasFolderCounts[code] = row.childCount
+    }
+    if (byCode.has(code)) continue
+    byCode.set(code, {
+      code,
+      label: (row.nasName || code).trim(),
+      siteProjects: [],
+    })
+  }
+  const merged = [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code))
+  return { buckets: merged, nasFolderCounts }
+}
+
 export function buildProjectBuckets(projects: WaProject[]): WaProjectBucket[] {
   const ranges = projects.filter((p) => isRangeBucketCode(p.code))
   const sites = projects.filter((p) => !isRangeBucketCode(p.code))
