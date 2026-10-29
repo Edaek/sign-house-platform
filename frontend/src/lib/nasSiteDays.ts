@@ -72,6 +72,8 @@ export function buildSiteDayGroups(
   }
 
   for (const r of records) {
+    // Move leaves a tombstone on the source project; timeline follows NAS + active records only.
+    if ((r.status || '').toLowerCase() === 'moved') continue
     for (const day of siteDaysForRecord(r)) {
       const bucket = ensure(day).records
       if (!bucket.some((x) => x.id === r.id)) bucket.push(r)

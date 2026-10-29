@@ -835,14 +835,69 @@ def _record_had_nas_expectation(record) -> bool:
     return False
 
 
+def _record_site_days(record) -> set[str]:
+    """Dates under Photo/YYYY-MM-DD linked to this WA record."""
+    from app.services.nas_site_remark_service import site_day_from_nas_path
+
+    days: set[str] = set()
+    for p in _nas_paths_on_record(record):
+        d = site_day_from_nas_path(p)
+        if d:
+            days.add(d)
+    if not days:
+        ca = record.get('createdAt')
+        if ca is not None:
+            if hasattr(ca, 'strftime'):
+                days.add(ca.strftime('%Y-%m-%d'))
+            else:
+                s = str(ca)
+                if len(s) >= 10:
+                    days.add(s[:10])
+    return days
+
+
+def _record_linked_to_site_nas(record) -> bool:
+    if _record_had_nas_expectation(record):
+        return True
+    if (record.get('status') or '').strip().lower() == 'moved':
+        return True
+    return False
+
+
+def _site_day_dirs_missing_on_share(site_folder, days: set[str]) -> bool:
+    """True when every Photo/YYYY-MM-DD dir for these days is gone on the share."""
+    if not days or site_folder is None:
+        return False
+    try:
+        root = Path(site_folder)
+    except (TypeError, ValueError):
+        return False
+    if not root.is_dir():
+        return False
+    for day in days:
+        if (root / 'Photo' / day).is_dir():
+            return False
+    return True
+
+
 def _should_remove_record_after_nas_deletion(
     record,
     project,
     *,
     nas_image_names=None,
     folder_missing=False,
+    site_folder=None,
 ) -> bool:
     """True when NAS-backed content is gone on the share (including WA assign + local-only thumbs)."""
+    if (
+        not folder_missing
+        and site_folder is not None
+        and _record_linked_to_site_nas(record)
+    ):
+        days = _record_site_days(record)
+        if days and _site_day_dirs_missing_on_share(site_folder, days):
+            return True
+
     if _wa_assign_record_gone_from_share(
         record,
         project,
@@ -1261,6 +1316,7 @@ def reconcile_project_from_nas(project, *, media_dir=None):
             project,
             nas_image_names=nas_image_names,
             folder_missing=folder_missing,
+            site_folder=folder,
         ):
             continue
         ref = rec.get('referenceNumber', str(rec['_id']))
