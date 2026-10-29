@@ -127,7 +127,14 @@ def browse_nas():
         })
 
     folders = nas_mount.list_folders()
-    return jsonify({'ok': True, 'folders': folders})
+    root_buckets = list_nas_root_bucket_summaries()
+    root_names = nas_mount.list_watch_root_dir_names(timeout_s=8) or []
+    return jsonify({
+        'ok': True,
+        'folders': folders,
+        'rootFolderNames': root_names,
+        'rootBuckets': root_buckets,
+    })
 
 
 @wa_nas_bp.route('/create-folder', methods=['POST'])

@@ -13,14 +13,19 @@ def nas_path_from_web_bucket(bucket_code: str) -> str:
 
 def web_bucket_key_for_nas_root(nas_dir_name: str) -> str:
     """URL / UI bucket code for a top-level NAS directory."""
-    from app.services.project_number_match_service import is_range_folder_code
+    from app.services.project_number_match_service import is_nas_bucket_folder_code
 
     n = (nas_dir_name or '').strip()
     if not n:
         return n
-    if is_range_folder_code(n):
+    if is_nas_bucket_folder_code(n):
         return n.upper()
     return f'{STANDALONE_PREFIX}{n.upper()}'
+
+
+def physical_bucket_name(bucket_code: str) -> str:
+    """Normalize UI/Mongo bucket keys to NAS directory name (LIGHT, T-1000-2002, …)."""
+    return nas_path_from_web_bucket(bucket_code).upper()
 
 
 def nas_parent_bucket_match_values(bucket_code: str) -> tuple[str, ...]:

@@ -3,7 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from app.services.nas_bucket_code import bucket_lookup_keys, nas_path_from_web_bucket
+from app.services.nas_bucket_code import (
+    bucket_lookup_keys,
+    nas_path_from_web_bucket,
+    web_bucket_key_for_nas_root,
+)
 from app.services.nas_watcher_service import NasMountService
 
 
@@ -11,6 +15,8 @@ class NasStandaloneBucketTests(unittest.TestCase):
     def test_nas_path_from_web_bucket(self):
         self.assertEqual(nas_path_from_web_bucket('__standalone:LIGHT'), 'LIGHT')
         self.assertEqual(nas_path_from_web_bucket('PJ-3000-3999'), 'PJ-3000-3999')
+        self.assertEqual(web_bucket_key_for_nas_root('T-1000-2002'), 'T-1000-2002')
+        self.assertEqual(web_bucket_key_for_nas_root('LIGHT'), '__standalone:LIGHT')
         keys = bucket_lookup_keys('__standalone:LIGHT')
         self.assertIn('__standalone:light', keys)
         self.assertIn('light', keys)

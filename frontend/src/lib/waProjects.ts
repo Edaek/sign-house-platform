@@ -17,6 +17,20 @@ export function isNasBucketFolderCode(code: string): boolean {
   return parseRangeBounds(code) != null
 }
 
+/** UI ?bucket= key for a physical NAS root directory (matches backend web_bucket_key_for_nas_root). */
+export function webBucketKeyForNasRoot(nasDirName: string): string {
+  const name = (nasDirName || '').trim()
+  if (!name) return name
+  if (isNasBucketFolderCode(name)) return name.toUpperCase()
+  return `__standalone:${name.toUpperCase()}`
+}
+
+export function physicalBucketName(bucketCode: string): string {
+  return isStandaloneBucketCode(bucketCode)
+    ? standaloneBucketDisplayCode(bucketCode).toUpperCase()
+    : (bucketCode || '').trim().toUpperCase()
+}
+
 export function nasFolderNameDiffersFromCode(project: Pick<WaProject, 'code' | 'nasFolderName'>): boolean {
   const code = (project.code || '').trim()
   const folder = (project.nasFolderName || '').trim()
@@ -149,17 +163,24 @@ export function mergeProjectsWithNasRootBuckets(
 ): { buckets: WaProjectBucket[]; nasFolderCounts: Record<string, number> } {
   const buckets = buildProjectBuckets(projects)
   const byCode = new Map(buckets.map((b) => [b.code, b]))
+  const physSeen = new Set(buckets.map((b) => physicalBucketName(b.code)))
   const nasFolderCounts: Record<string, number> = {}
   for (const row of nasRoots) {
-    const code = (row.bucketCode || '').trim()
+    const nasName = (row.nasName || '').trim()
+    const code = (row.bucketCode || webBucketKeyForNasRoot(nasName)).trim()
     if (!code) continue
+    const phys = physicalBucketName(code)
     if (row.childCount != null) {
-      nasFolderCounts[code] = row.childCount
+      const existingKey = [...byCode.entries()].find(
+        ([k]) => physicalBucketName(k) === phys,
+      )?.[0]
+      nasFolderCounts[existingKey ?? code] = row.childCount
     }
-    if (byCode.has(code)) continue
+    if (physSeen.has(phys)) continue
+    physSeen.add(phys)
     byCode.set(code, {
       code,
-      label: (row.nasName || code).trim(),
+      label: nasName || standaloneBucketDisplayCode(code),
       siteProjects: [],
     })
   }
@@ -168,8 +189,8 @@ export function mergeProjectsWithNasRootBuckets(
 }
 
 export function buildProjectBuckets(projects: WaProject[]): WaProjectBucket[] {
-  const ranges = projects.filter((p) => isRangeBucketCode(p.code))
-  const sites = projects.filter((p) => !isRangeBucketCode(p.code))
+  const ranges = projects.filter((p) => isNasBucketFolderCode(p.code))
+  const sites = projects.filter((p) => !isNasBucketFolderCode(p.code))
   const rangeByCode = new Map(ranges.map((r) => [r.code.toUpperCase(), r]))
   const sitesByBucket = new Map<string, WaProject[]>()
 
@@ -179,7 +200,7 @@ export function buildProjectBuckets(projects: WaProject[]): WaProjectBucket[] {
     const parentBucket = (site.nasParentBucket || '').trim()
     let bucketKey: string
     if (parentBucket) {
-      bucketKey = isRangeBucketCode(parentBucket)
+      bucketKey = isNasBucketFolderCode(parentBucket)
         ? parentBucket.toUpperCase()
         : `__standalone:${parentBucket.toUpperCase()}`
       if (!standaloneLabels.has(parentBucket.toUpperCase())) {
@@ -236,7 +257,7 @@ export function buildProjectBuckets(projects: WaProject[]): WaProjectBucket[] {
       const bn = standaloneBucketDisplayCode(code).toUpperCase()
       adminProject = projects.find((p) => (p.code || '').toUpperCase() === bn)
     }
-    if (!adminProject && isRangeBucketCode(code)) {
+    if (!adminProject && isNasBucketFolderCode(code)) {
       adminProject = projects.find((p) => (p.code || '').toUpperCase() === code.toUpperCase())
     }
     buckets.push({
@@ -256,7 +277,9 @@ export function mergeNasRootBuckets(buckets: WaProjectBucket[], rootNames: strin
   for (const raw of rootNames) {
     const name = (raw || '').trim()
     if (!name) continue
-    const key = isRangeBucketCode(name) ? name.toUpperCase() : `__standalone:${name.toUpperCase()}`
+    const key = webBucketKeyForNasRoot(name)
+    const phys = physicalBucketName(key)
+    if ([...byKey.values()].some((b) => physicalBucketName(b.code) === phys)) continue
     if (byKey.has(key.toUpperCase())) continue
     byKey.set(key.toUpperCase(), {
       code: key,
