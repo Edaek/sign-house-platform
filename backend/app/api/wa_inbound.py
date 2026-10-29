@@ -14,19 +14,11 @@ from app.services.message_parser_service import is_command
 from app.services.wa_send_service import send_message, send_group_message, download_media
 from app.services.image_pool_service import (
     save_to_pool, match_project, match_project_ext, assign_all_unassigned,
-    assign_images_to_project, move_images_to_project, MatchResult,
+    assign_images_to_project, move_images_to_project,
 )
-from app.services.extraction_runner_service import run_extraction
-from app.services.followup_service import handle_follow_up_reply, send_follow_up
 from app.services.project_ai_resolve_service import (
-    coerce_assign_to_confirm,
-    resolve_classify_input,
-    set_ai_confirm,
     clear_ai_confirm,
-    peek_ai_confirm,
-    pop_ai_confirm_project,
     is_affirmative,
-    is_negative,
     is_rejection_only,
 )
 from app.services.project_number_match_service import classify_input_matches_full_display
@@ -128,16 +120,6 @@ def _group_pending_for_sender(group_id, sender):
         {'groupId': group_id, 'senderPhone': sender, 'categorized': False},
         sort=[('createdAt', -1)],
     )
-
-
-def _warn_unknown_group_project(group_id, label):
-    try:
-        send_group_message(
-            group_id,
-            f'⚠️ 找不到專案「{label}」。請確認專案編碼或名稱是否正確。\n發送 *projects* 查看專案列表。',
-        )
-    except Exception:
-        pass
 
 
 def _group_batch_id(group_id, sender, now):
@@ -296,69 +278,6 @@ def _group_has_uncategorized(group_id, sender):
     }) > 0
 
 
-def _try_classify_group_from_burst(group_id, sender, data):
-    """Text may set extended burst while forwarded album is still downloading."""
-    burst_proj = _get_burst_project(group_id, sender)
-    if not burst_proj or not _group_has_uncategorized(group_id, sender):
-        return False
-    pending = _group_pending_for_sender(group_id, sender)
-    _categorize_group_image(pending, burst_proj, group_id, data, sender)
-    _clear_classify_intent(group_id, sender)
-    return True
-
-
-def _try_apply_stored_classify_intent_group(group_id, sender, data, batch_id=None):
-    """Apply text sent before group_pending existed; True if no receipt needed."""
-    text = _pop_classify_intent(group_id, sender)
-    if not text:
-        return False
-    pending = _group_pending_for_sender(group_id, sender)
-    if not pending:
-        _set_classify_intent(group_id, sender, text)
-        return False
-
-    project, remark, kind = _apply_classify_resolve(
-        text, to=sender, group_id=group_id, sender=sender,
-    )
-    if kind == 'assign' and project:
-        resp = _categorize_group_image(pending, project, group_id, data, sender)
-        _cancel_scheduled_receipt(group_id=group_id, group_sender=sender, batch_id=batch_id)
-        return resp is not None
-    if kind in ('pool_ai_list', 'pool_ai_confirm', 'pool_no_match'):
-        _cancel_scheduled_receipt(group_id=group_id, group_sender=sender, batch_id=batch_id)
-        return True
-    _set_classify_intent(group_id, sender, text)
-    return False
-
-
-def _try_apply_stored_classify_intent_private(sender, data):
-    text = _pop_classify_intent(None, sender)
-    if not text:
-        return False
-    has_unassigned = mongo.db.pool_images.count_documents(_open_pool_query(sender)) > 0
-    if not has_unassigned:
-        _set_classify_intent(None, sender, text)
-        return False
-
-    ctx = _latest_unassigned_pool_context(sender)
-    project, remark, kind = _apply_classify_resolve(
-        text,
-        to=sender,
-        quote_msg_id=ctx['quote'],
-        batch_id=ctx['batch_id'],
-        pool_image_ids=ctx['pool_ids'],
-    )
-    if kind == 'assign' and project:
-        _assign_unassigned_for_reply(sender, project, data)
-        _cancel_scheduled_receipt(phone=sender)
-        return True
-    if kind in ('pool_ai_list', 'pool_ai_confirm', 'pool_no_match'):
-        _cancel_scheduled_receipt(phone=sender, batch_id=ctx.get('batch_id'))
-        return True
-    _set_classify_intent(None, sender, text)
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Fuzzy-choice pending state — when user gets a numbered list of candidates
 # ---------------------------------------------------------------------------
@@ -476,12 +395,6 @@ def _quote_msg_id(data):
     if ids:
         return ids[0]
     return data.get('messageId')
-
-
-def _pool_receipt_body():
-    from app.services.pool_receipt_notify_service import format_pool_receipt_template
-
-    return format_pool_receipt_template()
 
 
 def _schedule_loom_runtime_inbound(**kwargs):
@@ -644,164 +557,6 @@ def _loomy_after_pool_intake(
         )
 
 
-def _schedule_pool_receipt(
-    file_count,
-    body,
-    *,
-    phone=None,
-    group_id=None,
-    group_sender=None,
-    quote_msg_id=None,
-    batch_id=None,
-    on_sent=None,
-):
-    from app.services.pool_receipt_notify_service import schedule_pool_receipt_prompt
-    schedule_pool_receipt_prompt(
-        file_count,
-        body,
-        phone=phone,
-        group_id=group_id,
-        group_sender=group_sender,
-        quote_msg_id=quote_msg_id,
-        batch_id=batch_id,
-        on_sent=on_sent,
-    )
-
-
-def _latest_group_pending_context(group_id, sender):
-    doc = mongo.db.group_pending_images.find_one(
-        {'groupId': group_id, 'senderPhone': sender, 'categorized': False},
-        sort=[('createdAt', -1)],
-        projection={
-            'messageId': 1,
-            'batchId': 1,
-            'imagePath': 1,
-            'waMessageRaw': 1,
-        },
-    )
-    if not doc:
-        return {
-            'quote': None,
-            'batch_id': None,
-            'wa_message_raw': None,
-        }
-    return {
-        'quote': doc.get('messageId'),
-        'batch_id': doc.get('batchId') or doc.get('messageId'),
-        'wa_message_raw': doc.get('waMessageRaw'),
-    }
-
-
-def _send_group_prompt(
-    group_id,
-    sender,
-    body,
-    quote_msg_id=None,
-    *,
-    quoted_payload=None,
-    batch_id=None,
-    mark_classify_reply=False,
-):
-    """Send a group message immediately (non-batched flows)."""
-    ctx = _latest_group_pending_context(group_id, sender)
-    quote = quote_msg_id or ctx.get('quote')
-    payload = quoted_payload if quoted_payload is not None else ctx.get('wa_message_raw')
-    bid = batch_id or ctx.get('batch_id')
-    try:
-        resp = send_group_message(
-            group_id,
-            body,
-            quoted_msg_id=quote,
-            quoted_payload=payload,
-        )
-        _record_bot_prompt_msg(group_id, sender, resp)
-        if mark_classify_reply:
-            from app.services.pool_receipt_notify_service import mark_group_classify_reply_sent
-
-            mark_group_classify_reply_sent(group_id, sender, bid)
-            _cancel_scheduled_receipt(
-                group_id=group_id, group_sender=sender, batch_id=bid,
-            )
-        return resp
-    except Exception:
-        return None
-
-
-def _send_fuzzy_prompt(to, label, candidates, *, group_id=None, sender=None):
-    """Send a disambiguation prompt and cache choices."""
-    body = (
-        f'🔍 找到多個相似專案（輸入「{label}」）：\n'
-        f'{_format_fuzzy_candidates(candidates)}\n\n'
-        f'回覆數字選擇，或發送完整專案編碼。'
-    )
-    _set_fuzzy_choice(group_id, sender or to, candidates)
-    if group_id:
-        _send_group_prompt(group_id, sender or to, body)
-    else:
-        _safe_send(to, body)
-
-
-def _send_ai_confirm_prompt(group_id, sender, to, project, *, quote_msg_id=None):
-    from app.services.project_number_match_service import wa_classify_display_label
-
-    label = wa_classify_display_label(project, max_len=500)
-    body = f'已選：\n{label}\n回覆「是」或「確認」後歸類照片。'
-    if group_id:
-        _send_group_prompt(group_id, sender or to, body, quote_msg_id=quote_msg_id)
-    else:
-        ctx = _latest_unassigned_pool_context(to)
-        from app.services.wa_pool_nudge_service import send_private_classify_nudge
-
-        try:
-            send_private_classify_nudge(
-                to,
-                body,
-                quote_msg_id=quote_msg_id or ctx.get('quote'),
-                image_path=ctx.get('image_path'),
-                quoted_payload=ctx.get('wa_message_raw'),
-            )
-        except Exception as exc:
-            logger.error('[Inbound] AI confirm prompt failed: %s', exc)
-            _safe_send(to, body, quoted_msg_id=quote_msg_id)
-
-
-def _pool_ids_for_confirm_scope(sender, scope):
-    """Assign only the batch/images tied to the pending AI confirm (not all pool rows)."""
-    scope = scope or {}
-    stored = scope.get('poolImageIds') or []
-    if stored:
-        object_ids = []
-        for pid in stored:
-            try:
-                object_ids.append(ObjectId(pid))
-            except Exception:
-                continue
-        docs = list(mongo.db.pool_images.find({
-            '_id': {'$in': object_ids},
-            'projectId': {'$exists': False},
-        }))
-        if docs:
-            return [str(d['_id']) for d in docs]
-
-    batch_id = scope.get('batchId')
-    if batch_id:
-        docs = list(mongo.db.pool_images.find({
-            **_open_pool_query(sender),
-            'projectId': {'$exists': False},
-            'batchId': batch_id,
-        }))
-        if docs:
-            return [str(d['_id']) for d in docs]
-
-    quote = scope.get('quoteMsgId')
-    if quote:
-        ids = _find_unassigned_pool_ids_by_quote(quote, sender)
-        if ids:
-            return ids
-
-    return _find_unassigned_pool_ids_latest_batch(sender)
-
-
 def _find_unassigned_pool_ids_latest_batch(sender):
     """Most recent unassigned upload only (one WhatsApp message / batch)."""
     newest = mongo.db.pool_images.find_one(
@@ -819,89 +574,6 @@ def _find_unassigned_pool_ids_latest_batch(sender):
         if docs:
             return [str(d['_id']) for d in docs]
     return [str(newest['_id'])]
-
-
-def _send_private_classify_prompt(
-    to,
-    body,
-    *,
-    quote_msg_id=None,
-    pool_image_ids=None,
-):
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if wa_inbound_loomy_dispatch_enabled():
-        return False
-
-    from app.services.wa_pool_nudge_service import send_private_classify_nudge
-
-    ctx = _latest_unassigned_pool_context(to)
-    image_path = ctx.get('image_path')
-    wa_raw = ctx.get('wa_message_raw')
-    quote = quote_msg_id or ctx.get('quote')
-    if pool_image_ids:
-        try:
-            doc = mongo.db.pool_images.find_one(
-                {'_id': ObjectId(pool_image_ids[0])},
-                projection={'imagePath': 1, 'waMessageRaw': 1},
-            )
-        except Exception:
-            doc = None
-        if doc:
-            image_path = doc.get('imagePath') or image_path
-            wa_raw = doc.get('waMessageRaw') or wa_raw
-    try:
-        send_private_classify_nudge(
-            to,
-            body,
-            quote_msg_id=quote,
-            image_path=image_path,
-            quoted_payload=wa_raw,
-        )
-        from app.services.pool_receipt_notify_service import mark_private_classify_reply_sent
-
-        mark_private_classify_reply_sent(to, ctx.get('batch_id'))
-        _cancel_scheduled_receipt(phone=to, batch_id=ctx.get('batch_id'))
-        return True
-    except Exception as exc:
-        logger.error('[Inbound] Classify prompt send failed: %s', exc)
-        try:
-            _safe_send(to, body, quoted_msg_id=quote)
-            return True
-        except Exception:
-            return False
-
-
-def _send_pool_classify_nudge(sender):
-    """Show the user's latest unassigned photo with a classify caption (native quote if Wakka supports it)."""
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if wa_inbound_loomy_dispatch_enabled():
-        return False
-
-    from app.services.pool_receipt_notify_service import format_pool_receipt_body
-    from app.services.wa_pool_nudge_service import send_private_classify_nudge
-
-    ctx = _latest_unassigned_pool_context(sender)
-    if not ctx.get('pool_ids'):
-        return False
-    body = format_pool_receipt_body(len(ctx['pool_ids']))
-    try:
-        send_private_classify_nudge(
-            sender,
-            body,
-            quote_msg_id=ctx.get('quote'),
-            image_path=ctx.get('image_path'),
-            quoted_payload=ctx.get('wa_message_raw'),
-        )
-        from app.services.pool_receipt_notify_service import mark_private_classify_reply_sent
-
-        mark_private_classify_reply_sent(sender, ctx.get('batch_id'))
-        _cancel_scheduled_receipt(phone=sender, batch_id=ctx.get('batch_id'))
-    except Exception as exc:
-        logger.error('[Inbound] Classify nudge send failed: %s', exc)
-        return False
-    return True
 
 
 def _is_classify_noise(text):
@@ -1016,211 +688,6 @@ def _latest_unassigned_pool_context(sender):
     }
 
 
-def _try_fast_site_folder_list(site_num, sender, *, quote_msg_id=None, pool_image_ids=None):
-    """Fast NAS bucket scan → numbered folder list (duplicate PJ-xxxx dirs)."""
-    from app.services.nas_sync_service import list_physical_site_folders
-    from app.services.project_ai_resolve_service import _build_classify_list_message
-    from app.services.wa_project_validation import find_project_by_code
-
-    folders = list_physical_site_folders(str(site_num))
-    if len(folders) <= 1:
-        return False
-    code = (folders[0].get('code') or '').strip() or f'PJ-{site_num}'
-    base = find_project_by_code(code)
-    if not base:
-        return False
-    candidates = []
-    for row in folders:
-        proj = dict(base)
-        proj['nasFolderName'] = row['folderName']
-        if row.get('parentBucket'):
-            proj['nasParentBucket'] = row['parentBucket']
-        candidates.append((proj, 100))
-    body = _build_classify_list_message(str(site_num), candidates)
-    _set_fuzzy_choice(None, sender, candidates)
-    sent = _send_private_classify_prompt(
-        sender,
-        body,
-        quote_msg_id=quote_msg_id,
-        pool_image_ids=pool_image_ids,
-    )
-    if sent:
-        from app.services.pool_receipt_notify_service import (
-            cancel_pool_receipt_for_phone,
-            mark_private_classify_reply_sent,
-        )
-
-        mark_private_classify_reply_sent(sender)
-        cancel_pool_receipt_for_phone(sender)
-    return sent
-
-
-def _apply_classify_resolve(
-    text,
-    *,
-    to,
-    group_id=None,
-    sender=None,
-    quote_msg_id=None,
-    batch_id=None,
-    pool_image_ids=None,
-):
-    """Heuristic + Ollama classify. Returns (project|None, remark, json type)."""
-    from app.services.wa_classify_mode import worker_auto_classify_enabled
-
-    if not worker_auto_classify_enabled():
-        return None, None, 'none'
-
-    from app.services.message_parser_service import split_classify_label_and_remark
-
-    trimmed = ' '.join((text or '').strip().split())
-    label, _ = split_classify_label_and_remark(trimmed)
-    match_key = label or trimmed
-    resolve = coerce_assign_to_confirm(
-        resolve_classify_input(text, active_only=True),
-        match_key,
-    )
-    remark = resolve.remark
-    key_sender = sender or to
-
-    if resolve.action == 'assign' and resolve.project:
-        clear_ai_confirm(group_id, key_sender)
-        _clear_fuzzy_choice(group_id, key_sender)
-        return resolve.project, remark, 'assign'
-
-    if resolve.action == 'list':
-        body = resolve.user_message
-        if group_id:
-            _send_group_prompt(
-                group_id,
-                key_sender,
-                body,
-                quote_msg_id=quote_msg_id,
-                batch_id=batch_id,
-                mark_classify_reply=True,
-            )
-        elif not _send_private_classify_prompt(
-            to, body, quote_msg_id=quote_msg_id, pool_image_ids=pool_image_ids,
-        ):
-            return None, remark, 'pool_send_failed'
-        _set_fuzzy_choice(group_id, key_sender, resolve.candidates)
-        return None, remark, 'pool_ai_list'
-
-    if resolve.action == 'suggest' and resolve.project:
-        body = resolve.user_message
-        if group_id:
-            _send_group_prompt(
-                group_id,
-                key_sender,
-                body,
-                quote_msg_id=quote_msg_id,
-                batch_id=batch_id,
-                mark_classify_reply=True,
-            )
-        elif not _send_private_classify_prompt(
-            to, body, quote_msg_id=quote_msg_id, pool_image_ids=pool_image_ids,
-        ):
-            return None, remark, 'pool_send_failed'
-        set_ai_confirm(
-            group_id,
-            key_sender,
-            resolve.project,
-            remark,
-            batch_id=batch_id,
-            pool_image_ids=pool_image_ids,
-            quote_msg_id=quote_msg_id,
-        )
-        return None, remark, 'pool_ai_confirm'
-
-    body = (resolve.user_message or '').strip()
-    if not body:
-        body = (
-            f'找不到與「{(text or "").strip()}」相符的專案。\n'
-            f'請重新輸入專案編碼或名稱；發送 *projects* 查看列表。'
-        )
-    if group_id:
-        _send_group_prompt(
-            group_id,
-            key_sender,
-            body,
-            quote_msg_id=quote_msg_id,
-            batch_id=batch_id,
-            mark_classify_reply=True,
-        )
-    else:
-        try:
-            _send_private_classify_prompt(
-                to, body, quote_msg_id=quote_msg_id, pool_image_ids=pool_image_ids,
-            )
-        except Exception as exc:
-            logger.error('[Inbound] pool_no_match prompt failed: %s', exc)
-            _safe_send(to, body, quoted_msg_id=quote_msg_id)
-    return None, remark, 'pool_no_match'
-
-
-def _try_ai_confirm_assign(group_id, sender, to, text, data, *, pending=None):
-    """If user confirmed AI suggestion, assign and return Flask response."""
-    key_sender = sender or to
-    confirm_doc = peek_ai_confirm(group_id, key_sender)
-    if not confirm_doc:
-        return None
-    trimmed = (text or '').strip()
-    quote = confirm_doc.get('quoteMsgId')
-    rejected_code = confirm_doc.get('code') or ''
-
-    if is_negative(trimmed) or is_rejection_only(trimmed):
-        clear_ai_confirm(group_id, key_sender)
-        _clear_fuzzy_choice(group_id, key_sender)
-        if group_id:
-            msg = (
-                f'好的，未歸入 *{rejected_code}*。\n'
-                f'請回覆正確的專案編碼或名稱。'
-            )
-            _send_group_prompt(group_id, key_sender, msg, quote_msg_id=quote)
-        else:
-            _send_pool_classify_nudge(to)
-        return jsonify({'handled': True, 'type': 'ai_confirm_cancelled'})
-
-    if not is_affirmative(trimmed):
-        # User is typing a different project — close confirm and re-classify below.
-        clear_ai_confirm(group_id, key_sender)
-        return None
-
-    project, remark, scope = pop_ai_confirm_project(group_id, key_sender)
-    if not project:
-        return None
-    if remark and data is not None:
-        data = dict(data)
-        data['text'] = remark
-        data['caption'] = remark
-
-    if group_id and pending is not None:
-        return _categorize_group_image(pending, project, group_id, data or {}, sender)
-
-    ids = _pool_ids_for_confirm_scope(key_sender, scope)
-    if ids:
-        n = assign_images_to_project(ids, project, 'user', remark=remark)
-        if n > 0:
-            from app.services.assignment_notify_service import schedule_assignment_confirmation
-            schedule_assignment_confirmation(project, n, phone=to)
-            _clear_classify_intent(None, key_sender)
-            _cancel_scheduled_receipt(phone=to)
-        return jsonify({'handled': True, 'type': 'pool_assigned_ai_confirm', 'count': n})
-    if group_id:
-        _send_group_prompt(
-            group_id, key_sender,
-            f'✅ 已選定專案 *{project["code"]}*，但目前沒有未歸類的照片。',
-        )
-    else:
-        _clear_classify_intent(None, key_sender)
-        _clear_fuzzy_choice(group_id, key_sender)
-        _safe_send(
-            to,
-            f'專案 *{project["code"]}* 已確認，但沒有待歸類的照片（可能已歸類完成）。',
-        )
-    return jsonify({'handled': True, 'type': 'ai_confirm_no_pool'})
-
-
 def _resolve_media_project(data, sender, group_id=None):
     """WhatsApp multi-select sends separate messages; only the first has a real caption."""
     from app.services.message_parser_service import split_classify_label_and_remark
@@ -1261,50 +728,6 @@ def _classify_remark_from_data(data):
     if ext.remark:
         return ext.remark
     return trailing_classify_remark(text)
-
-
-def _insert_group_pending_image(
-    group_id, sender, from_name, message_id, image_path, caption, batch_id, now,
-    wa_type=None, mime_type=None, sender_jid=None, wa_message_raw=None,
-):
-    from app.services.image_pool_service import infer_pool_media_meta
-    media_type, file_name = infer_pool_media_meta(image_path, wa_type=wa_type, mime_type=mime_type)
-    pending_doc = {
-        'groupId': group_id,
-        'senderPhone': sender,
-        'senderJid': sender_jid,
-        'senderName': from_name,
-        'messageId': message_id,
-        'imagePath': image_path,
-        'caption': caption,
-        'batchId': batch_id,
-        'categorized': False,
-        'reminderCount': 0,
-        'createdAt': now,
-        'updatedAt': now,
-    }
-    if isinstance(wa_message_raw, dict):
-        pending_doc['waMessageRaw'] = wa_message_raw
-    mongo.db.group_pending_images.insert_one(pending_doc)
-    mongo.db.pool_images.insert_one({
-        'phone': sender,
-        'senderName': from_name,
-        'imagePath': image_path,
-        'fileName': file_name,
-        'mediaType': media_type,
-        'mimeType': mime_type,
-        'downloadFailed': not image_path,
-        'caption': caption,
-        'messageId': message_id,
-        'batchId': batch_id,
-        'createdAt': now,
-        'updatedAt': now,
-    })
-
-
-def _send_group_assigned_message(group_id, project, count):
-    from app.services.assignment_notify_service import schedule_assignment_confirmation
-    schedule_assignment_confirmation(project, count, group_id=group_id)
 
 
 def _recent_unassigned_pool_ids(sender, *, seconds=120):
@@ -1448,22 +871,6 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             pool_ids = []
             multi = len(photo_paths) > 1
 
-            from app.services.wa_classify_mode import worker_auto_classify_enabled
-
-            site_num_early = None
-            if caption and not project and worker_auto_classify_enabled():
-                from app.services.project_number_match_service import primary_site_number
-                from app.services.pool_receipt_notify_service import (
-                    mark_private_classify_in_progress,
-                )
-
-                site_num_early = primary_site_number(caption)
-                if site_num_early:
-                    mark_private_classify_in_progress(sender, inbound_batch_id)
-                    _cancel_scheduled_receipt(
-                        phone=sender, batch_id=inbound_batch_id or None,
-                    )
-
             for idx, image_path in enumerate(photo_paths):
                 msg_id = _pool_msg_id(data, idx, base_msg_id)
                 result = save_to_pool(
@@ -1481,119 +888,19 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 )
                 pool_ids.append(result['pool_id'])
 
-            if project and worker_auto_classify_enabled():
+            if project:
                 for pid in _recent_unassigned_pool_ids(sender):
                     if pid not in pool_ids:
                         pool_ids.append(pid)
                 remark = _classify_remark_from_data(data)
                 count = assign_images_to_project(pool_ids, project, 'user', remark=remark)
                 _set_burst_project(None, sender, project)
-                if count > 0:
-                    from app.services.assignment_notify_service import schedule_assignment_confirmation
-                    schedule_assignment_confirmation(project, count, phone=sender)
                 return jsonify({
                     'handled': True,
                     'type': 'pool_assigned_batch',
                     'count': count,
                     'projectCode': project['code'],
                 })
-
-            if caption and not project and worker_auto_classify_enabled():
-                from app.services.project_number_match_service import primary_site_number
-
-                _clear_burst_project(None, sender)
-                _cancel_scheduled_receipt(phone=sender, batch_id=inbound_batch_id or None)
-                classify_kwargs = dict(
-                    to=sender,
-                    quote_msg_id=_quote_msg_id(data),
-                    batch_id=inbound_batch_id or None,
-                    pool_image_ids=pool_ids,
-                )
-                _CLASSIFY_DONE = frozenset({
-                    'pool_ai_list', 'pool_ai_confirm', 'assign', 'pool_send_failed',
-                })
-                site_num = primary_site_number(caption)
-                kind = None
-                if site_num and _try_fast_site_folder_list(
-                    site_num,
-                    sender,
-                    quote_msg_id=classify_kwargs.get('quote_msg_id'),
-                    pool_image_ids=pool_ids,
-                ):
-                    from app.services.pool_receipt_notify_service import (
-                        clear_private_classify_in_progress,
-                    )
-
-                    clear_private_classify_in_progress(sender)
-                    return jsonify({
-                        'handled': True,
-                        'type': 'pool_ai_list',
-                        'count': len(pool_ids),
-                    })
-                if site_num:
-                    _proj, _remark, kind = _apply_classify_resolve(
-                        str(site_num),
-                        **classify_kwargs,
-                    )
-                    if kind in _CLASSIFY_DONE:
-                        from app.services.pool_receipt_notify_service import (
-                            clear_private_classify_in_progress,
-                        )
-
-                        clear_private_classify_in_progress(sender)
-                        return jsonify({
-                            'handled': True,
-                            'type': kind,
-                            'count': len(pool_ids),
-                        })
-                if kind not in _CLASSIFY_DONE:
-                    _proj, _remark, kind = _apply_classify_resolve(
-                        caption,
-                        **classify_kwargs,
-                    )
-                    if kind in _CLASSIFY_DONE:
-                        from app.services.pool_receipt_notify_service import (
-                            clear_private_classify_in_progress,
-                        )
-
-                        clear_private_classify_in_progress(sender)
-                        return jsonify({
-                            'handled': True,
-                            'type': kind,
-                            'count': len(pool_ids),
-                        })
-
-            if not caption and not project:
-                from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-                if not wa_inbound_loomy_dispatch_enabled():
-                    if _try_apply_stored_classify_intent_private(sender, data):
-                        return jsonify({
-                            'handled': True,
-                            'type': 'pool_assigned_from_intent',
-                            'count': len(pool_ids),
-                        })
-                    still_open = mongo.db.pool_images.count_documents(_open_pool_query(sender))
-                    if still_open <= 0:
-                        return jsonify({
-                            'handled': True,
-                            'type': 'pool_already_assigned',
-                            'count': len(pool_ids),
-                        })
-                    if _peek_classify_intent(None, sender):
-                        return jsonify({
-                            'handled': True,
-                            'type': 'pool_waiting_classify_intent',
-                            'count': len(pool_ids),
-                        })
-                    # Private: no instant receipt text — user replies with project code, or PoolReminder later.
-
-            if site_num_early:
-                from app.services.pool_receipt_notify_service import (
-                    clear_private_classify_in_progress,
-                )
-
-                clear_private_classify_in_progress(sender)
 
             _loomy_after_pool_intake(
                 pool_ids,
@@ -1639,98 +946,6 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
             if cmd:
                 resp = _handle_command(cmd, sender, text=trimmed_text, data=data)
                 return resp or jsonify({'handled': True, 'type': 'command'})
-
-        ai_resp = None if wa_inbound_loomy_dispatch_enabled() else _try_ai_confirm_assign(
-            None, sender, sender, trimmed_text, data,
-        )
-        if ai_resp is not None:
-            return ai_resp
-
-        # Fuzzy list selection: 1–9 only (not project numbers like 3026)
-        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text.isdigit():
-            n = int(trimmed_text)
-            fuzzy_doc = mongo.db.wa_system.find_one({'_id': _fuzzy_choice_key(None, sender)})
-            if fuzzy_doc and fuzzy_doc.get('choices') and 1 <= n <= len(fuzzy_doc['choices']) <= 9:
-                move_intent = _pop_move_intent(None, sender)
-                choice_project = _pop_fuzzy_choice(None, sender, n)
-                if choice_project:
-                    if move_intent:
-                        return _execute_move(sender, choice_project, move_intent)
-                    n = _assign_unassigned_for_reply(sender, choice_project, data)
-                    if n <= 0:
-                        _safe_send(
-                            sender,
-                            '找不到待歸類的照片；若剛已歸類完成可忽略。若要改專案請再發照片。',
-                        )
-                    return jsonify({'handled': True, 'type': 'pool_assigned', 'count': n})
-
-        has_unassigned = mongo.db.pool_images.count_documents(_open_pool_query(sender)) > 0
-
-        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and _is_classify_noise(trimmed_text):
-            if _send_pool_classify_nudge(sender):
-                return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and len(trimmed_text) == 1 and trimmed_text.isdigit():
-            if _send_pool_classify_nudge(sender):
-                return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and is_rejection_only(trimmed_text):
-            if _send_pool_classify_nudge(sender):
-                return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-        if not wa_inbound_loomy_dispatch_enabled() and has_unassigned and _should_try_classify_text(trimmed_text):
-            _clear_fuzzy_choice(None, sender)
-            _cancel_scheduled_receipt(phone=sender)
-            ctx = _latest_unassigned_pool_context(sender)
-            from app.services.project_number_match_service import primary_site_number
-
-            site_num = primary_site_number(trimmed_text)
-            if site_num and _try_fast_site_folder_list(
-                site_num,
-                sender,
-                quote_msg_id=ctx['quote'],
-                pool_image_ids=ctx['pool_ids'],
-            ):
-                return jsonify({'handled': True, 'type': 'pool_ai_list'})
-            project, _remark, kind = _apply_classify_resolve(
-                trimmed_text,
-                to=sender,
-                quote_msg_id=ctx['quote'],
-                batch_id=ctx['batch_id'],
-                pool_image_ids=ctx['pool_ids'],
-            )
-            if kind == 'assign' and project:
-                n = _assign_unassigned_for_reply(sender, project, data)
-                if n <= 0:
-                    _safe_send(
-                        sender,
-                        f'找不到待歸類的照片；若剛已歸類完成可忽略。若要改專案請再發照片。',
-                    )
-                return jsonify({'handled': True, 'type': 'pool_assigned', 'count': n})
-            return jsonify({
-                'handled': True,
-                'type': kind,
-            })
-
-        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text and not is_command(trimmed_text) and not has_unassigned:
-            from app.services.nas_site_remark_service import try_append_followup_site_remark
-
-            if try_append_followup_site_remark(sender, trimmed_text):
-                return jsonify({'handled': True, 'type': 'site_remark_appended'})
-            _clear_classify_intent(None, sender)
-            _clear_burst_project(None, sender)
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-        if not wa_inbound_loomy_dispatch_enabled() and trimmed_text and not is_command(trimmed_text) and has_unassigned:
-            if _send_pool_classify_nudge(sender):
-                return jsonify({'handled': True, 'type': 'pool_classify_nudge'})
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-        if wa_inbound_loomy_dispatch_enabled() and trimmed_text:
-            from app.services.wa_classify_mode import wa_loomy_agent_enabled
 
             active = list(mongo.db.wa_records.find({
                 'senderPhone': sender, 'status': 'followup',
@@ -1783,57 +998,6 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 'handled': True,
                 'type': 'loom_runtime_notify_scheduled' if notified else 'loom_runtime_deferred',
             })
-
-    if not is_text:
-        return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if wa_inbound_loomy_dispatch_enabled():
-        return jsonify({'handled': True, 'type': 'ignored_silent'})
-
-    active = list(mongo.db.wa_records.find({
-        'senderPhone': sender, 'status': 'followup',
-    }).sort('updatedAt', -1))
-
-    if len(active) > 1:
-        now = datetime.utcnow()
-        for stale in active[1:]:
-            mongo.db.wa_records.update_one(
-                {'_id': stale['_id']},
-                {'$set': {'status': 'awaiting_review'},
-                 '$push': {'statusHistory': {'from': 'followup', 'to': 'awaiting_review', 'timestamp': now, 'reason': 'Superseded'}}},
-            )
-
-    active_record = active[0] if active else None
-
-    if active_record:
-        lower = text.strip().lower()
-        if lower == 'skip':
-            now = datetime.utcnow()
-            mongo.db.wa_records.update_one(
-                {'_id': active_record['_id']},
-                {'$set': {'status': 'awaiting_review'},
-                 '$push': {'statusHistory': {'from': 'followup', 'to': 'awaiting_review', 'timestamp': now, 'reason': 'Worker skipped'}}},
-            )
-            _safe_send(sender, '好的，紀錄已提交（部分資訊待補）。')
-            return jsonify({'handled': True, 'type': 'skip'})
-
-        cmd = is_command(text)
-        if cmd:
-            resp = _handle_command(cmd, sender, text=text, data=data)
-            return resp or jsonify({'handled': True, 'type': 'command'})
-
-        handle_follow_up_reply(str(active_record['_id']), text)
-        _safe_send(sender, '✅ 已收到資訊，處理中…')
-        run_extraction(str(active_record['_id']))
-        send_follow_up(str(active_record['_id']))
-        return jsonify({'handled': True, 'type': 'followup_reply'})
-
-    cmd = is_command(text)
-    if cmd:
-        resp = _handle_command(cmd, sender, text=text, data=data)
-        return resp or jsonify({'handled': True, 'type': 'command'})
 
     return jsonify({'handled': True, 'type': 'ignored_silent'})
 
@@ -1920,99 +1084,11 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                 'type': 'loom_runtime_notify_scheduled' if notified else 'loom_runtime_deferred',
             })
 
-        if trimmed.lower() == 'projects':
-            from app.services.project_number_match_service import (
-                list_wa_classify_target_projects,
-                wa_classify_display_label,
-            )
-            from app.services.nas_sync_service import enrich_wa_projects_display
+        from app.services.nas_site_remark_service import try_append_followup_site_remark
 
-            projects = list_wa_classify_target_projects(active_only=True)
-            enrich_wa_projects_display(projects)
-            lines = [f'• {wa_classify_display_label(p, max_len=500)}' for p in projects]
-            try:
-                send_group_message(group_id, ('*活躍專案列表：*\n' + '\n'.join(lines)) if lines else '暫無活躍專案。')
-            except Exception:
-                pass
-            return jsonify({'handled': True, 'type': 'group_command'})
-
-        cmd = is_command(trimmed)
-        if cmd == 'move':
-            return _handle_move(trimmed, sender, data, group_id=group_id)
-
-        has_quoted = data.get('hasQuotedMsg', False)
-        pending = _group_pending_for_sender(group_id, sender)
-
-        ai_resp = _try_ai_confirm_assign(
-            group_id, sender, sender, trimmed, data, pending=pending,
-        )
-        if ai_resp is not None:
-            return ai_resp
-
-        if pending and not has_quoted:
-            stored = _peek_classify_intent(group_id, sender)
-            if stored and stored == trimmed:
-                _pop_classify_intent(group_id, sender)
-                gctx = _latest_group_pending_context(group_id, sender)
-                proj, _remark, kind = _apply_classify_resolve(
-                    stored,
-                    to=sender,
-                    group_id=group_id,
-                    sender=sender,
-                    quote_msg_id=_quote_msg_id(data) or gctx.get('quote'),
-                    batch_id=gctx.get('batch_id'),
-                )
-                if kind == 'assign' and proj:
-                    return _categorize_group_image(pending, proj, group_id, data, sender)
-                return jsonify({'handled': True, 'type': kind})
-
-        # Numeric fuzzy-choice reply in group
-        if trimmed.isdigit() and (pending or has_quoted):
-            n = int(trimmed)
-            fuzzy_doc = mongo.db.wa_system.find_one({'_id': _fuzzy_choice_key(group_id, sender)})
-            if fuzzy_doc and fuzzy_doc.get('choices') and 1 <= n <= len(fuzzy_doc['choices']) <= 9:
-                move_intent = _pop_move_intent(group_id, sender)
-                choice_project = _pop_fuzzy_choice(group_id, sender, n)
-                if choice_project:
-                    if move_intent:
-                        return _execute_move(sender, choice_project, move_intent, group_id=group_id)
-                    pending = _group_pending_for_sender(group_id, sender)
-                    if pending:
-                        return _categorize_group_image(
-                            pending, choice_project, group_id, data, sender,
-                        )
-                    return jsonify({'handled': True, 'type': 'group_no_pending'})
-
-        project = _lookup_active_project(trimmed)
-
-        # Classify — only when there are pending images or a quoted msg
-        if not is_command(trimmed) and (pending or has_quoted):
-            gctx = _latest_group_pending_context(group_id, sender)
-            proj, _remark, kind = _apply_classify_resolve(
-                trimmed,
-                to=sender,
-                group_id=group_id,
-                sender=sender,
-                quote_msg_id=_quote_msg_id(data) or gctx.get('quote'),
-                batch_id=gctx.get('batch_id'),
-            )
-            if kind == 'assign' and proj:
-                return _categorize_group_image(pending, proj, group_id, data, sender)
-            return jsonify({'handled': True, 'type': kind})
-
-        if has_quoted and not project and not is_command(trimmed):
-            _warn_unknown_group_project(group_id, trimmed)
-            return jsonify({'handled': True, 'type': 'group_no_match'})
-        if pending and is_command(trimmed):
-            return jsonify({'handled': True, 'type': 'group_pending_silent'})
-
-        if not is_command(trimmed) and not pending:
-            from app.services.nas_site_remark_service import try_append_followup_site_remark
-
-            if try_append_followup_site_remark(sender, trimmed, group_id=group_id):
-                return jsonify({'handled': True, 'type': 'group_site_remark_appended'})
-            _clear_classify_intent(group_id, sender)
-            return jsonify({'handled': True, 'type': 'ignored_silent'})
+        if try_append_followup_site_remark(sender, trimmed, group_id=group_id):
+            return jsonify({'handled': True, 'type': 'group_site_remark_appended'})
+        return jsonify({'handled': True, 'type': 'ignored_silent'})
 
     if is_media:
         with _media_lock(f'g:{group_id}:{sender}'):
@@ -2027,52 +1103,11 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
     caption, project = _resolve_media_project(data, sender, group_id=group_id)
     base_msg_id = data.get('messageId', '')
     photo_paths = [p for p in final_photos if p]
-
-    from app.services.wa_classify_mode import worker_auto_classify_enabled
-
-    if project and photo_paths and worker_auto_classify_enabled():
-        pool_ids = []
-        for idx, image_path in enumerate(photo_paths):
-            msg_id = _pool_msg_id(data, idx, base_msg_id)
-            result = save_to_pool(
-                sender,
-                image_path,
-                caption,
-                msg_id,
-                from_name,
-                defer_assign=True,
-                defer_reminder=True,
-                **_pool_media_kwargs(data),
-            )
-            pool_ids.append(result['pool_id'])
-        for pid in _recent_unassigned_pool_ids(sender):
-            if pid not in pool_ids:
-                pool_ids.append(pid)
-        remark = _classify_remark_from_data(data)
-        if not remark:
-            stored = _peek_classify_intent(group_id, sender)
-            if stored:
-                from app.services.message_parser_service import split_classify_label_and_remark
-                _, remark = split_classify_label_and_remark(stored)
-        assign_images_to_project(
-            pool_ids, project, 'user', remark=remark or None, group_id=group_id,
-        )
-        _set_burst_project(group_id, sender, project)
-        _clear_classify_intent(group_id, sender)
-        now = datetime.utcnow()
-        mongo.db.group_pending_images.update_many(
-            {'groupId': group_id, 'senderPhone': sender, 'categorized': False},
-            {'$set': {'categorized': True, 'updatedAt': now}},
-        )
-        _cancel_scheduled_receipt(group_id=group_id, group_sender=sender)
-        _send_group_assigned_message(group_id, project, len(pool_ids))
-        return jsonify({'handled': True, 'type': 'group_auto_assigned', 'count': len(pool_ids)})
+    quote_id = _quote_msg_id(data)
 
     if not photo_paths:
-        from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
         msg_id = (data.get('messageId') or '').strip()
-        if data.get('hasMedia') and msg_id and wa_inbound_loomy_dispatch_enabled():
+        if data.get('hasMedia') and msg_id:
             saved = save_to_pool(
                 sender,
                 None,
@@ -2095,68 +1130,11 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
             _notify_group_media_failed(group_id)
         return jsonify({'handled': True, 'type': 'group_media_unavailable'})
 
-    now = datetime.utcnow()
-    batch_id = _group_batch_id(group_id, sender, now)
-    pending_caption = caption if caption and project is None and not _looks_like_filename(caption or '') else None
-
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled as _loomy_on
-
-    if not _loomy_on():
+    if project:
+        pool_ids = []
         for idx, image_path in enumerate(photo_paths):
             msg_id = _pool_msg_id(data, idx, base_msg_id)
-            _insert_group_pending_image(
-                group_id, sender, from_name, msg_id, image_path, pending_caption, batch_id, now,
-                wa_type=data.get('type'), mime_type=data.get('mimeType'), sender_jid=sender_jid,
-                wa_message_raw=data.get('waRaw') if isinstance(data.get('waRaw'), dict) else None,
-            )
-
-    if not _loomy_on():
-        if _try_classify_group_from_burst(group_id, sender, data):
-            return jsonify({
-                'handled': True,
-                'type': 'group_categorized_from_burst',
-                'count': len(photo_paths),
-            })
-
-        if _try_apply_stored_classify_intent_group(group_id, sender, data, batch_id=batch_id):
-            return jsonify({
-                'handled': True,
-                'type': 'group_categorized_from_intent',
-                'count': len(photo_paths),
-            })
-
-    # Loomy mode skips group_pending_images — do not gate intake on that collection.
-    if not _loomy_on() and not _group_has_uncategorized(group_id, sender):
-        return jsonify({
-            'handled': True,
-            'type': 'group_already_categorized',
-            'count': len(photo_paths),
-        })
-
-    quote_id = _quote_msg_id(data)
-
-    if caption and not project and worker_auto_classify_enabled():
-        _cancel_scheduled_receipt(
-            group_id=group_id, group_sender=sender, batch_id=batch_id,
-        )
-        _apply_classify_resolve(
-            caption,
-            to=sender,
-            group_id=group_id,
-            sender=sender,
-            quote_msg_id=quote_id,
-            batch_id=batch_id,
-        )
-
-    loomy_pool_ids = []
-    from app.services.wa_classify_mode import classify_mode
-
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if wa_inbound_loomy_dispatch_enabled() and photo_paths:
-        for idx, image_path in enumerate(photo_paths):
-            msg_id = _pool_msg_id(data, idx, base_msg_id)
-            r = save_to_pool(
+            result = save_to_pool(
                 sender,
                 image_path,
                 caption,
@@ -2169,128 +1147,50 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
                 wa_message_raw=data.get('waRaw') if isinstance(data.get('waRaw'), dict) else None,
                 **_pool_media_kwargs(data),
             )
-            loomy_pool_ids.append(r['pool_id'])
-        _loomy_after_pool_intake(
-            loomy_pool_ids,
-            phone=sender,
-            sender_name=from_name,
-            group_id=group_id,
-            group_sender=sender,
-            caption=caption,
-            quote_msg_id=quote_id,
+            pool_ids.append(result['pool_id'])
+        for pid in _recent_unassigned_pool_ids(sender):
+            if pid not in pool_ids:
+                pool_ids.append(pid)
+        remark = _classify_remark_from_data(data)
+        assign_images_to_project(
+            pool_ids, project, 'user', remark=remark or None, group_id=group_id,
         )
+        _set_burst_project(group_id, sender, project)
+        _clear_classify_intent(group_id, sender)
+        return jsonify({'handled': True, 'type': 'group_pool_assigned', 'count': len(pool_ids)})
+
+    loomy_pool_ids = []
+    for idx, image_path in enumerate(photo_paths):
+        msg_id = _pool_msg_id(data, idx, base_msg_id)
+        r = save_to_pool(
+            sender,
+            image_path,
+            caption,
+            msg_id,
+            from_name,
+            defer_assign=True,
+            defer_reminder=True,
+            batch_id=base_msg_id or None,
+            chat_jid=(group_id or '').strip() or None,
+            wa_message_raw=data.get('waRaw') if isinstance(data.get('waRaw'), dict) else None,
+            **_pool_media_kwargs(data),
+        )
+        loomy_pool_ids.append(r['pool_id'])
+    _loomy_after_pool_intake(
+        loomy_pool_ids,
+        phone=sender,
+        sender_name=from_name,
+        group_id=group_id,
+        group_sender=sender,
+        caption=caption,
+        quote_msg_id=quote_id,
+    )
 
     return jsonify({
         'handled': True,
-        'type': 'group_pending_image',
+        'type': 'group_pool_media',
         'count': len(photo_paths),
     })
-
-
-def _categorize_group_image(pending, project, group_id, data, sender):
-    if not project:
-        _warn_unknown_group_project(group_id, str(project))
-        return jsonify({'handled': True, 'type': 'group_no_match'})
-    if isinstance(project, str):
-        project = mongo.db.wa_projects.find_one({'code': project, 'status': 'active'})
-    if not project:
-        _warn_unknown_group_project(group_id, str(project))
-        return jsonify({'handled': True, 'type': 'group_no_match'})
-
-    quoted_id = data.get('quotedMsgId')
-    has_quoted = data.get('hasQuotedMsg', False)
-
-    sender_fallback = {
-        'groupId': group_id,
-        'senderPhone': (pending or {}).get('senderPhone') or sender,
-        'categorized': False,
-    }
-
-    claim_filter = sender_fallback  # default: all pending for this sender
-
-    if has_quoted and quoted_id:
-        variants = _quoted_id_variants(quoted_id)
-        # Try botReminderMsgIds first, then photo's own messageId
-        quote_filter = {
-            'groupId': group_id,
-            'senderPhone': sender,
-            'categorized': False,
-            '$or': [
-                {'botReminderMsgIds': {'$in': variants}},
-                {'messageId': {'$in': variants}},
-            ],
-        }
-        if mongo.db.group_pending_images.count_documents(quote_filter) > 0:
-            claim_filter = quote_filter
-        # else: quote didn't match any known photo/prompt → fall back to sender's batch
-
-    now = datetime.utcnow()
-    result = mongo.db.group_pending_images.update_many(
-        claim_filter,
-        {'$set': {'categorized': True, 'projectCode': project['code'], 'projectId': project['_id'], 'updatedAt': now}},
-    )
-
-    if result.modified_count == 0:
-        return jsonify({'handled': True, 'type': 'group_already_categorized'})
-
-    _clear_classify_intent(group_id, sender)
-    _cancel_scheduled_receipt(group_id=group_id, group_sender=sender)
-
-    claimed = list(mongo.db.group_pending_images.find(
-        {'groupId': group_id, 'projectCode': project['code'], 'categorized': True},
-    ).sort('updatedAt', -1).limit(result.modified_count))
-
-    msg_ids = [img['messageId'] for img in claimed]
-    pool_imgs = list(mongo.db.pool_images.find({'messageId': {'$in': msg_ids}, 'projectId': {'$exists': False}}))
-    pool_by_msg = {p['messageId']: str(p['_id']) for p in pool_imgs}
-
-    remark = _classify_remark_from_data(data)
-
-    pool_ids = []
-    missing = []
-    for img in claimed:
-        pid = pool_by_msg.get(img['messageId'])
-        if pid:
-            pool_ids.append(pid)
-        else:
-            missing.append(img)
-
-    if missing:
-        for m in missing:
-            r = mongo.db.pool_images.insert_one({
-                'phone': m['senderPhone'],
-                'senderName': m.get('senderName'),
-                'imagePath': m.get('imagePath'),
-                'downloadFailed': not m.get('imagePath'),
-                'caption': remark or project.get('code'),
-                'messageId': m['messageId'],
-                'createdAt': now,
-                'updatedAt': now,
-            })
-            pool_ids.append(str(r.inserted_id))
-
-    if remark and pool_ids:
-        mongo.db.pool_images.update_many(
-            {'_id': {'$in': [ObjectId(i) for i in pool_ids]}},
-            {'$set': {'caption': remark, 'updatedAt': now}},
-        )
-        mongo.db.group_pending_images.update_many(
-            {'messageId': {'$in': msg_ids}},
-            {'$set': {'caption': remark, 'updatedAt': now}},
-        )
-
-    assigned = 0
-    if pool_ids:
-        assigned = assign_images_to_project(
-            pool_ids, project, 'user', remark=remark, group_id=group_id,
-        )
-
-    notify_count = assigned if assigned > 0 else len(claimed)
-    if notify_count > 0:
-        from app.services.assignment_notify_service import schedule_assignment_confirmation
-        schedule_assignment_confirmation(project, notify_count, group_id=group_id)
-
-    return jsonify({'handled': True, 'type': 'group_categorized'})
 
 
 def _parse_move_target(text):
@@ -2309,8 +1209,6 @@ def _assign_unassigned_for_reply(sender, project, data):
         _clear_fuzzy_choice(None, sender)
         if n <= 0:
             return n
-        from app.services.assignment_notify_service import schedule_assignment_confirmation
-        schedule_assignment_confirmation(project, n, phone=sender)
         _cancel_scheduled_receipt(phone=sender)
         return n
 

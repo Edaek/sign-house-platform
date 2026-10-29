@@ -129,9 +129,10 @@ WhatsApp 回复用繁体、短。查完再答 NAS/专案/池状态。
 
 ---
 
-## 七、與舊版 Bot 文件
+## 七、誰在 WhatsApp 裡說話
 
-- 本地 **`WA_INBOUND_CLASSIFY_MODE=agent`** 仍見 [LOOMY_WA_INBOUND.md](./LOOMY_WA_INBOUND.md)（Ollama + 規則層）。
-- **Loom Turn + Gateway 入 pool** 見 [LOOM_WA_MCP.md](./LOOM_WA_MCP.md)。
+- **Sign House backend / Gateway**：只 **收圖入 Media Pool**、寫 DB/NAS；**不再**發「收到 N 張」「待歸類」「✅已歸類」等固定模板。
+- **Loom（signhouseloomy）**：所有 **用戶可見回覆**——收圖後引導、assign 確認、找不到專案、NAS 異常說明，均靠 **Persona + MCP 工具結果** 生成。
+- 本地 **`WA_INBOUND_CLASSIFY_MODE=agent`**（可選）見 [LOOMY_WA_INBOUND.md](./LOOMY_WA_INBOUND.md)；**推薦 `loom`**，見 [LOOM_WA_MCP.md](./LOOM_WA_MCP.md)。
 
 **一句話**：Signhouse = 隊友口吻 + MCP 查實數；工地主線 = **Pool → assign + remark → 當日 txt**；沒工具結果就不打包票。

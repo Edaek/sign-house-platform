@@ -150,21 +150,13 @@ def should_skip_receipt_after_classify_reply(
 
 
 def format_pool_receipt_body(count: int) -> str:
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if wa_inbound_loomy_dispatch_enabled():
-        return ''
-    return (
-        f'📷 收到 *{count}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
-        f'發送 *projects* 查看專案列表。'
-    )
+    """Legacy auto-bot receipt removed — Loom/agent owns WhatsApp copy."""
+    del count
+    return ''
 
 
 def format_pool_receipt_template() -> str:
-    return (
-        f'📷 收到 *{{count}}* 張照片，請回覆專案編碼或名稱進行歸類。\n'
-        f'發送 *projects* 查看專案列表。'
-    )
+    return ''
 
 
 def phone_match_query(phone: str) -> dict:
@@ -557,161 +549,15 @@ def cancel_pool_receipt_for_phone(phone: str, batch_id: Optional[str] = None) ->
 
 
 def _flush(key: str) -> None:
+    """Drop stale pending receipt docs — WhatsApp copy is Loom-only."""
     if not _flask_app:
-        logger.warning('[PoolReceipt] Flask app not initialized')
         return
     try:
         from app import mongo
-        from app.services.wa_send_service import send_message, send_group_message
 
         with _flask_app.app_context():
-            from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-            doc_id = _pending_doc_id(key)
-            now = datetime.utcnow()
-            pending = mongo.db.wa_system.find_one({'_id': doc_id})
-            if not pending:
-                return
-            if wa_inbound_loomy_dispatch_enabled():
-                mongo.db.wa_system.delete_one({'_id': doc_id})
-                logger.info('[PoolReceipt] Dropped legacy receipt (Loomy agent mode) for %s', key)
-                return
-            flush_at = pending.get('flushAt')
-            if flush_at and flush_at > now:
-                delay = (flush_at - now).total_seconds()
-                with _lock:
-                    existing = _timers.pop(key, None)
-                    if existing:
-                        existing.cancel()
-                    timer = threading.Timer(max(0.05, delay), _flush, args=(key,))
-                    timer.daemon = True
-                    timer.start()
-                    _timers[key] = timer
-                return
-
-            if not _try_acquire_send_lock(key):
-                return
-
-            entry = mongo.db.wa_system.find_one_and_delete({'_id': doc_id})
-            if not entry:
-                return
-
-            count = _resolve_count(entry)
-            if count <= 0:
-                logger.info('[PoolReceipt] Skip send — nothing left to classify for %s', key)
-                return
-
-            if wa_inbound_loomy_dispatch_enabled():
-                return
-
-            if _duplicate_send(key, count):
-                return
-
-            if entry.get('phone') and not entry.get('group_id'):
-                phone = entry['phone']
-                if private_classify_in_progress(phone):
-                    logger.info(
-                        '[PoolReceipt] Skip receipt — classify in progress for %s',
-                        phone,
-                    )
-                    return
-                if should_skip_receipt_after_classify_reply(
-                    phone, entry.get('batch_id'),
-                ):
-                    logger.info(
-                        '[PoolReceipt] Skip receipt — classify reply just sent for %s',
-                        phone,
-                    )
-                    return
-                digits = _normalize_phone(phone)
-                skip_ids = (
-                    f'wa_classify_intent:p:{digits}',
-                    f'wa_ai_confirm:p:{digits}',
-                    f'wa_fuzzy_choice:p:{digits}',
-                )
-                if any(mongo.db.wa_system.find_one({'_id': sid}) for sid in skip_ids):
-                    logger.info(
-                        '[PoolReceipt] Skip generic receipt — classify in progress for %s',
-                        digits,
-                    )
-                    return
-                body = format_pool_receipt_body(count)
-                if not (body or '').strip():
-                    return
-            elif entry.get('group_id'):
-                gid = entry['group_id']
-                gs = entry.get('group_sender') or ''
-                if should_skip_receipt_after_classify_reply(
-                    batch_id=entry.get('batch_id'),
-                    group_id=gid,
-                    group_sender=gs,
-                ):
-                    logger.info(
-                        '[PoolReceipt] Skip group receipt — classify reply just sent for %s',
-                        gid,
-                    )
-                    return
-                custom = entry.get('body') or ''
-                if '相似專案' in custom or '找不到專案' in custom:
-                    body = custom.format(count=count) if '{count}' in custom else custom
-                else:
-                    body = format_pool_receipt_body(count)
-                if not (body or '').strip():
-                    return
-            else:
-                body = entry.get('body') or ''
-                if '{count}' in body:
-                    body = body.format(count=count)
-
-            quote = entry.get('quote_msg_id')
-            batch_id = entry.get('batch_id')
-            if not quote and entry.get('phone'):
-                quote = latest_pool_quote_id(entry['phone'], batch_id)
-            if not quote and entry.get('group_id') and entry.get('group_sender'):
-                quote = latest_group_quote_id(
-                    entry['group_id'], entry['group_sender'], batch_id,
-                )
-            if entry.get('group_id'):
-                img_doc = mongo.db.group_pending_images.find_one(
-                    {
-                        'groupId': entry['group_id'],
-                        'senderPhone': entry.get('group_sender'),
-                        'categorized': False,
-                        **({'batchId': batch_id} if batch_id else {}),
-                    },
-                    sort=[('createdAt', -1)],
-                    projection={'waMessageRaw': 1},
-                )
-                resp = send_group_message(
-                    entry['group_id'],
-                    body,
-                    quoted_msg_id=quote,
-                    quoted_payload=(img_doc or {}).get('waMessageRaw'),
-                )
-            elif entry.get('phone'):
-                from app.services.wa_pool_nudge_service import send_private_classify_nudge
-
-                phone = entry['phone']
-                img_doc = mongo.db.pool_images.find_one(
-                    {'projectId': {'$exists': False}, **phone_match_query(phone), **(
-                        {'batchId': batch_id} if batch_id else {}
-                    )},
-                    sort=[('createdAt', -1)],
-                    projection={'imagePath': 1, 'waMessageRaw': 1},
-                )
-                resp = send_private_classify_nudge(
-                    phone,
-                    body,
-                    quote_msg_id=quote,
-                    image_path=(img_doc or {}).get('imagePath'),
-                    quoted_payload=(img_doc or {}).get('waMessageRaw'),
-                )
-            else:
-                return
-
-            _record_send(key, count)
-            logger.info('[PoolReceipt] Sent one receipt for %s (%d file(s))', key, count)
-            if resp and isinstance(resp, dict):
-                _record_prompt_after_send(entry, resp)
+            with _lock:
+                _timers.pop(key, None)
+            mongo.db.wa_system.delete_one({'_id': _pending_doc_id(key)})
     except Exception:
-        logger.exception('[PoolReceipt] Failed to send receipt prompt')
+        logger.exception('[PoolReceipt] Pending cleanup failed for %s', key)

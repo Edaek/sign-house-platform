@@ -11,7 +11,6 @@ from pathlib import Path
 from bson import ObjectId
 
 from app import mongo
-from app.services.wa_send_service import send_message
 from app.services.reference_number_service import generate_reference_number
 from app.services.nas_upload_service import upload_to_nas, is_nas_enabled
 from app.services.message_parser_service import (
@@ -33,52 +32,13 @@ from app.services.project_number_match_service import (
 
 logger = logging.getLogger(__name__)
 
-REMIND_AFTER_S = 30
-POOL_REMINDER_ENABLED = os.environ.get('POOL_REMINDER_ENABLED', 'false').lower() == 'true'
-
-_pending_reminders = {}  # type: dict
-_reminder_lock = threading.Lock()
-
-
-def _send_pool_reminder(phone: str) -> None:
-    """Send a WhatsApp reminder about unassigned pool images."""
-    try:
-        count = mongo.db.pool_images.count_documents({
-            'phone': phone,
-            'projectId': {'$exists': False},
-        })
-        if count > 0:
-            send_message(
-                phone,
-                f'📷 您有 *{count}* 張未標記的照片。\n\n'
-                f'請回覆專案編碼（例如 P-001）或專案名稱。\n\n'
-                f'發送 *projects* 查看專案列表。',
-            )
-    except Exception:
-        logger.exception('[ImagePool] Failed to send scheduled reminder')
-
-
 def schedule_reminder(phone: str) -> None:
-    """Schedule a 30s reminder. Resets the timer on each new image."""
-    if not POOL_REMINDER_ENABLED:
-        return
-    with _reminder_lock:
-        existing = _pending_reminders.pop(phone, None)
-        if existing:
-            existing.cancel()
-
-        timer = threading.Timer(REMIND_AFTER_S, _send_pool_reminder, args=(phone,))
-        timer.daemon = True
-        timer.start()
-        _pending_reminders[phone] = timer
+    """No-op — Loom reminds users via Persona/MCP."""
+    del phone
 
 
 def cancel_reminder(phone: str) -> None:
-    """Cancel a pending reminder (e.g. when user labels images)."""
-    with _reminder_lock:
-        existing = _pending_reminders.pop(phone, None)
-        if existing:
-            existing.cancel()
+    del phone
 
 
 def _normalize_project_label(text):
@@ -480,22 +440,6 @@ def save_to_pool(
     result = mongo.db.pool_images.insert_one(doc)
     pool_id = str(result.inserted_id)
 
-    from app.services.wa_classify_mode import worker_auto_classify_enabled
-
-    if caption and not defer_assign and worker_auto_classify_enabled():
-        from app.services.project_ai_resolve_service import resolve_classify_input
-
-        resolved = resolve_classify_input(caption, active_only=True)
-        if resolved.action == 'assign' and resolved.project:
-            assign_images_to_project([pool_id], resolved.project, 'user', remark=resolved.remark)
-            return {
-                'auto_assigned': True,
-                'project_code': resolved.project['code'],
-                'pool_id': pool_id,
-            }
-
-    if not defer_reminder and worker_auto_classify_enabled():
-        schedule_reminder(phone)
     return {'auto_assigned': False, 'pool_id': pool_id}
 
 
@@ -908,16 +852,9 @@ def assign_images_to_project(
 
                             strip_remark_from_txt_files(strip_paths, strip_text)
                     if expected > 0 and len(nas_photos) == 0:
-                        phone = (_images[0].get('phone') or '').strip()
-                        if phone:
-                            try:
-                                send_message(
-                                    phone,
-                                    '⚠️ 專案已歸類，但照片未能寫入 NAS（檔案缺失或複製失敗）。'
-                                    '請到「媒體池」重試下載，或重新發送照片。',
-                                )
-                            except Exception:
-                                logger.exception('[ImagePool] NAS failure notify send failed')
+                        logger.warning(
+                            '[ImagePool] NAS write failed after assign — Loom should notify user via MCP',
+                        )
                     logger.info(
                         '[ImagePool] NAS %s %s: %d/%d files',
                         'copy' if _use_local else 'upload',
@@ -980,10 +917,6 @@ def assign_all_unassigned(phone, project, assigned_by='user', *, remark=None):
 
     ids = [str(img['_id']) for img in unassigned]
     count = assign_images_to_project(ids, project, assigned_by, remark=remark)
-
-    if assigned_by == 'user' and count > 0:
-        from app.services.assignment_notify_service import schedule_assignment_confirmation
-        schedule_assignment_confirmation(project, count, phone=phone)
 
     return count
 

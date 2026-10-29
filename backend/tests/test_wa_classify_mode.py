@@ -1,4 +1,4 @@
-"""WA classify mode: legacy auto-bot vs WhatsApp Loomy agent."""
+"""WA classify mode: loom runtime vs local Loomy agent."""
 import unittest
 
 from app.services.wa_classify_mode import (
@@ -14,10 +14,11 @@ from app.services.wa_classify_mode import (
 
 
 class WaClassifyModeTests(unittest.TestCase):
-    def test_default_is_auto(self):
+    def test_auto_env_maps_to_loom(self):
         cfg = {'WA_INBOUND_CLASSIFY_MODE': 'auto'}
-        self.assertTrue(worker_auto_classify_enabled(cfg))
-        self.assertFalse(wa_loomy_agent_enabled(cfg))
+        self.assertEqual(classify_mode(cfg), MODE_LOOM)
+        self.assertFalse(worker_auto_classify_enabled(cfg))
+        self.assertTrue(wa_inbound_loomy_dispatch_enabled(cfg))
 
     def test_agent_disables_legacy_bot(self):
         cfg = {'WA_INBOUND_CLASSIFY_MODE': MODE_AGENT}

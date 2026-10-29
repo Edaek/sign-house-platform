@@ -190,21 +190,10 @@ def _exec_assign_pool(a: dict) -> str:
     count = assign_images_to_project(
         ids, proj, 'loomy_agent', remark=remark, group_id=group_id,
     )
-    notified = False
-    if notify and count > 0:
-        from app.services.assignment_notify_service import schedule_assignment_confirmation
-
-        if group_id:
-            schedule_assignment_confirmation(proj, count, group_id=group_id)
-            notified = True
-        elif phone:
-            schedule_assignment_confirmation(proj, count, phone=phone)
-            notified = True
-
     return json_result({
         'assigned': count,
         'projectCode': project.get('code'),
-        'whatsappNotified': notified,
+        'whatsappNotified': False,
         'remark': remark,
         'siteRemarkQueued': bool(remark),
     })

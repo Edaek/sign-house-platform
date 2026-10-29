@@ -140,9 +140,12 @@ class GroupReminderScheduler:
                 count = len(images)
                 batch_id = newest.get('batchId')
                 try:
-                    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
+                    from app.services.wa_classify_mode import (
+                        pool_receipt_prompts_enabled,
+                        wa_inbound_loomy_dispatch_enabled,
+                    )
 
-                    if wa_inbound_loomy_dispatch_enabled():
+                    if wa_inbound_loomy_dispatch_enabled() or not pool_receipt_prompts_enabled():
                         continue
 
                     from app.services.pool_receipt_notify_service import (
@@ -156,15 +159,10 @@ class GroupReminderScheduler:
                     ):
                         continue
                     message = format_pool_receipt_body(count)
+                    if not (message or '').strip():
+                        continue
                 except Exception:
-                    if count == 1:
-                        message = (
-                            '📷 有 1 張圖片待歸類，請*引用此訊息*回覆專案編碼（如 P-001）或專案名稱。'
-                        )
-                    else:
-                        message = (
-                            f'📷 有 *{count}* 張圖片待歸類，請*引用此訊息*回覆專案編碼或專案名稱即可歸類全部圖片。'
-                        )
+                    continue
 
                 composite = None
                 if ATTACH_COMPOSITE:

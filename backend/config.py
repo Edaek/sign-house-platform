@@ -137,8 +137,8 @@ class Config:
     # Burst project hint after user sends classify text before photos arrive
     WA_BURST_PROJECT_TTL_S = int(os.environ.get('WA_BURST_PROJECT_TTL_S', '120'))
 
-    # auto = legacy WhatsApp fuzzy/AI classify; loomy = intake only + Mattermost @signhouseloomy
-    WA_INBOUND_CLASSIFY_MODE = os.environ.get('WA_INBOUND_CLASSIFY_MODE', 'auto').strip().lower()
+    # loom = Loom MCP brain | agent = local Ollama Loomy (auto/legacy mode removed)
+    WA_INBOUND_CLASSIFY_MODE = os.environ.get('WA_INBOUND_CLASSIFY_MODE', 'loom').strip().lower()
     MATTERMOST_POOL_WEBHOOK_URL = os.environ.get('MATTERMOST_POOL_WEBHOOK_URL', '').strip()
     LOOMY_POOL_NOTIFY_ENABLED = os.environ.get('LOOMY_POOL_NOTIFY_ENABLED', '').strip().lower()
     LOOMY_WA_POOL_ACK = os.environ.get('LOOMY_WA_POOL_ACK', '').strip()

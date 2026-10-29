@@ -135,6 +135,7 @@ class TestFuzzyMatchProjects:
 # Part 2 — Fuzzy inbound handler tests
 # ===================================================================
 
+@pytest.mark.skip(reason='Legacy auto-bot WhatsApp classify replies removed; use loom/agent.')
 class TestFuzzyInbound:
 
     @patch('app.api.wa_inbound.send_message')

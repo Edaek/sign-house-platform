@@ -17,18 +17,32 @@ def _is_legacy_pool_receipt_text(text: str) -> bool:
 
 
 def _block_legacy_receipt_outbound(text: str, *, channel: str, target: str):
-    from app.services.wa_classify_mode import wa_inbound_loomy_dispatch_enabled
-
-    if not text or not wa_inbound_loomy_dispatch_enabled():
-        return False
-    if not _is_legacy_pool_receipt_text(text):
-        return False
-    logger.warning(
-        '[Wakka] Blocked legacy pool-receipt text in Loomy mode (%s → %s)',
-        channel,
-        target,
+    from app.services.wa_classify_mode import (
+        wa_inbound_loomy_dispatch_enabled,
+        wa_loom_runtime_brain_enabled,
     )
-    return True
+
+    if not text:
+        return False
+    if _is_legacy_pool_receipt_text(text):
+        if not wa_inbound_loomy_dispatch_enabled():
+            return False
+        logger.warning(
+            '[Wakka] Blocked legacy pool-receipt text (%s → %s)',
+            channel,
+            target,
+        )
+        return True
+    if '找不到與' in (text or '') and '相符的專案' in (text or ''):
+        if not wa_loom_runtime_brain_enabled():
+            return False
+        logger.warning(
+            '[Wakka] Blocked legacy classify no-match text in loom mode (%s → %s)',
+            channel,
+            target,
+        )
+        return True
+    return False
 
 
 def _wakka_request(path, method='GET', json_data=None):

@@ -1,10 +1,12 @@
-"""WhatsApp media-pool classify: legacy auto-bot vs in-chat Loomy agent."""
+"""WhatsApp inbound: Loom runtime or local Loomy agent (legacy auto-bot removed)."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Mapping, Optional
 
-MODE_AUTO = 'auto'
+logger = logging.getLogger(__name__)
+
 MODE_AGENT = 'agent'
 # Loom runtime / Platform HTTP as sole brain — no local Ollama MCP agent
 MODE_LOOM = 'loom'
@@ -21,12 +23,19 @@ def _cfg_val(config: Optional[Mapping[str, Any]], key: str, env_key: str, defaul
 
 
 def classify_mode(config: Optional[Mapping[str, Any]] = None) -> str:
-    m = _cfg_val(config, 'WA_INBOUND_CLASSIFY_MODE', 'WA_INBOUND_CLASSIFY_MODE', MODE_AUTO)
+    m = _cfg_val(config, 'WA_INBOUND_CLASSIFY_MODE', 'WA_INBOUND_CLASSIFY_MODE', MODE_LOOM)
+    if m in ('auto', 'legacy', ''):
+        logger.warning(
+            'WA_INBOUND_CLASSIFY_MODE=%r is deprecated; use loom or agent',
+            m or 'auto',
+        )
+        return MODE_LOOM
     if m == MODE_LOOM:
         return MODE_LOOM
     if m in (MODE_AGENT, MODE_LOOMY):
         return MODE_AGENT
-    return MODE_AUTO
+    logger.warning('Unknown WA_INBOUND_CLASSIFY_MODE=%r — defaulting to loom', m)
+    return MODE_LOOM
 
 
 def wa_loomy_agent_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
@@ -45,12 +54,12 @@ def wa_inbound_loomy_dispatch_enabled(config: Optional[Mapping[str, Any]] = None
 
 
 def worker_auto_classify_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
-    """False when Loomy agent or Loom runtime handles pool classify on WhatsApp."""
-    return not wa_inbound_loomy_dispatch_enabled(config)
+    """Legacy auto-bot removed — always False."""
+    return False
 
 
 def pool_receipt_prompts_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
-    return worker_auto_classify_enabled(config)
+    return False
 
 
 def mattermost_pool_notify_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:

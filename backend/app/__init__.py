@@ -259,15 +259,6 @@ def create_app(config_name=None):
     from app.services.pool_receipt_notify_service import init_app as init_pool_receipt
     init_pool_receipt(app)
 
-    from app.services.pool_reminder_scheduler import pool_reminder_scheduler
-    pool_reminder_scheduler.init_app(app)
-
-    from app.services.loomy_pool_reminder import loomy_pool_reminder
-    loomy_pool_reminder.init_app(app)
-
-    from app.services.group_reminder_runner import init_app as init_group_reminder, start as start_group_reminder
-    init_group_reminder(app)
-
     # Recover zombie jobs from prior crashes, then watch for stale workers
     from app.services.job_recovery import recover_stale_jobs, start_stale_job_watchdog
     with app.app_context():
@@ -288,10 +279,6 @@ def create_app(config_name=None):
     if _run_bg:
         start_stale_job_watchdog(app)
         nas_sync_scheduler.start()
-        pool_reminder_scheduler.start()
-        start_group_reminder()
-        loomy_pool_reminder.start()
-
     with app.app_context():
         from mcp_wa.inprocess_client import log_jwt_guard_on_startup
 

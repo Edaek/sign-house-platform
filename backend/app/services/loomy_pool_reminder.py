@@ -36,9 +36,11 @@ class LoomyPoolReminder:
             logger.info('[LoomyReminder] Disabled (not in agent/loomy mode)')
             return
 
-        enabled = os.environ.get('LOOMY_POOL_REMINDER_ENABLED', 'true').strip().lower()
-        if enabled in ('0', 'false', 'no', 'off'):
-            logger.info('[LoomyReminder] Disabled (LOOMY_POOL_REMINDER_ENABLED=false)')
+        enabled = os.environ.get('LOOMY_POOL_REMINDER_ENABLED', 'false').strip().lower()
+        if enabled not in ('1', 'true', 'yes', 'on'):
+            logger.info(
+                '[LoomyReminder] Off — pool nudge/remind via Loom (LOOMY_POOL_REMINDER_ENABLED=true to override)',
+            )
             return
 
         if self._thread and self._thread.is_alive():

@@ -107,15 +107,10 @@ def assign_images():
             'assigned': 0,
         }), 409
 
-    if notify_whatsapp and group_id:
-        from app.services.assignment_notify_service import schedule_assignment_confirmation
-
-        schedule_assignment_confirmation(proj, count, group_id=group_id)
-
     return jsonify({
         'assigned': count,
         'projectCode': project['code'],
-        'whatsappNotified': bool(notify_whatsapp and group_id),
+        'whatsappNotified': False,
         'remark': remark,
         'siteRemarkQueued': bool(remark),
     })
