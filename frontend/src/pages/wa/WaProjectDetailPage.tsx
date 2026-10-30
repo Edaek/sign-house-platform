@@ -213,20 +213,30 @@ export default function WaProjectDetailPage() {
     (projectId: string, code: string) => {
       if (!nasStatus?.connected) return Promise.resolve()
       setSiteNasLoading(true)
-      return Promise.all([
+      return Promise.allSettled([
         api.get<{ ok?: boolean; files?: NasFileEntry[] }>(`/wa/projects/${projectId}/nas/txt`, {
           params: nasFolderParams,
-          timeout: 20000,
+          timeout: 120000,
         }),
         api.get<{ files?: NasFileEntry[] }>('/wa/nas/browse', {
           params: { code, ...nasFolderParams, filesOnly: '1' },
           timeout: 120000,
         }),
       ])
-        .then(([txtRes, browseRes]) => {
-          const txt = txtRes.data.files ?? []
+        .then((results) => {
+          const txtRes = results[0].status === 'fulfilled' ? results[0].value : null
+          const browseRes = results[1].status === 'fulfilled' ? results[1].value : null
+          const browseFiles = browseRes?.data.files ?? []
+          const txtFromBrowse = browseFiles.filter((f) => /\.txt$/i.test(f.name))
+          const txtFromApi = txtRes?.data.files ?? []
+          const txtByKey = new Map<string, NasFileEntry>()
+          for (const f of [...txtFromApi, ...txtFromBrowse]) {
+            const key = f.relativePath || f.name
+            if (!txtByKey.has(key)) txtByKey.set(key, f)
+          }
+          const txt = [...txtByKey.values()]
           setProject((p) => (p ? { ...p, nasTxtFiles: txt } : p))
-          setNasImageFiles(browseRes.data.files ?? [])
+          setNasImageFiles(browseFiles.filter((f) => !/\.txt$/i.test(f.name)))
         })
         .catch(() => {})
         .finally(() => setSiteNasLoading(false))

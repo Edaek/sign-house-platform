@@ -93,6 +93,28 @@ class NasLayoutTests(unittest.TestCase):
             )
             self.assertFalse(txt_long.is_file(), 'must not write remark to the other physical folder')
 
+    def test_list_txt_under_range_bucket_photo_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            site = root / 'T-1000-2002' / '1007'
+            day = site / 'Photo' / '2026-10-29'
+            day.mkdir(parents=True)
+            txt_name = site_remark_filename(folder_name='1007', day_str='2026-10-29')
+            (day / txt_name).write_text('site note', encoding='utf-8')
+            (day / 'photo.jpg').write_bytes(b'\xff\xd8\xff')
+            svc = NasMountService()
+            svc._app = MagicMock()
+            svc._app.config = {'NAS_WATCH_DIR': str(root)}
+            doc = {'code': '1007', 'nasFolderName': '1007', 'nasParentBucket': 'T-1000-2002'}
+            files = svc._list_project_txt_files_sync('1007', project_doc=doc)
+            self.assertEqual(len(files), 1)
+            self.assertEqual(files[0]['name'], txt_name)
+            self.assertEqual(files[0]['relativePath'], f'Photo/2026-10-29/{txt_name}'.replace('/', os.sep))
+            browse = svc._list_folder_files_sync('1007', project_doc=doc)
+            names = {f['name'] for f in browse}
+            self.assertIn(txt_name, names)
+            self.assertIn('photo.jpg', names)
+
 
 if __name__ == '__main__':
     unittest.main()

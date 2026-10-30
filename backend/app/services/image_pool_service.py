@@ -831,7 +831,10 @@ def assign_images_to_project(
                         and nas_photos
                         and sync_status in ('synced', 'partial')
                     ):
-                        from app.services.nas_sync_service import delete_nas_paths
+                        from app.services.nas_sync_service import (
+                            delete_nas_paths,
+                            remove_empty_photo_day_dirs,
+                        )
 
                         photo_only = [
                             p for p in _nas_delete_after
@@ -851,6 +854,13 @@ def assign_images_to_project(
                             )
 
                             strip_remark_from_txt_files(strip_paths, strip_text)
+                        cleanup_paths = list(photo_only) + list(strip_paths)
+                        emptied = remove_empty_photo_day_dirs(cleanup_paths)
+                        if emptied:
+                            logger.info(
+                                '[ImagePool] Relocated NAS: removed %d empty Photo day folder(s)',
+                                len(emptied),
+                            )
                     if expected > 0 and len(nas_photos) == 0:
                         logger.warning(
                             '[ImagePool] NAS write failed after assign — Loom should notify user via MCP',

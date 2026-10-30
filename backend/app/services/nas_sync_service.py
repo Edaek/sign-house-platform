@@ -959,6 +959,73 @@ def delete_nas_paths(paths):
     return deleted
 
 
+def photo_day_dir_from_nas_path(path: str) -> str | None:
+    """Parent dir when *path* is a file under …/Photo/YYYY-MM-DD/."""
+    from app.services.nas_site_remark_service import PHOTO_SUBDIR, site_day_from_nas_path
+
+    p = (path or '').strip()
+    if not p:
+        return None
+    day = site_day_from_nas_path(p)
+    if not day:
+        return None
+    day_dir = os.path.dirname(p)
+    if os.path.basename(day_dir) != day:
+        return None
+    if os.path.basename(os.path.dirname(day_dir)) != PHOTO_SUBDIR:
+        return None
+    return day_dir
+
+
+def _photo_day_dir_has_user_content(day_dir: str) -> bool:
+    """True if the day folder still has non-hidden files or subfolders."""
+    try:
+        for ent in os.scandir(day_dir):
+            if ent.name.startswith('.'):
+                continue
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _clear_hidden_junk_in_day_dir(day_dir: str) -> None:
+    try:
+        for ent in os.scandir(day_dir):
+            if not ent.name.startswith('.'):
+                continue
+            if ent.is_file(follow_symlinks=False):
+                try:
+                    os.remove(ent.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def remove_empty_photo_day_dirs(for_paths) -> list[str]:
+    """After move/delete, drop Photo/YYYY-MM-DD dirs with no remaining site files."""
+    day_dirs: set[str] = set()
+    for path in for_paths or []:
+        day_dir = photo_day_dir_from_nas_path(path)
+        if day_dir:
+            day_dirs.add(day_dir)
+    removed: list[str] = []
+    for day_dir in sorted(day_dirs):
+        if not os.path.isdir(day_dir):
+            continue
+        if _photo_day_dir_has_user_content(day_dir):
+            continue
+        _clear_hidden_junk_in_day_dir(day_dir)
+        if _photo_day_dir_has_user_content(day_dir):
+            continue
+        result = nas_mount.delete_path(day_dir)
+        if result.get('ok'):
+            removed.append(day_dir)
+            logger.info('[NASSync] Removed empty Photo day folder → %s', day_dir)
+    return removed
+
+
 def remove_nas_files_for_record(record):
     """Web → NAS: remove files on the share linked to a record."""
     paths = set()
@@ -967,7 +1034,10 @@ def remove_nas_files_for_record(record):
     for p in record.get('nasPhotos') or []:
         if p:
             paths.add(p)
-    return delete_nas_paths(list(paths))
+    path_list = list(paths)
+    deleted = delete_nas_paths(path_list)
+    remove_empty_photo_day_dirs(path_list)
+    return deleted
 
 
 def delete_web_record(record, *, remove_nas=True, media_dir=None):

@@ -468,11 +468,16 @@ def list_project_nas_txt(project_id):
 
     if not nas_mount.is_available():
         return jsonify({'ok': False, 'error': 'NAS not connected', 'files': []}), 503
-    if not nas_mount.probe_responsive(timeout_s=3):
-        return jsonify({'ok': False, 'error': 'NAS slow or unreachable', 'files': []}), 503
     code = (project.get('code') or '').strip()
     view = _nas_view_project_doc(project)
-    return jsonify({'ok': True, 'files': nas_mount.list_project_txt_files(code, project_doc=view)})
+    nas_slow = not nas_mount.probe_responsive(timeout_s=2)
+    files = nas_mount.list_project_txt_files(code, project_doc=view)
+    hint = (
+        'NAS is slow — remark file listing may be incomplete.'
+        if nas_slow and not files
+        else None
+    )
+    return jsonify({'ok': True, 'files': files, 'hint': hint})
 
 
 @wa_projects_bp.route('/<project_id>/nas/txt/content', methods=['GET', 'PUT'])

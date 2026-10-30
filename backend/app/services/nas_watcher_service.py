@@ -50,6 +50,45 @@ def _iter_project_images(folder: Path):
         yield f
 
 
+def _iter_project_remark_txt(folder: Path):
+    """Site remark .txt under Photo/YYYY-MM-DD/ (fast on SMB); then legacy paths."""
+    seen: set[str] = set()
+    photo = folder / PHOTO_SUBDIR
+    if photo.is_dir():
+        try:
+            for day_dir in sorted(photo.iterdir(), key=lambda p: p.name):
+                if not day_dir.is_dir() or day_dir.name.startswith('.'):
+                    continue
+                if _path_has_hidden_part(day_dir, folder):
+                    continue
+                try:
+                    for f in sorted(day_dir.glob('*.txt'), key=lambda p: p.name):
+                        if not f.is_file() or f.name.startswith('.'):
+                            continue
+                        key = str(f.resolve())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        yield f
+                except OSError:
+                    continue
+        except OSError as e:
+            logger.warning('[NAS] list Photo day txt failed under %s: %s', folder, e)
+    try:
+        for f in sorted(folder.rglob('*.txt'), key=lambda p: str(p)):
+            if not f.is_file() or f.name.startswith('.'):
+                continue
+            if _path_has_hidden_part(f, folder):
+                continue
+            key = str(f.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            yield f
+    except OSError as e:
+        logger.warning('[NAS] rglob txt failed under %s: %s', folder, e)
+
+
 def _run_with_timeout(fn, timeout_s: float, default=None):
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
@@ -1257,22 +1296,17 @@ class NasMountService:
         if not folder:
             return []
         out = []
-        try:
-            for f in sorted(folder.rglob('*.txt')):
-                if not f.is_file() or f.name.startswith('.'):
-                    continue
-                try:
-                    st = f.stat()
-                    out.append({
-                        'name': f.name,
-                        'size': st.st_size,
-                        'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
-                        'relativePath': str(f.relative_to(folder)),
-                    })
-                except OSError:
-                    continue
-        except OSError as e:
-            logger.warning('[NAS] list txt files failed: %s', e)
+        for f in _iter_project_remark_txt(folder):
+            try:
+                st = f.stat()
+                out.append({
+                    'name': f.name,
+                    'size': st.st_size,
+                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                    'relativePath': str(f.relative_to(folder)),
+                })
+            except OSError:
+                continue
         return out
 
     def list_project_txt_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
@@ -1397,10 +1431,11 @@ class NasMountService:
 
         files = []
         seen = set()
-        for f in sorted(_iter_project_images(folder), key=lambda p: str(p)):
+
+        def _append_file(f: Path) -> None:
             key = str(f.resolve())
             if key in seen:
-                continue
+                return
             seen.add(key)
             st = f.stat()
             files.append({
@@ -1410,6 +1445,17 @@ class NasMountService:
                 'relativePath': str(f.relative_to(folder)),
                 'absolutePath': str(f),
             })
+
+        for f in _iter_project_remark_txt(folder):
+            try:
+                _append_file(f)
+            except OSError:
+                continue
+        for f in sorted(_iter_project_images(folder), key=lambda p: str(p)):
+            try:
+                _append_file(f)
+            except OSError:
+                continue
         return files
 
     def list_folder_files(self, project_code, *, project_doc=None, folder_name=None, parent_bucket=None):
