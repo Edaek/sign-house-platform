@@ -52,6 +52,33 @@ def _format_candidate_lines(candidates):
     return '\n'.join(f'{i}. {lab}' for i, lab in enumerate(labels, 1))
 
 
+def _similar_numeric_site_projects(site_n: int, *, max_delta: int = 5, limit: int = 5):
+    """Nearby active site numbers when user typed a digit code with no exact project."""
+    try:
+        target = int(site_n)
+    except (TypeError, ValueError):
+        return []
+    rows = list(mongo.db.wa_projects.find(
+        {'status': 'active', 'code': {'$regex': r'^\d{3,6}$'}},
+        {'code': 1, 'name': 1, 'nasFolderName': 1, 'nasParentBucket': 1},
+    ))
+    scored = []
+    for p in rows:
+        if not is_wa_classify_target(p):
+            continue
+        try:
+            n = int((p.get('code') or '').strip())
+        except ValueError:
+            continue
+        if n == target:
+            continue
+        delta = abs(n - target)
+        if delta <= max_delta:
+            scored.append((p, 90 - delta))
+    scored.sort(key=lambda x: abs(int(x[0]['code']) - target))
+    return scored[:limit]
+
+
 def _build_classify_list_message(match_key, candidates):
     listing = _format_candidate_lines(candidates)
     return (
@@ -334,6 +361,23 @@ def resolve_classify_input(text, *, active_only=True):
             user_message=msg,
             needs_confirm=True,
         )
+
+    if numeric_site and site_num is not None:
+        similar = _similar_numeric_site_projects(int(site_num))
+        if similar:
+            listing = _format_candidate_lines(similar)
+            msg = (
+                f'找不到「{match_key}」這個專案。\n'
+                f'相近編號是否指：\n{listing}\n\n'
+                f'回覆數字選擇；若確實要新開「{match_key}」請再說一次並確認。'
+            )
+            return ClassifyResolve(
+                action='list',
+                candidates=similar,
+                remark=remark or ext.remark,
+                user_message=msg,
+                needs_confirm=True,
+            )
 
     fallback = (
         f'找不到與「{match_key}」相符的專案。\n'

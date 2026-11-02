@@ -240,3 +240,62 @@ def sender_bucket_key(*, phone: str, chat_jid: str) -> str:
     if is_group:
         return f'g:{chat_jid}:{digits or phone}'
     return f'p:{digits or phone}'
+
+
+class PoolAssignScopeError(ValueError):
+    """Pool images cannot be merged into one WA record (group / sender scope)."""
+
+
+def _group_jid_matches(stored: str, group_id: str) -> bool:
+    a = (stored or '').strip().lower()
+    b = (group_id or '').strip().lower()
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    a_base = a.split('@')[0]
+    b_base = b.split('@')[0]
+    return a_base == b_base or a_base in b or b_base in a
+
+
+def assert_pool_images_assignable(images: list, *, group_id: Optional[str] = None) -> None:
+    """
+    Block cross-user (or cross-batch in groups) assign — the main group-chat bug class.
+    Private chat: all rows must share the same phone bucket (p:…).
+    Group chat: same sender bucket and, when multiple files, the same upload batch.
+    """
+    if not images:
+        return
+
+    buckets: set[str] = set()
+    batch_keys: set[str] = set()
+    group_jids: set[str] = set()
+    for img in images:
+        phone = (img.get('phone') or '').strip()
+        chat = (img.get('chatJid') or '').strip()
+        buckets.add(sender_bucket_key(phone=phone, chat_jid=chat))
+        bk = batch_key_for_doc(img)
+        if bk:
+            batch_keys.add(bk)
+        if chat and '@g.us' in chat:
+            group_jids.add(chat.lower())
+
+    if len(buckets) > 1:
+        raise PoolAssignScopeError(
+            'Cannot assign pool images from different senders in one request '
+            '(group chat: use wa_list_pool_images with phone= that user, then assign only their ids).',
+        )
+
+    if group_id and group_jids:
+        for gj in group_jids:
+            if not _group_jid_matches(gj, group_id):
+                raise PoolAssignScopeError(
+                    'groupId does not match the chatJid on these pool images.',
+                )
+
+    is_group = bool(group_jids) or ('@g.us' in (group_id or ''))
+    if is_group and len(images) > 1 and len(batch_keys) > 1:
+        raise PoolAssignScopeError(
+            'Cannot assign multiple upload batches in one group-chat assign — '
+            'classify each batch separately (quote the reminder or send project code per batch).',
+        )

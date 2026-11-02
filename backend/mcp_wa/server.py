@@ -215,6 +215,8 @@ def wa_assign_pool_images(
     Never use wa_update_record_field to store classify remarks — that does not create the day .txt file.
     When notify_whatsapp is true, send a short 繁中 confirmation to group_id after assign.
     For duplicate NAS site folders, pass nas_folder_name (and optional nas_parent_bucket).
+    In group chats always pass group_id (@g.us JID) and only image_ids from wa_list_pool_images
+    filtered by that sender's phone — the API rejects mixed senders or mixed batches.
     """
     try:
         body = {
@@ -373,7 +375,10 @@ def wa_create_project(
     stage: str = 'active',
     parent_bucket_code: str = '',
 ) -> str:
-    """Create WA project (admin/manager). name is required (use NAS folder display name)."""
+    """Create WA project (admin/manager). name is required (use NAS folder display name).
+
+    Do not use for a mistyped site number: if wa_list_projects shows nearby codes
+    (e.g. user said 1008 but 1005/1007 exist), ask the user first instead of creating."""
     try:
         body: dict = {'code': code, 'name': name, 'location': location, 'stage': stage}
         if parent_bucket_code.strip():

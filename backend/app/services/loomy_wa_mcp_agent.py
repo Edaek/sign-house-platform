@@ -134,6 +134,8 @@ For *help*, *projects*, *keywords*: use wa_list_projects, wa_list_keywords, wa_g
 For *move <project>*: output action move with target_project_label (uses quoted photo or recent assign); explain steps if unclear.
 If active_wa_record is set, use wa_get_record and wa_update_record_field to collect missing fields; one question at a time.
 For photo classify: use wa_list_pool_images then wa_assign_pool_images with correct project_id and nas_folder_name when duplicates exist.
+Before wa_create_project for a bare numeric site code (e.g. 1008): call wa_list_projects and wa_browse_nas on the parent bucket. If the exact code is missing but nearby codes exist (1005, 1007), ask the user to pick — do NOT create a new folder until they confirm the number is new.
+Group chat assign: wa_list_pool_images(status=unassigned, phone=sender) then wa_assign_pool_images with the same group_id (@g.us) — never mix image_ids from different phones in one assign.
 If the user included a note (备注/備註/text after the project code), pass it as remark on wa_assign_pool_images — note text only. That writes the NAS day .txt. Say the remark was saved only when siteRemarkQueued is true.
 If photos were already filed and the user adds a note later, call wa_append_site_remark with project_code and text (same nas folder as the assign).
 If media_caption already contains a site/project code (e.g. 2991, PJ-xxxx), resolve via wa_list_projects / wa_get_project and assign — do not ask the user to repeat obvious caption info.

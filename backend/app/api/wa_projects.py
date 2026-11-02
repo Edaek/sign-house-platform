@@ -12,6 +12,9 @@ from app.models import serialize_doc
 
 wa_projects_bp = Blueprint('wa_projects', __name__)
 
+# Moved records are tombstones after relocate; do not count as active site records.
+_RECORD_COUNTABLE = {'$nin': ['voided', 'moved']}
+
 _mongo_bucket_rows_cache: dict[str, tuple[float, list]] = {}
 _MONGO_BUCKET_ROWS_TTL_S = 45.0
 
@@ -161,7 +164,7 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
         for row in mongo.db.wa_records.aggregate([
             {'$match': {
                 'projectId': {'$in': pid_list},
-                'status': {'$ne': 'voided'},
+                'status': _RECORD_COUNTABLE,
             }},
             {'$group': {'_id': '$projectId', 'totalRecords': {'$sum': 1}}},
         ]):
@@ -253,7 +256,7 @@ def list_projects():
         pipeline = [
             {'$match': {
                 'projectId': {'$in': pid_list},
-                'status': {'$ne': 'voided'},
+                'status': _RECORD_COUNTABLE,
             }},
             {'$group': {
                 '_id': '$projectId',
@@ -372,7 +375,7 @@ def get_project(project_id):
     if minimal:
         d['totalRecords'] = mongo.db.wa_records.count_documents({
             'projectId': pid,
-            'status': {'$ne': 'voided'},
+            'status': _RECORD_COUNTABLE,
         })
         d['nasImportedCount'] = 0
     else:
@@ -384,12 +387,12 @@ def get_project(project_id):
         enrich_project_dict(d, nas_index or {}, for_list=True)
         d['totalRecords'] = mongo.db.wa_records.count_documents({
             'projectId': pid,
-            'status': {'$ne': 'voided'},
+            'status': _RECORD_COUNTABLE,
         })
         d['nasImportedCount'] = mongo.db.wa_records.count_documents({
             'projectId': pid,
             'nasSourcePath': {'$exists': True, '$nin': [None, '']},
-            'status': {'$ne': 'voided'},
+            'status': _RECORD_COUNTABLE,
         })
     d['nasRangeBucket'] = is_range_folder_code(code)
     d['nasFiles'] = []
@@ -562,7 +565,10 @@ def get_project_records(project_id):
     if status:
         query['status'] = {'$in': status.split(',')}
     elif request.args.get('includeVoided') != '1':
-        query['status'] = {'$ne': 'voided'}
+        if request.args.get('includeMoved') == '1':
+            query['status'] = {'$ne': 'voided'}
+        else:
+            query['status'] = {'$nin': ['voided', 'moved']}
     if rec_type:
         query['type'] = rec_type
     if phone:

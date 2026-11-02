@@ -576,6 +576,10 @@ def assign_images_to_project(
     if not images:
         return 0
 
+    from app.services.loomy_pool_batch import assert_pool_images_assignable
+
+    assert_pool_images_assignable(images, group_id=group_id)
+
     from app.services.message_parser_service import site_note_from_text
 
     remark = (remark_override or remark or '').strip() or None

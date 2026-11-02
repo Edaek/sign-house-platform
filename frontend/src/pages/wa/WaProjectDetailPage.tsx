@@ -137,6 +137,7 @@ export default function WaProjectDetailPage() {
   const [nasBrowseHint, setNasBrowseHint] = useState<string | null>(null)
   const [nasBrowseLoading, setNasBrowseLoading] = useState(false)
   const [nasImageFiles, setNasImageFiles] = useState<NasFileEntry[]>([])
+  const [nasTxtFiles, setNasTxtFiles] = useState<NasFileEntry[]>([])
   const [siteNasLoading, setSiteNasLoading] = useState(false)
   const [projectLoading, setProjectLoading] = useState(true)
   const [recordsLoading, setRecordsLoading] = useState(true)
@@ -235,7 +236,7 @@ export default function WaProjectDetailPage() {
             if (!txtByKey.has(key)) txtByKey.set(key, f)
           }
           const txt = [...txtByKey.values()]
-          setProject((p) => (p ? { ...p, nasTxtFiles: txt } : p))
+          setNasTxtFiles(txt)
           setNasImageFiles(browseFiles.filter((f) => !/\.txt$/i.test(f.name)))
         })
         .catch(() => {})
@@ -261,6 +262,7 @@ export default function WaProjectDetailPage() {
     setNasChildFolders([])
     setNasBrowseSubfolders([])
     setNasImageFiles([])
+    setNasTxtFiles([])
     setNasBrowseHint(null)
     setRecordsLoading(true)
     setLoadError(null)
@@ -281,6 +283,10 @@ export default function WaProjectDetailPage() {
         setProject(data)
         setProjectLoading(false)
         setLoadWarning(null)
+        const isRange = data.nasRangeBucket ?? isRangeBucketCode(data.code)
+        if (!isRange && data.code && useWaStore.getState().nasStatus?.connected) {
+          void loadProjectSiteNasData(id, data.code)
+        }
       })
       .catch(() => {
         if (cancelled) return
@@ -304,7 +310,7 @@ export default function WaProjectDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [id, folderQueryKey, loadProjectMinimal, fetchProjectRecords])
+  }, [id, folderQueryKey, loadProjectMinimal, fetchProjectRecords, loadProjectSiteNasData])
 
   useEffect(() => {
     if (!id || !project?.code || !nasStatus?.connected) return
@@ -554,7 +560,7 @@ export default function WaProjectDetailPage() {
           projectId={id!}
           nasConnected={Boolean(nasStatus?.connected)}
           nasFolderParams={nasFolderParams}
-          txtFiles={project.nasTxtFiles ?? []}
+          txtFiles={nasTxtFiles}
           nasImages={nasImageFiles}
           records={records}
           loading={siteNasLoading || recordsLoading}

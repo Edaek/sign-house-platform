@@ -97,6 +97,17 @@ def assign_images():
         count = assign_images_to_project(
             image_ids, proj, 'operator', remark=remark, group_id=group_id,
         )
+    except ValueError as exc:
+        from app.services.loomy_pool_batch import PoolAssignScopeError
+
+        if isinstance(exc, PoolAssignScopeError):
+            return jsonify({
+                'error': str(exc),
+                'assigned': 0,
+                'code': 'pool_assign_scope',
+            }), 400
+        logger.exception('[ImagePool] Manual assign failed')
+        return jsonify({'error': str(exc)}), 400
     except Exception as exc:
         logger.exception('[ImagePool] Manual assign failed')
         return jsonify({'error': str(exc)}), 500
