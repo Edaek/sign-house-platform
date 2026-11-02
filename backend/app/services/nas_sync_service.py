@@ -548,7 +548,7 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
         if not site_code:
             continue
         folder_name = (child.get('folderName') or site_code).strip()
-        existing = find_project_by_code(site_code)
+        existing = find_project_by_code(site_code, parent_bucket=parent_bucket)
         if existing:
             patch = {'updatedAt': now, 'nasParentBucket': parent_bucket}
             if folder_name:
@@ -607,7 +607,8 @@ def sync_projects_from_nas(owner_id):
         code = raw_code.upper() if raw_code.upper().startswith('PJ-') else raw_code
         from app.services.wa_project_validation import find_project_by_code
 
-        existing = find_project_by_code(code)
+        parent_bucket = (folder.get('parentBucket') or '').strip() or None
+        existing = find_project_by_code(code, parent_bucket=parent_bucket)
         if existing:
             fn = (folder.get('folderName') or '').strip()
             if fn and (existing.get('nasFolderName') or '').strip() != fn:
@@ -617,8 +618,6 @@ def sync_projects_from_nas(owner_id):
                 )
             skipped.append(code)
             continue
-
-        parent_bucket = (folder.get('parentBucket') or '').strip() or None
         doc = {
             'code': code,
             'location': '',
@@ -1159,7 +1158,11 @@ def update_web_project(project, data, *, sync_nas=True):
         return {'ok': False, 'error': 'NAS bucket folder codes cannot be renamed'}
 
     if new_code != normalize_code(old_code):
-        err = assert_code_available(new_code, exclude_id=project['_id'])
+        err = assert_code_available(
+            new_code,
+            parent_bucket=parent_on_row or None,
+            exclude_id=project['_id'],
+        )
         if err:
             return {'ok': False, 'error': err}
 
@@ -1218,7 +1221,11 @@ def update_web_project(project, data, *, sync_nas=True):
                     if is_nas_bucket_folder_code(target_dir_name)
                     else target_dir_name
                 )
-                err = assert_code_available(new_bucket_code, exclude_id=project['_id'])
+                err = assert_code_available(
+                    new_bucket_code,
+                    parent_bucket=parent_on_row or None,
+                    exclude_id=project['_id'],
+                )
                 if err:
                     return {'ok': False, 'error': err}
                 mongo_updates['code'] = new_bucket_code

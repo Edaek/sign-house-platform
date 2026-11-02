@@ -154,7 +154,6 @@ def create_app(config_name=None):
         mongo.db.wa_records.create_index([('projectId', 1), ('status', 1)])
         mongo.db.wa_records.create_index([('createdAt', -1)])
         mongo.db.wa_records.create_index([('senderPhone', 1), ('status', 1), ('createdAt', -1)])
-        mongo.db.wa_projects.create_index('code', unique=True)
         for _p in mongo.db.wa_projects.find({'nameNormalized': {'$exists': False}}, {'name': 1}):
             _n = (_p.get('name') or '').strip()
             if _n:
@@ -162,14 +161,29 @@ def create_app(config_name=None):
                     {'_id': _p['_id']},
                     {'$set': {'nameNormalized': _n.casefold()}},
                 )
+        for _legacy in ('code_1', 'nameNormalized_1'):
+            try:
+                mongo.db.wa_projects.drop_index(_legacy)
+            except Exception:
+                pass
         try:
             mongo.db.wa_projects.create_index(
-                'nameNormalized',
+                [('code', 1), ('nasParentBucket', 1)],
                 unique=True,
                 partialFilterExpression={'status': {'$ne': 'archived'}},
+                name='wa_project_code_parent_bucket',
             )
-        except Exception:
-            app.logger.warning('wa_projects nameNormalized unique index not created (duplicate names?)')
+        except Exception as exc:
+            app.logger.warning('wa_projects code+parent unique index: %s', exc)
+        try:
+            mongo.db.wa_projects.create_index(
+                [('nameNormalized', 1), ('nasParentBucket', 1)],
+                unique=True,
+                partialFilterExpression={'status': {'$ne': 'archived'}},
+                name='wa_project_name_parent_bucket',
+            )
+        except Exception as exc:
+            app.logger.warning('wa_projects name+parent unique index: %s', exc)
         mongo.db.wa_projects.create_index('status')
         mongo.db.pool_images.create_index([('phone', 1), ('projectId', 1)])
         mongo.db.pool_images.create_index([('createdAt', -1)])

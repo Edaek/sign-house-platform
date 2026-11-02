@@ -87,21 +87,6 @@ def create_project():
         assert_name_available,
     )
 
-    code = normalize_code(data.get('code'))
-    name = normalize_name(data.get('name') or data.get('code'))
-    if not code:
-        return jsonify({'error': 'Project code is required'}), 400
-    if not name:
-        return jsonify({'error': 'Project name is required'}), 400
-
-    code_err = assert_code_available(code)
-    if code_err:
-        return jsonify({'error': code_err}), 409
-
-    name_err = assert_name_available(name)
-    if name_err:
-        return jsonify({'error': name_err}), 409
-
     from app.services.nas_bucket_code import nas_path_from_web_bucket
 
     parent_raw = (
@@ -111,6 +96,21 @@ def create_project():
         or ''
     ).strip()
     parent_bucket = nas_path_from_web_bucket(parent_raw) if parent_raw else None
+
+    code = normalize_code(data.get('code'))
+    name = normalize_name(data.get('name') or data.get('code'))
+    if not code:
+        return jsonify({'error': 'Project code is required'}), 400
+    if not name:
+        return jsonify({'error': 'Project name is required'}), 400
+
+    code_err = assert_code_available(code, parent_bucket=parent_bucket)
+    if code_err:
+        return jsonify({'error': code_err}), 409
+
+    name_err = assert_name_available(name, parent_bucket=parent_bucket)
+    if name_err:
+        return jsonify({'error': name_err}), 409
     nas_folder_name = (data.get('nasFolderName') or name or code).strip()
 
     now = datetime.utcnow()

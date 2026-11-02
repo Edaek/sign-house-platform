@@ -87,7 +87,13 @@ def browse_nas():
             })
         from app.services.wa_project_validation import find_project_by_code
 
-        proj = find_project_by_code(code)
+        parent_for_lookup = (
+            (request.args.get('nasParentBucket') or '').strip()
+            or None
+        )
+        proj = find_project_by_code(code, parent_bucket=parent_for_lookup)
+        if not proj and parent_for_lookup:
+            proj = find_project_by_code(code)
         view = dict(proj) if proj else {'code': code}
         fn = (request.args.get('nasFolderName') or '').strip()
         pb = (request.args.get('nasParentBucket') or '').strip()
