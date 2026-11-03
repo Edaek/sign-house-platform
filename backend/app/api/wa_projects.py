@@ -147,10 +147,11 @@ def _merge_bucket_children(nas_children: list, extra: list) -> list:
 
 
 def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: bool) -> dict:
-    from app.services.nas_bucket_code import nas_path_from_web_bucket
+    from app.services.nas_bucket_code import nas_path_from_web_bucket, nas_parent_bucket_match_values
     from app.services.nas_watcher_service import nas_mount
 
     parent_bucket = nas_path_from_web_bucket(bucket)
+    parent_match_values = {v.upper() for v in nas_parent_bucket_match_values(bucket)}
     children = sorted(children, key=lambda c: (c.get('folderName') or '').lower())
     unique_codes = list({
         lc
@@ -173,8 +174,14 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
             if not key:
                 continue
             proj_by_code_upper[key] = proj
-            parent_key = (proj.get('nasParentBucket') or '').strip().upper()
+            from app.services.nas_bucket_code import nas_path_from_web_bucket as _np
+
+            parent_key = _np(proj.get('nasParentBucket') or '').upper()
             proj_by_code_and_parent[(key, parent_key)] = proj
+            for pv in parent_match_values:
+                proj_by_code_and_parent[(key, _np(pv).upper())] = proj
+            if parent_bucket_upper:
+                proj_by_code_and_parent[(key, parent_bucket_upper)] = proj
 
     record_counts = {}
     matched_projects = list({id(p): p for p in proj_by_code_upper.values()}.values())

@@ -74,6 +74,7 @@ export default function WaProjectsPage() {
     fetchNasStatus,
     syncNasFromDrive,
     syncNasBucket,
+    linkNasBucketFolder,
     fetchNasBucketSites,
     fetchNasRootBuckets,
   } = useWaStore()
@@ -247,9 +248,10 @@ export default function WaProjectsPage() {
     async (row: WaProject) => {
       if (!selectedBucketCode) return
       const folderKey = (row.nasFolderName || row.code || '').trim()
-      setLinkingNasFolder(folderKey || selectedBucketCode)
+      if (!folderKey) return
+      setLinkingNasFolder(folderKey)
       try {
-        const { created } = await syncNasBucket(selectedBucketCode)
+        const { projectId } = await linkNasBucketFolder(selectedBucketCode, folderKey)
         await fetchProjects()
         const { sites, staleFromCache, hint } = await fetchNasBucketSites(selectedBucketCode, {
           liveScan: true,
@@ -258,32 +260,31 @@ export default function WaProjectsPage() {
         setBucketSites(sites)
         setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
         setBucketSitesHint(hint?.trim() || null)
-        const linked = sites.find(
-          (s) =>
-            !s.id.startsWith('nas:') &&
-            ((s.nasFolderName || '').toUpperCase() === folderKey.toUpperCase() ||
-              (s.code || '').toUpperCase() === folderKey.toUpperCase()),
-        )
-        if (linked) {
-          toast.success('已連結，可進入專案')
+        const linked =
+          sites.find(
+            (s) =>
+              s.id === projectId ||
+              (!s.id.startsWith('nas:') &&
+                ((s.nasFolderName || '').toUpperCase() === folderKey.toUpperCase() ||
+                  (s.code || '').toUpperCase() === folderKey.toUpperCase())),
+          ) ?? null
+        if (linked && !linked.id.startsWith('nas:')) {
+          toast.success('Folder linked — click Open to enter the project.')
           return
         }
-        const codeUpper = folderKey.toUpperCase()
-        if (created.some((c) => c.toUpperCase() === codeUpper)) {
-          toast.success('已建立專案，請再點 Open')
-          return
-        }
-        toast.error(
-          '無法連結此資料夾。請到 Manage Projects 新建：parent 選 KTEST，code 填 KTEST1（勿與 bucket 同名）。',
-        )
+        toast.success('Folder linked — refresh if Open does not appear yet.')
       } catch (err: unknown) {
-        const ax = err as { response?: { data?: { error?: string } } }
-        toast.error(ax.response?.data?.error || 'Could not link folder from shared drive')
+        const ax = err as { response?: { data?: { error?: string } }; message?: string }
+        toast.error(
+          ax.response?.data?.error ||
+            ax.message ||
+            'Could not link this folder. Try Manage Projects: parent bucket KTEST, code KTEST1.',
+        )
       } finally {
         setLinkingNasFolder(null)
       }
     },
-    [selectedBucketCode, syncNasBucket, fetchProjects, fetchNasBucketSites],
+    [selectedBucketCode, linkNasBucketFolder, fetchProjects, fetchNasBucketSites],
   )
 
   const buckets = useMemo(

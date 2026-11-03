@@ -197,6 +197,10 @@ interface WaStore {
     updated: number
     scanned: number
   }>
+  linkNasBucketFolder: (
+    bucketCode: string,
+    folderName: string,
+  ) => Promise<{ projectId: string; code: string; created: boolean; updated: boolean }>
   fetchNasRootBuckets: () => Promise<
     Array<{ bucketCode: string; nasName: string; childCount?: number }>
   >
@@ -458,6 +462,23 @@ export const useWaStore = create<WaStore>((set) => ({
       created: (data.created as string[]) || [],
       updated: (data.updated as number) || 0,
       scanned: (data.scanned as number) || 0,
+    }
+  },
+
+  linkNasBucketFolder: async (bucketCode, folderName) => {
+    const { data } = await api.post(
+      '/wa/nas/link-bucket-folder',
+      { bucketCode, folderName },
+      { timeout: 120000 },
+    )
+    if (data.ok === false) {
+      throw new Error((data.error as string) || 'Link failed')
+    }
+    return {
+      projectId: data.projectId as string,
+      code: (data.code as string) || folderName,
+      created: Boolean(data.created),
+      updated: Boolean(data.updated),
     }
   },
 

@@ -29,6 +29,39 @@ _NAS_INDEX_TTL_S = 90
 _nas_sync_lock = threading.Lock()
 
 
+def _nas_site_project_display_name(folder_name: str | None, site_code: str) -> str:
+    return (folder_name or site_code or '').strip() or site_code
+
+
+def _nas_site_project_doc_fields(
+    site_code: str,
+    folder_name: str,
+    parent_bucket: str | None,
+    owner_id,
+    now,
+) -> dict:
+    """Mongo wa_projects fields for a NAS site folder (includes name for unique indexes)."""
+    name = _nas_site_project_display_name(folder_name, site_code)
+    doc = {
+        'code': site_code,
+        'name': name,
+        'nameNormalized': name.casefold(),
+        'location': '',
+        'owner': owner_id,
+        'stage': 'active',
+        'status': 'active',
+        'members': [owner_id],
+        'nasFolder': folder_name,
+        'nasFolderName': folder_name,
+        'nasImportedAt': now,
+        'createdAt': now,
+        'updatedAt': now,
+    }
+    if parent_bucket:
+        doc['nasParentBucket'] = parent_bucket
+    return doc
+
+
 def _bucket_child_site_code(child: dict) -> str | None:
     """Site project code for a direct child of a NAS bucket (PJ-xxxx or plain folder name)."""
     from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
@@ -509,18 +542,16 @@ def _ensure_nas_bucket_projects(owner_id, root_names, now):
             continue
         if find_project_by_code(name):
             continue
-        doc = {
-            'code': name.upper() if is_nas_bucket_folder_code(name) else name,
-            'location': '',
-            'owner': owner_id,
-            'stage': 'active',
-            'status': 'active',
-            'members': [owner_id],
-            'nasFolder': name,
-            'nasImportedAt': now,
-            'createdAt': now,
-            'updatedAt': now,
-        }
+        bucket_code = name.upper() if is_nas_bucket_folder_code(name) else name
+        doc = _nas_site_project_doc_fields(
+            bucket_code,
+            name,
+            None,
+            owner_id,
+            now,
+        )
+        doc.pop('nasFolderName', None)
+        doc['nasFolder'] = name
         mongo.db.wa_projects.insert_one(doc)
         created.append(doc['code'])
     return created
@@ -562,25 +593,33 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
             if folder_name:
                 patch['nasFolderName'] = folder_name
                 patch['nasFolder'] = folder_name
+            if not (existing.get('name') or '').strip():
+                nm = _nas_site_project_display_name(folder_name, site_code)
+                patch['name'] = nm
+                patch['nameNormalized'] = nm.casefold()
             mongo.db.wa_projects.update_one({'_id': existing['_id']}, {'$set': patch})
             updated += 1
             continue
-        doc = {
-            'code': site_code,
-            'location': '',
-            'owner': owner_id,
-            'stage': 'active',
-            'status': 'active',
-            'members': [owner_id],
-            'nasFolder': folder_name,
-            'nasFolderName': folder_name,
-            'nasParentBucket': parent_bucket,
-            'nasImportedAt': now,
-            'createdAt': now,
-            'updatedAt': now,
-        }
-        mongo.db.wa_projects.insert_one(doc)
-        created.append(site_code)
+        doc = _nas_site_project_doc_fields(
+            site_code, folder_name, parent_bucket, owner_id, now,
+        )
+        from pymongo.errors import DuplicateKeyError
+
+        try:
+            mongo.db.wa_projects.insert_one(doc)
+            created.append(site_code)
+        except DuplicateKeyError:
+            from app.services.wa_project_validation import find_project_by_code
+
+            again = find_project_by_code(site_code, parent_bucket=parent_bucket)
+            if again:
+                updated += 1
+            else:
+                logger.warning(
+                    '[NASSync] Could not insert site %s under %s (duplicate key)',
+                    site_code,
+                    parent_bucket,
+                )
 
     return {
         'ok': True,
@@ -589,6 +628,114 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
         'scanned': len(children),
         'created': created,
         'updated': updated,
+    }
+
+
+def link_nas_bucket_folder_to_project(bucket_code, folder_name, owner_id):
+    """Create or update one wa_projects row for a NAS folder under a bucket."""
+    from app.services.nas_bucket_code import nas_path_from_web_bucket, nas_parent_bucket_match_values
+    from app.services.wa_project_validation import assert_code_available, find_project_by_code
+
+    if not nas_mount.is_available():
+        return {'ok': False, 'error': 'NAS mount not available'}
+
+    bucket = (bucket_code or '').strip()
+    folder_name = (folder_name or '').strip()
+    if not bucket or not folder_name:
+        return {'ok': False, 'error': 'bucketCode and folderName are required'}
+
+    parent_bucket = nas_path_from_web_bucket(bucket)
+    children = nas_mount._list_bucket_child_folders_sync(bucket)
+    child = next(
+        (
+            c
+            for c in children
+            if (c.get('folderName') or '').strip().upper() == folder_name.upper()
+        ),
+        None,
+    )
+    if not child:
+        return {
+            'ok': False,
+            'error': f'Folder "{folder_name}" was not found under bucket "{parent_bucket}" on the shared drive.',
+        }
+
+    site_code = _bucket_child_site_code(child)
+    if not site_code:
+        return {
+            'ok': False,
+            'error': f'Folder "{folder_name}" is not a site project folder (reserved or invalid name).',
+        }
+
+    folder_label = (child.get('folderName') or site_code).strip()
+    now = datetime.utcnow()
+    parent_variants = nas_parent_bucket_match_values(bucket)
+
+    existing = find_project_by_code(site_code, parent_bucket=parent_bucket)
+    if not existing:
+        loose = find_project_by_code(site_code)
+        if loose and not (loose.get('nasParentBucket') or '').strip():
+            existing = loose
+    if not existing:
+        existing = mongo.db.wa_projects.find_one({
+            'status': {'$ne': 'archived'},
+            'nasFolderName': {'$regex': f'^{re.escape(folder_label)}$', '$options': 'i'},
+            'nasParentBucket': {'$in': list(parent_variants)},
+        })
+
+    if existing:
+        nm = _nas_site_project_display_name(folder_label, site_code)
+        patch = {
+            'updatedAt': now,
+            'nasParentBucket': parent_bucket,
+            'nasFolderName': folder_label,
+            'nasFolder': folder_label,
+        }
+        if not (existing.get('name') or '').strip():
+            patch['name'] = nm
+            patch['nameNormalized'] = nm.casefold()
+        mongo.db.wa_projects.update_one({'_id': existing['_id']}, {'$set': patch})
+        return {
+            'ok': True,
+            'projectId': str(existing['_id']),
+            'code': existing.get('code') or site_code,
+            'created': False,
+            'updated': True,
+        }
+
+    err = assert_code_available(site_code, parent_bucket=parent_bucket)
+    if err:
+        return {'ok': False, 'error': err}
+
+    doc = _nas_site_project_doc_fields(
+        site_code, folder_label, parent_bucket, owner_id, now,
+    )
+    from pymongo.errors import DuplicateKeyError
+
+    try:
+        ins = mongo.db.wa_projects.insert_one(doc)
+    except DuplicateKeyError:
+        again = find_project_by_code(site_code, parent_bucket=parent_bucket)
+        if not again:
+            return {
+                'ok': False,
+                'error': (
+                    f'Project code {site_code} already exists under another bucket. '
+                    'Rename the NAS folder or adjust the existing project in Manage Projects.'
+                ),
+            }
+        ins_id = again['_id']
+        created = False
+    else:
+        ins_id = ins.inserted_id
+        created = True
+
+    return {
+        'ok': True,
+        'projectId': str(ins_id),
+        'code': site_code,
+        'created': created,
+        'updated': not created,
     }
 
 
@@ -626,22 +773,15 @@ def sync_projects_from_nas(owner_id):
                 )
             skipped.append(code)
             continue
-        doc = {
-            'code': code,
-            'location': '',
-            'owner': owner_id,
-            'stage': 'active',
-            'status': 'active',
-            'members': [owner_id],
-            'nasFolder': folder.get('folderName'),
-            'nasImportedAt': now,
-            'createdAt': now,
-            'updatedAt': now,
-        }
-        if parent_bucket:
-            doc['nasParentBucket'] = parent_bucket
-        mongo.db.wa_projects.insert_one(doc)
-        created.append(code)
+        fn = (folder.get('folderName') or code).strip()
+        doc = _nas_site_project_doc_fields(code, fn, parent_bucket, owner_id, now)
+        from pymongo.errors import DuplicateKeyError
+
+        try:
+            mongo.db.wa_projects.insert_one(doc)
+            created.append(code)
+        except DuplicateKeyError:
+            logger.warning('[NASSync] Skipped duplicate NAS site import for %s', code)
 
     try:
         nas_folder_index(force_refresh=False)

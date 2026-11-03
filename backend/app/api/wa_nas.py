@@ -7,6 +7,7 @@ from app.services.project_number_match_service import is_range_folder_code
 from app.services.nas_sync_service import (
     sync_projects_from_nas,
     sync_bucket_site_projects_from_nas,
+    link_nas_bucket_folder_to_project,
     import_nas_files_for_project,
     import_all_projects_from_nas,
     run_bidirectional_nas_sync,
@@ -180,6 +181,25 @@ def sync_bucket_from_nas_route():
     result = sync_bucket_site_projects_from_nas(bucket_code, ObjectId(get_jwt_identity()))
     if not result.get('ok'):
         return jsonify(result), 503
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/link-bucket-folder', methods=['POST'])
+@jwt_required()
+def link_bucket_folder_route():
+    """Link one NAS subfolder under a bucket to a wa_projects row (Projects «Link in app»)."""
+    data = request.get_json() or {}
+    bucket_code = (data.get('bucketCode') or data.get('code') or '').strip()
+    folder_name = (data.get('folderName') or data.get('folder') or '').strip()
+    if not bucket_code or not folder_name:
+        return jsonify({'ok': False, 'error': 'bucketCode and folderName are required'}), 400
+    result = link_nas_bucket_folder_to_project(
+        bucket_code,
+        folder_name,
+        ObjectId(get_jwt_identity()),
+    )
+    if not result.get('ok'):
+        return jsonify(result), 409 if 'already exists' in (result.get('error') or '') else 400
     return jsonify(result)
 
 
