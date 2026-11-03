@@ -39,6 +39,7 @@ DEFAULT_ALLOW = frozenset({
     'wa_assign_pool_images',
     'wa_append_site_remark',
     'wa_move_record_to_project',
+    'wa_rename_nas_site_folder',
     'wa_get_whatsapp_status',
     'wa_get_infra_status',
     'wa_browse_nas',
@@ -195,6 +196,31 @@ def _exec_wa_move_record_to_project(c: SignHouseClient, a: dict) -> str:
     return json_result(c.post('/wa/image-pool/move', json_body=body))
 
 
+def _exec_wa_rename_nas_site_folder(c: SignHouseClient, a: dict) -> str:
+    new_name = (a.get('new_folder_name') or a.get('newFolderName') or '').strip()
+    if not new_name:
+        return 'Error: new_folder_name required'
+    body: dict[str, Any] = {
+        'newFolderName': new_name,
+        'syncNas': a.get('sync_nas', a.get('syncNas', True)),
+    }
+    pid = (a.get('project_id') or a.get('projectId') or '').strip()
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    nc = (a.get('new_code') or a.get('newCode') or '').strip()
+    if pid:
+        body['projectId'] = pid
+    if code:
+        body['projectCode'] = code
+    if pb:
+        body['nasParentBucket'] = pb
+    if nc:
+        body['newCode'] = nc
+    if not pid and not code:
+        return 'Error: project_id or project_code required'
+    return json_result(c.post('/wa/nas/rename-site-folder', json_body=body))
+
+
 def _exec_wa_append_site_remark(c: SignHouseClient, a: dict) -> str:
     code = (a.get('project_code') or a.get('projectCode') or '').strip()
     text = (a.get('text') or a.get('remark') or '').strip()
@@ -320,6 +346,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_assign_pool_images': _exec_wa_assign_pool_images,
     'wa_append_site_remark': _exec_wa_append_site_remark,
     'wa_move_record_to_project': _exec_wa_move_record_to_project,
+    'wa_rename_nas_site_folder': _exec_wa_rename_nas_site_folder,
     'wa_whoami': _exec_wa_whoami,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
@@ -360,6 +387,11 @@ TOOL_SPECS: List[dict] = [
         'name': 'wa_move_record_to_project',
         'description': 'Move a filed record (SUB-… or id) and all its photos to another project; relocates NAS files.',
         'args_hint': '{record_reference, project_code, nas_folder_name, nas_parent_bucket, relocate_nas}',
+    },
+    {
+        'name': 'wa_rename_nas_site_folder',
+        'description': 'Rename site folder on NAS (admin/manager); same as Web Manage Projects sync rename.',
+        'args_hint': '{new_folder_name, project_id, project_code, nas_parent_bucket, new_code, sync_nas}',
     },
     {'name': 'wa_browse_nas', 'description': 'Browse NAS folders', 'args_hint': '{code}'},
     {'name': 'wa_whoami', 'description': 'Current API user', 'args_hint': '{}'},

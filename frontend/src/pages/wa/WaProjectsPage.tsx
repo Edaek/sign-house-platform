@@ -169,19 +169,15 @@ export default function WaProjectsPage() {
       }
     }
 
+    setBucketSites([])
+    setBucketSitesSource(null)
+    setBucketSitesHint(null)
+    setBucketSyncing(true)
+
     const localBucket = buildProjectBuckets(useWaStore.getState().projects).find(
       (b) => b.code === selectedBucketCode,
     )
     const localSites = localBucket ? bucketSiteProjects(localBucket) : []
-
-    if (localSites.length > 0) {
-      applySites(localSites, true)
-    } else {
-      setBucketSites([])
-      setBucketSitesSource(null)
-      setBucketSitesHint(null)
-    }
-    setBucketSyncing(localSites.length === 0)
 
     fetchNasBucketSites(nasBucket, { liveScan: true, timeoutMs: 120000 })
       .then(({ sites, staleFromCache, hint }) => {
@@ -196,8 +192,9 @@ export default function WaProjectsPage() {
           applySites(
             localSites,
             true,
-            'Shared drive list unavailable — showing app projects only.',
+            'Shared drive list unavailable — showing app projects only (may be stale until Sync NAS).',
           )
+          setBucketSitesSource('mongo')
           return
         }
         setBucketSitesSource('mongo')

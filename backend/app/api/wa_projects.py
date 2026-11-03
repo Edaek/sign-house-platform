@@ -19,6 +19,11 @@ _mongo_bucket_rows_cache: dict[str, tuple[float, list]] = {}
 _MONGO_BUCKET_ROWS_TTL_S = 45.0
 
 
+def clear_mongo_bucket_rows_cache() -> None:
+    """Drop cached Mongo bucket rows after NAS realign / sync (avoid stale KTEST2 cards)."""
+    _mongo_bucket_rows_cache.clear()
+
+
 def _nas_view_project_doc(project, req=None):
     """Merge query overrides so NAS I/O targets the physical folder the user opened."""
     doc = dict(project)
@@ -133,16 +138,23 @@ def _bucket_child_lookup_code(child: dict) -> str | None:
     return code or None
 
 
-def _merge_bucket_children(nas_children: list, extra: list) -> list:
+def _merge_bucket_children(
+    nas_children: list,
+    extra: list,
+    *,
+    supplement_mongo_only: bool = True,
+) -> list:
+    """Merge NAS folder rows with Mongo; optional Mongo-only rows when NAS list is authoritative."""
     by_key: dict[str, dict] = {}
     for row in nas_children or []:
         fn = (row.get('folderName') or '').strip()
         if fn:
             by_key[fn.lower()] = row
-    for row in extra or []:
-        fn = (row.get('folderName') or '').strip()
-        if fn and fn.lower() not in by_key:
-            by_key[fn.lower()] = row
+    if supplement_mongo_only:
+        for row in extra or []:
+            fn = (row.get('folderName') or '').strip()
+            if fn and fn.lower() not in by_key:
+                by_key[fn.lower()] = row
     return list(by_key.values())
 
 
@@ -370,10 +382,9 @@ def list_nas_bucket_sites():
     if live_scan and mounted and nas_mount.probe_responsive(timeout_s=2):
         if request.args.get('sync') != '0':
             sync_bucket_site_projects_from_nas(bucket, ObjectId(get_jwt_identity()))
-        live = nas_mount.list_bucket_child_folders(bucket)
-        if live:
-            children = _merge_bucket_children(live, mongo_rows)
-            from_cache = False
+        live = nas_mount._list_bucket_child_folders_sync(bucket)
+        children = _merge_bucket_children(live, mongo_rows, supplement_mongo_only=False)
+        from_cache = False
     elif mounted and not cache_only:
         _schedule_bucket_nas_refresh(bucket)
 

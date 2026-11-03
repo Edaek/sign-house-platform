@@ -4,7 +4,9 @@ import { useWaStore } from '../../store/waStore'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import ProjectSiteDayTimeline from '../../components/wa/ProjectSiteDayTimeline'
 import { MapPin, Layers, HardDrive, ChevronLeft, Folder } from 'lucide-react'
+import toast from 'react-hot-toast'
 import api from '../../lib/api'
+import { useAuthStore } from '../../store/authStore'
 import {
   bucketCodeForProjectsUrl,
   formatWaProjectTitleSuffix,
@@ -130,7 +132,11 @@ export default function WaProjectDetailPage() {
   const [searchParams] = useSearchParams()
   const nasFolderParams = useMemo(() => nasFolderApiParams(searchParams), [searchParams])
   const folderQueryKey = `${searchParams.get('nasFolderName') || ''}|${searchParams.get('nasParentBucket') || ''}`
-  const { projects, records, fetchProjectRecords, nasStatus, fetchNasStatus } = useWaStore()
+  const { projects, records, fetchProjectRecords, nasStatus, fetchNasStatus, renameNasSiteFolder } =
+    useWaStore()
+  const canRenameNas = useAuthStore((s) => s.isAdmin() || s.isManager())
+  const [renameFolderDraft, setRenameFolderDraft] = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
   const [project, setProject] = useState<ProjectDetail | null>(null)
   const [nasChildFolders, setNasChildFolders] = useState<NasChildFolder[]>([])
   const [nasBrowseSubfolders, setNasBrowseSubfolders] = useState<{ name: string }[]>([])
@@ -337,6 +343,46 @@ export default function WaProjectDetailPage() {
   ])
 
   useEffect(() => {
+    if (!project || isRangeBucket) return
+    const name = (project.nasResolvedFolderName || project.nasFolderName || project.code || '').trim()
+    setRenameFolderDraft(name)
+  }, [project?.id, project?.nasFolderName, project?.nasResolvedFolderName, project?.code, isRangeBucket])
+
+  async function handleRenameNasFolder(e: React.FormEvent) {
+    e.preventDefault()
+    if (!project?.id) return
+    const next = renameFolderDraft.trim()
+    const cur = (project.nasResolvedFolderName || project.nasFolderName || project.code || '').trim()
+    if (!next || next === cur) {
+      toast.error('Enter a new folder name different from the current one.')
+      return
+    }
+    setRenameSaving(true)
+    try {
+      const r = await renameNasSiteFolder({
+        projectId: project.id,
+        nasParentBucket: project.nasParentBucket,
+        newFolderName: next,
+        syncNas: true,
+      })
+      if (!r.ok) {
+        toast.error(r.error || 'Rename failed')
+        return
+      }
+      toast.success(`NAS folder renamed to ${r.nasFolderName || next}`)
+      const data = await loadProjectMinimal(project.id)
+      setProject(data)
+      if (project.code) {
+        void loadProjectSiteNasData(project.id, project.code)
+      }
+    } catch {
+      toast.error('Rename failed')
+    } finally {
+      setRenameSaving(false)
+    }
+  }
+
+  useEffect(() => {
     if (!id || !nasStatus?.connected || !project) return
     const sec = nasStatus.autoSyncIntervalSec ?? 60
     const ms = Math.max(30, sec) * 1000
@@ -455,6 +501,25 @@ export default function WaProjectDetailPage() {
               <p className="text-xs text-slate-500 dark:text-slate-400 font-mono break-all">
                 NAS folder: {project.nasResolvedFolderName || project.nasFolderName}
               </p>
+            )}
+            {canRenameNas && !isRangeBucket && project.id && nasStatus?.connected && (
+              <form onSubmit={handleRenameNasFolder} className="flex flex-wrap items-end gap-2 pt-1">
+                <div className="flex-1 min-w-[10rem]">
+                  <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                    Rename folder on shared drive
+                  </label>
+                  <input
+                    type="text"
+                    value={renameFolderDraft}
+                    onChange={(ev) => setRenameFolderDraft(ev.target.value)}
+                    className="input w-full font-mono text-xs"
+                    disabled={renameSaving}
+                  />
+                </div>
+                <button type="submit" disabled={renameSaving} className="btn btn-secondary text-xs py-2">
+                  {renameSaving ? 'Renaming…' : 'Rename on NAS'}
+                </button>
+              </form>
             )}
             {!isRangeBucket && (project.nasPhysicalFolders?.length ?? 0) > 1 && (
               <div>

@@ -434,6 +434,12 @@ def realign_wa_projects_with_nas(*, dry_run: bool = False) -> dict:
         nas_mount._refresh_bucket_children_caches()
     except Exception:
         logger.exception('[NAS] bucket cache refresh after realign failed')
+    try:
+        from app.api.wa_projects import clear_mongo_bucket_rows_cache
+
+        clear_mongo_bucket_rows_cache()
+    except Exception:
+        logger.exception('[NAS] clear mongo bucket rows cache after realign failed')
 
     return {
         'ok': True,

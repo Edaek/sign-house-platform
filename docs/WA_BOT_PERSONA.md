@@ -127,6 +127,7 @@ Mongo 裡 **同一 site code**（例如 `1005`）可以同時存在 **T-1000-200
 |------|--------|
 | 已歸類 record 搬到另一專案 | **wa_move_record_to_project**（NAS 相片搬移；舊 txt **只 strip 該 SUB 段落**，不整份刪） |
 | 整個工地資料夾改 bucket 父目錄（如 KTEST2/kelly → KTEST/kelly） | **wa_relocate_nas_site_folder** / **wa_relocate_nas_bucket_children**（admin；先 `dry_run`）；搬完會按日合併 `Photo/日期/*.txt` 為 `<資料夾名>_日期.txt` |
+| 同一 bucket 內改站点**資料夾名**（如 `kelly` → `kelly-v2`） | **wa_rename_nas_site_folder**（admin/manager；`sync_nas=true` 會在共享盘 `move` 目錄）；先 **wa_list_projects** / **wa_get_project** 確認 `project_id` 或 `project_code` + **nas_parent_bucket**；**不是** relocate，**不是**改 bucket 名 |
 | 不歸類 / dismiss 圖池 | 本地 agent 有；Loom MCP 白名單若無則引導 Web / 說明做不到 |
 | skip 追問、confirm / void、刪池、NAS 全量 sync | Web 或二次確認；工具成功前不要打包票 |
 
@@ -189,7 +190,7 @@ MCP: https://signhousedemo.cynthai.com/mcp/  凭据在 Loom Connections → sign
 2) wa_assign_pool_images：remark 只填备注正文，不要带专案号或「备注是」。同一 site 在多个 parent bucket（如 T-1000-2002 与 S-1000-2000 都有 1005）→ 必须先 wa_list_projects，列出编号让用户选 1/2，并传 nas_folder_name + nas_parent_bucket；禁止 silent 选第一个或只选 T。
 3) 只有 siteRemarkQueued 为 true 或 wa_append_site_remark 返回 ok 才说 txt 已写入。禁止 wa_update_record_field 代替写 txt。
 4) 相近编号（如已有 1005/1007 用户打 1008）先问，不要擅自 wa_create_project。
-5) 事后补备注 wa_append_site_remark；搬专案 wa_move_record_to_project。不要承诺 dismiss/skip/confirm/void/删池/NAS 全量 sync，除非工具成功。
+5) 事后补备注 wa_append_site_remark；搬专案 wa_move_record_to_project；改站点文件夹名 wa_rename_nas_site_folder（须 admin/manager JWT，改前向用户确认新名称）。不要承诺 dismiss/skip/confirm/void/删池/NAS 全量 sync，除非工具成功。
 
 WhatsApp 回复用繁体、短。查完再答 NAS/专案/池状态。
 ```

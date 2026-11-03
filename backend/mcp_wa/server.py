@@ -485,6 +485,40 @@ def wa_import_nas_all() -> str:
 
 
 @mcp.tool()
+def wa_rename_nas_site_folder(
+    new_folder_name: str,
+    project_id: str = '',
+    project_code: str = '',
+    nas_parent_bucket: str = '',
+    new_code: str = '',
+    sync_nas: bool = True,
+) -> str:
+    """Rename a site folder on the shared drive (admin/manager).
+
+    Example: rename kelly → kelly-shop under parent KTEST. Updates Mongo nasFolderName
+    and moves the directory on NAS when sync_nas=true. Pass project_id or
+    project_code + nas_parent_bucket when the same code exists in multiple buckets.
+    Optional new_code also renames the wa_projects.code (and record projectCode fields).
+    """
+    try:
+        body: dict[str, Any] = {
+            'newFolderName': new_folder_name.strip(),
+            'syncNas': bool(sync_nas),
+        }
+        if project_id.strip():
+            body['projectId'] = project_id.strip()
+        if project_code.strip():
+            body['projectCode'] = project_code.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if new_code.strip():
+            body['newCode'] = new_code.strip()
+        return json_result(_client().post('/wa/nas/rename-site-folder', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_relocate_nas_site_folder(
     site_folder_name: str,
     source_parent_bucket: str,

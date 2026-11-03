@@ -264,6 +264,22 @@ interface WaStore {
       syncNas?: boolean
     }
   ) => Promise<WaProject>
+  renameNasSiteFolder: (body: {
+    projectId?: string
+    projectCode?: string
+    nasParentBucket?: string
+    newFolderName: string
+    newCode?: string
+    syncNas?: boolean
+  }) => Promise<{
+    ok: boolean
+    projectId?: string
+    code?: string
+    nasFolderName?: string
+    nasParentBucket?: string
+    nasFolder?: string
+    error?: string
+  }>
   confirmRecord: (id: string) => Promise<void>
   voidRecord: (id: string, reason: string) => Promise<void>
   requestInfo: (id: string, question: string) => Promise<void>
@@ -648,6 +664,41 @@ export const useWaStore = create<WaStore>((set) => ({
       projects: state.projects.map((p) => (p.id === id ? updated : p)),
     }))
     return updated
+  },
+
+  renameNasSiteFolder: async (body) => {
+    const { data } = await api.post('/wa/nas/rename-site-folder', {
+      projectId: body.projectId,
+      projectCode: body.projectCode,
+      nasParentBucket: body.nasParentBucket,
+      newFolderName: body.newFolderName,
+      newCode: body.newCode,
+      syncNas: body.syncNas ?? true,
+    })
+    const row = data as {
+      ok?: boolean
+      projectId?: string
+      code?: string
+      nasFolderName?: string
+      nasParentBucket?: string
+      nasFolder?: string
+      error?: string
+    }
+    if (row.projectId) {
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === row.projectId
+            ? {
+                ...p,
+                code: row.code ?? p.code,
+                nasFolderName: row.nasFolderName ?? p.nasFolderName,
+                nasParentBucket: row.nasParentBucket ?? p.nasParentBucket,
+              }
+            : p
+        ),
+      }))
+    }
+    return { ok: Boolean(row.ok), ...row }
   },
 
   confirmRecord: async (id) => {

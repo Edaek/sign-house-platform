@@ -842,9 +842,19 @@ class NasMountService:
         if bucket is None or not bucket.is_dir():
             return []
         out = []
+        root_bucket_names = {
+            n.upper()
+            for n in (self.list_watch_root_dir_names(timeout_s=4) or [])
+        }
         try:
             for entry in sorted(bucket.iterdir()):
                 if not entry.is_dir() or entry.name.startswith('.'):
+                    continue
+                if (
+                    root_bucket_names
+                    and entry.name.upper() in root_bucket_names
+                    and code.upper() != entry.name.upper()
+                ):
                     continue
                 site_code = parse_nas_site_folder_code(entry.name)
                 out.append({

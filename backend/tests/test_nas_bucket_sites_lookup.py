@@ -2,7 +2,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.api.wa_projects import _bucket_child_lookup_code, _build_nas_bucket_sites_payload
+from app.api.wa_projects import (
+    _bucket_child_lookup_code,
+    _build_nas_bucket_sites_payload,
+    _merge_bucket_children,
+)
 
 
 class NasBucketSitesLookupTests(unittest.TestCase):
@@ -13,6 +17,18 @@ class NasBucketSitesLookupTests(unittest.TestCase):
     def test_lookup_skips_photo(self):
         child = {'folderName': 'Photo', 'code': None}
         self.assertIsNone(_bucket_child_lookup_code(child))
+
+    def test_merge_drops_mongo_only_when_nas_authoritative(self):
+        nas = [{'folderName': 'kelly', 'code': 'kelly'}]
+        mongo_extra = [
+            {'folderName': 'KTEST1', 'code': 'KTEST1'},
+            {'folderName': 'K-1000', 'code': 'K-1000'},
+        ]
+        merged = _merge_bucket_children(nas, mongo_extra, supplement_mongo_only=False)
+        names = {r['folderName'] for r in merged}
+        self.assertEqual(names, {'kelly'})
+        with_mongo = _merge_bucket_children(nas, mongo_extra, supplement_mongo_only=True)
+        self.assertEqual(len(with_mongo), 3)
 
     @patch('app.api.wa_projects.mongo')
     @patch('app.api.wa_projects.serialize_doc')

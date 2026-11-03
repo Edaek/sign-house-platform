@@ -1476,6 +1476,105 @@ def update_web_project(project, data, *, sync_nas=True):
     return {'ok': True, 'project': updated}
 
 
+def rename_nas_site_folder(
+    *,
+    project_id=None,
+    project_code=None,
+    nas_parent_bucket=None,
+    new_folder_name,
+    new_code=None,
+    sync_nas=True,
+) -> dict:
+    """
+    Rename a site directory on the NAS share and update wa_projects (Web / Loom / MCP).
+
+    Same behaviour as Manage Projects with «Sync rename to NAS».
+    """
+    from app.services.wa_project_bucket_rules import (
+        is_bucket_container_project,
+        is_reserved_nas_folder_name,
+    )
+    from app.services.wa_project_validation import find_project_by_code
+    from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+    new_folder_name = (new_folder_name or '').strip()
+    if not new_folder_name:
+        return {'ok': False, 'error': 'newFolderName is required'}
+    if is_reserved_nas_folder_name(new_folder_name):
+        return {'ok': False, 'error': f'Reserved NAS folder name: {new_folder_name}'}
+
+    project = None
+    if project_id:
+        try:
+            oid = ObjectId(str(project_id))
+        except Exception:
+            return {'ok': False, 'error': 'Invalid projectId'}
+        project = mongo.db.wa_projects.find_one({'_id': oid, 'status': {'$ne': 'archived'}})
+    else:
+        code = (project_code or '').strip()
+        if not code:
+            return {'ok': False, 'error': 'projectId or projectCode is required'}
+        parent = (nas_parent_bucket or '').strip() or None
+        project = find_project_by_code(code, parent_bucket=parent)
+        if not project:
+            loose = list(mongo.db.wa_projects.find({
+                'status': {'$ne': 'archived'},
+                'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+            }))
+            if len(loose) > 1:
+                return {
+                    'ok': False,
+                    'error': 'Multiple projects match code; pass nasParentBucket',
+                    'matches': [
+                        {
+                            'projectId': str(p['_id']),
+                            'code': p.get('code'),
+                            'nasParentBucket': p.get('nasParentBucket'),
+                            'nasFolderName': p.get('nasFolderName'),
+                        }
+                        for p in loose
+                    ],
+                }
+            if len(loose) == 1:
+                project = loose[0]
+
+    if not project:
+        return {'ok': False, 'error': 'Project not found'}
+    if is_bucket_container_project(project):
+        return {'ok': False, 'error': 'Cannot rename NAS bucket container projects'}
+
+    parent_raw = (project.get('nasParentBucket') or '').strip()
+    parent_nas = nas_path_from_web_bucket(parent_raw) if parent_raw else ''
+    if parent_nas and parent_nas.upper() == new_folder_name.upper():
+        return {'ok': False, 'error': 'Site folder name cannot equal parent bucket name'}
+
+    patch: dict = {'nasFolderName': new_folder_name}
+    if new_code is not None and str(new_code).strip():
+        patch['code'] = str(new_code).strip()
+
+    result = update_web_project(project, patch, sync_nas=bool(sync_nas))
+    if not result.get('ok'):
+        return result
+
+    try:
+        from app.api.wa_projects import clear_mongo_bucket_rows_cache
+
+        clear_mongo_bucket_rows_cache()
+        nas_mount._refresh_bucket_children_caches()
+    except Exception:
+        logger.exception('[NAS] cache refresh after site folder rename failed')
+
+    updated = result.get('project') or project
+    return {
+        'ok': True,
+        'projectId': str(updated['_id']),
+        'code': updated.get('code'),
+        'nasFolderName': updated.get('nasFolderName'),
+        'nasParentBucket': updated.get('nasParentBucket'),
+        'nasFolder': updated.get('nasFolder'),
+    }
+
+
 def _infer_parent_bucket_from_path(project, watch_dir):
     nf = project.get('nasFolder')
     if not nf or not watch_dir:
@@ -1728,6 +1827,12 @@ def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
         from app.services.nas_site_relocate_service import realign_wa_projects_with_nas
 
         realign = realign_wa_projects_with_nas()
+        try:
+            from app.api.wa_projects import clear_mongo_bucket_rows_cache
+
+            clear_mongo_bucket_rows_cache()
+        except Exception:
+            logger.exception('[NAS] clear mongo bucket rows cache after sync failed')
         deletions = reconcile_deletions_from_nas()
         records_imported = 0
         if import_files:

@@ -15,6 +15,7 @@ from app.services.nas_sync_service import (
     link_nas_bucket_folder_to_project,
     import_nas_files_for_project,
     import_all_projects_from_nas,
+    rename_nas_site_folder,
     run_bidirectional_nas_sync,
     get_last_nas_sync_status,
     reconcile_after_nas_folder_deleted,
@@ -205,6 +206,34 @@ def link_bucket_folder_route():
     )
     if not result.get('ok'):
         return jsonify(result), 409 if 'already exists' in (result.get('error') or '') else 400
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/rename-site-folder', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def rename_site_folder_route():
+    """Rename a site folder on the NAS share (same as Manage Projects + sync rename)."""
+    data = request.get_json() or {}
+    new_name = (data.get('newFolderName') or data.get('new_folder_name') or '').strip()
+    sync_nas = data.get('syncNas', data.get('sync_nas', True))
+    if isinstance(sync_nas, str):
+        sync_nas = sync_nas.strip().lower() not in ('0', 'false', 'no')
+    new_code = data.get('newCode') or data.get('new_code')
+    result = rename_nas_site_folder(
+        project_id=data.get('projectId') or data.get('project_id'),
+        project_code=data.get('projectCode') or data.get('project_code'),
+        nas_parent_bucket=(
+            data.get('nasParentBucket') or data.get('nas_parent_bucket') or ''
+        ).strip()
+        or None,
+        new_folder_name=new_name,
+        new_code=new_code,
+        sync_nas=bool(sync_nas),
+    )
+    if not result.get('ok'):
+        status = 404 if result.get('error') == 'Project not found' else 400
+        return jsonify(result), status
     return jsonify(result)
 
 
