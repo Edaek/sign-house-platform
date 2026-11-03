@@ -246,6 +246,10 @@ class PoolAssignScopeError(ValueError):
     """Pool images cannot be merged into one WA record (group / sender scope)."""
 
 
+class PoolAssignNotClassifyTargetError(ValueError):
+    """Target project is a bucket container — assign only to site subfolders."""
+
+
 def _group_jid_matches(stored: str, group_id: str) -> bool:
     a = (stored or '').strip().lower()
     b = (group_id or '').strip().lower()

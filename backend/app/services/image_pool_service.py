@@ -576,6 +576,14 @@ def assign_images_to_project(
     if not images:
         return 0
 
+    if not is_wa_classify_target(project):
+        from app.services.loomy_pool_batch import PoolAssignNotClassifyTargetError
+
+        raise PoolAssignNotClassifyTargetError(
+            'Cannot assign to a bucket root or container project; '
+            'use a site subfolder under the bucket (create a child project first).'
+        )
+
     from app.services.loomy_pool_batch import assert_pool_images_assignable
 
     assert_pool_images_assignable(images, group_id=group_id)

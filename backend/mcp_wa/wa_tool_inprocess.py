@@ -187,9 +187,20 @@ def _exec_assign_pool(a: dict) -> str:
     phone = (a.get('phone') or '').strip() or None
     remark = (a.get('remark') or '').strip() or None
 
-    count = assign_images_to_project(
-        ids, proj, 'loomy_agent', remark=remark, group_id=group_id,
-    )
+    try:
+        count = assign_images_to_project(
+            ids, proj, 'loomy_agent', remark=remark, group_id=group_id,
+        )
+    except ValueError as exc:
+        from app.services.loomy_pool_batch import PoolAssignNotClassifyTargetError
+
+        if isinstance(exc, PoolAssignNotClassifyTargetError):
+            return json_result({
+                'error': str(exc),
+                'assigned': 0,
+                'code': 'not_classify_target',
+            })
+        raise
     return json_result({
         'assigned': count,
         'projectCode': project.get('code'),

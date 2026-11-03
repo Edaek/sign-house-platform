@@ -275,6 +275,15 @@ def is_wa_classify_target(proj):
     code = (proj.get('code') or '').strip()
     if not code:
         return False
+    from app.services.wa_project_bucket_rules import (
+        is_bucket_container_project,
+        is_reserved_nas_folder_name,
+    )
+
+    if is_reserved_nas_folder_name(code):
+        return False
+    if is_bucket_container_project(proj):
+        return False
     if is_range_folder_code(code):
         return False
     if parse_range_bucket(code) is not None and not (proj.get('nasParentBucket') or '').strip():

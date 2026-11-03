@@ -98,13 +98,22 @@ def assign_images():
             image_ids, proj, 'operator', remark=remark, group_id=group_id,
         )
     except ValueError as exc:
-        from app.services.loomy_pool_batch import PoolAssignScopeError
+        from app.services.loomy_pool_batch import (
+            PoolAssignNotClassifyTargetError,
+            PoolAssignScopeError,
+        )
 
         if isinstance(exc, PoolAssignScopeError):
             return jsonify({
                 'error': str(exc),
                 'assigned': 0,
                 'code': 'pool_assign_scope',
+            }), 400
+        if isinstance(exc, PoolAssignNotClassifyTargetError):
+            return jsonify({
+                'error': str(exc),
+                'assigned': 0,
+                'code': 'not_classify_target',
             }), 400
         logger.exception('[ImagePool] Manual assign failed')
         return jsonify({'error': str(exc)}), 400

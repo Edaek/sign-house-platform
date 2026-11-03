@@ -83,7 +83,31 @@ def find_project_by_name(name, *, parent_bucket=None, exclude_id=None):
     return None
 
 
+def assert_site_code_allowed(code, *, parent_bucket=None):
+    """Policy checks before create/rename (not uniqueness)."""
+    norm = normalize_code(code)
+    if not norm:
+        return 'Project code is required'
+    from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
+
+    if is_reserved_nas_folder_name(norm):
+        return (
+            f'Project code "{norm}" is a reserved NAS folder name; '
+            f'choose a site subfolder name under the bucket.'
+        )
+    pk = _parent_bucket_key(parent_bucket)
+    if pk and norm == pk:
+        return (
+            'Site project code cannot match the parent bucket name; '
+            'create a subfolder project under the bucket instead.'
+        )
+    return None
+
+
 def assert_code_available(code, *, parent_bucket=None, exclude_id=None):
+    policy_err = assert_site_code_allowed(code, parent_bucket=parent_bucket)
+    if policy_err:
+        return policy_err
     existing = find_project_by_code(
         code,
         parent_bucket=parent_bucket,

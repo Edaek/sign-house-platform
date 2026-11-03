@@ -31,11 +31,15 @@ _nas_sync_lock = threading.Lock()
 
 def _bucket_child_site_code(child: dict) -> str | None:
     """Site project code for a direct child of a NAS bucket (PJ-xxxx or plain folder name)."""
+    from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
+
     site_code = (child.get('code') or '').strip()
     folder_name = (child.get('folderName') or '').strip()
     if not site_code:
         site_code = folder_name
     if not site_code or is_range_folder_code(site_code):
+        return None
+    if is_reserved_nas_folder_name(site_code) or is_reserved_nas_folder_name(folder_name):
         return None
     return site_code
 

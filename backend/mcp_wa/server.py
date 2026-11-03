@@ -377,6 +377,9 @@ def wa_create_project(
 ) -> str:
     """Create WA project (admin/manager). name is required (use NAS folder display name).
 
+    Under a NAS bucket (standalone or range), pass parent_bucket_code and use a *child*
+    site code — never the same name as the bucket root (e.g. not KTEST under KTEST).
+
     Do not use for a mistyped site number: if wa_list_projects shows nearby codes
     (e.g. user said 1008 but 1005/1007 exist), ask the user first instead of creating."""
     try:
