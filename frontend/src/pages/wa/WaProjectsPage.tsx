@@ -249,6 +249,13 @@ export default function WaProjectsPage() {
       if (!selectedBucketCode) return
       const folderKey = (row.nasFolderName || row.code || '').trim()
       if (!folderKey) return
+      const reserved = new Set(['photo', 'processed', 'process', 'tmp', 'temp'])
+      if (reserved.has(folderKey.toLowerCase())) {
+        toast.error(
+          `"${folderKey}" is a NAS structure folder, not a site project. Remove it on the shared drive if you do not need it.`,
+        )
+        return
+      }
       setLinkingNasFolder(folderKey)
       try {
         const { projectId } = await linkNasBucketFolder(selectedBucketCode, folderKey)

@@ -61,6 +61,35 @@ export interface WaProject {
   nasFolderName?: string
 }
 
+function physicalNasBucketCode(bucketCode: string): string {
+  const b = bucketCode.trim()
+  if (b.toLowerCase().startsWith('__standalone:')) {
+    return b.slice('__standalone:'.length).trim()
+  }
+  return b
+}
+
+function findBucketSiteProject(
+  projects: WaProject[],
+  bucketCode: string,
+  folderName: string,
+): WaProject | undefined {
+  const key = folderName.trim().toUpperCase()
+  const parentKey = physicalNasBucketCode(bucketCode).toUpperCase()
+  return projects.find((p) => {
+    const codeOk =
+      (p.code || '').toUpperCase() === key || (p.nasFolderName || '').toUpperCase() === key
+    if (!codeOk) return false
+    const pb = (p.nasParentBucket || '').trim().toUpperCase()
+    if (!pb) return true
+    return (
+      pb === parentKey ||
+      pb === bucketCode.toUpperCase() ||
+      physicalNasBucketCode(pb).toUpperCase() === parentKey
+    )
+  })
+}
+
 export interface NasStatus {
   degraded?: boolean
   foldersCacheAgeSec?: number | null
@@ -466,19 +495,69 @@ export const useWaStore = create<WaStore>((set) => ({
   },
 
   linkNasBucketFolder: async (bucketCode, folderName) => {
-    const { data } = await api.post(
-      '/wa/nas/link-bucket-folder',
-      { bucketCode, folderName },
-      { timeout: 120000 },
-    )
-    if (data.ok === false) {
-      throw new Error((data.error as string) || 'Link failed')
+    const folder = folderName.trim()
+    const finish = (project: WaProject, created: boolean, updated: boolean) => ({
+      projectId: project.id,
+      code: project.code || folder,
+      created,
+      updated,
+    })
+
+    try {
+      const { data } = await api.post(
+        '/wa/nas/link-bucket-folder',
+        { bucketCode, folderName: folder },
+        { timeout: 120000 },
+      )
+      if (data.ok === false) {
+        throw new Error((data.error as string) || 'Link failed')
+      }
+      return {
+        projectId: data.projectId as string,
+        code: (data.code as string) || folder,
+        created: Boolean(data.created),
+        updated: Boolean(data.updated),
+      }
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status !== 404) throw err
     }
-    return {
-      projectId: data.projectId as string,
-      code: (data.code as string) || folderName,
-      created: Boolean(data.created),
-      updated: Boolean(data.updated),
+
+    try {
+      await api.post('/wa/nas/sync-bucket', { bucketCode }, { timeout: 120000 })
+    } catch {
+      // sync-bucket may be missing on very old backends
+    }
+
+    const loadProjects = async () => {
+      const { data } = await api.get<WaProject[]>('/wa/projects')
+      return data
+    }
+
+    let projects = await loadProjects()
+    let match = findBucketSiteProject(projects, bucketCode, folder)
+    if (match) return finish(match, false, true)
+
+    try {
+      const { data: created } = await api.post<WaProject>('/wa/admin/projects', {
+        code: folder,
+        name: folder,
+        parentBucketCode: bucketCode,
+      })
+      return finish(created, true, false)
+    } catch (createErr: unknown) {
+      const cStatus = (createErr as { response?: { status?: number } })?.response?.status
+      if (cStatus === 409) {
+        projects = await loadProjects()
+        match = findBucketSiteProject(projects, bucketCode, folder)
+        if (match) return finish(match, false, true)
+      }
+      const msg =
+        (createErr as { response?: { data?: { error?: string } } })?.response?.data?.error
+      throw new Error(
+        msg ||
+          'Link failed (server missing link API). Deploy the latest backend, or create the project in Manage Projects.',
+      )
     }
   },
 
