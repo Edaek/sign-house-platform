@@ -553,6 +553,10 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
             continue
         folder_name = (child.get('folderName') or site_code).strip()
         existing = find_project_by_code(site_code, parent_bucket=parent_bucket)
+        if not existing:
+            loose = find_project_by_code(site_code)
+            if loose and not (loose.get('nasParentBucket') or '').strip():
+                existing = loose
         if existing:
             patch = {'updatedAt': now, 'nasParentBucket': parent_bucket}
             if folder_name:

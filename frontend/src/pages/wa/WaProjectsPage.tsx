@@ -243,19 +243,48 @@ export default function WaProjectsPage() {
     }
   }, [selectedBucketCode, syncNasBucket, fetchProjects, fetchNasBucketSites])
 
-  const handleLinkNasOnlyFolder = useCallback(async () => {
-    if (!selectedBucketCode) return
-    setLinkingNasFolder(selectedBucketCode)
-    try {
-      await refreshCurrentBucketFromNas()
-      toast.success('Folder linked — you can open it now')
-    } catch (err: unknown) {
-      const ax = err as { response?: { data?: { error?: string } } }
-      toast.error(ax.response?.data?.error || 'Could not link folder from shared drive')
-    } finally {
-      setLinkingNasFolder(null)
-    }
-  }, [selectedBucketCode, refreshCurrentBucketFromNas])
+  const handleLinkNasOnlyFolder = useCallback(
+    async (row: WaProject) => {
+      if (!selectedBucketCode) return
+      const folderKey = (row.nasFolderName || row.code || '').trim()
+      setLinkingNasFolder(folderKey || selectedBucketCode)
+      try {
+        const { created } = await syncNasBucket(selectedBucketCode)
+        await fetchProjects()
+        const { sites, staleFromCache, hint } = await fetchNasBucketSites(selectedBucketCode, {
+          liveScan: true,
+          timeoutMs: 120000,
+        })
+        setBucketSites(sites)
+        setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
+        setBucketSitesHint(hint?.trim() || null)
+        const linked = sites.find(
+          (s) =>
+            !s.id.startsWith('nas:') &&
+            ((s.nasFolderName || '').toUpperCase() === folderKey.toUpperCase() ||
+              (s.code || '').toUpperCase() === folderKey.toUpperCase()),
+        )
+        if (linked) {
+          toast.success('已連結，可進入專案')
+          return
+        }
+        const codeUpper = folderKey.toUpperCase()
+        if (created.some((c) => c.toUpperCase() === codeUpper)) {
+          toast.success('已建立專案，請再點 Open')
+          return
+        }
+        toast.error(
+          '無法連結此資料夾。請到 Manage Projects 新建：parent 選 KTEST，code 填 KTEST1（勿與 bucket 同名）。',
+        )
+      } catch (err: unknown) {
+        const ax = err as { response?: { data?: { error?: string } } }
+        toast.error(ax.response?.data?.error || 'Could not link folder from shared drive')
+      } finally {
+        setLinkingNasFolder(null)
+      }
+    },
+    [selectedBucketCode, syncNasBucket, fetchProjects, fetchNasBucketSites],
+  )
 
   const buckets = useMemo(
     () => mergeProjectsWithNasRootBuckets(projects, nasRootBuckets).buckets,
@@ -573,8 +602,12 @@ export default function WaProjectsPage() {
                 key={project.nasFolderName || project.id}
                 project={project}
                 nasConnected={!!nasStatus?.connected}
-                linkingNas={linkingNasFolder !== null}
-                onLinkNasFolder={handleLinkNasOnlyFolder}
+                linkingNas={
+                  linkingNasFolder !== null &&
+                  linkingNasFolder.toUpperCase() ===
+                    (project.nasFolderName || project.code || '').toUpperCase()
+                }
+                onLinkNasFolder={() => handleLinkNasOnlyFolder(project)}
               />
             ))}
           </div>

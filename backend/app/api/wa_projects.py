@@ -120,6 +120,19 @@ def _mongo_bucket_child_rows_compute(bucket: str) -> list:
     return out
 
 
+def _bucket_child_lookup_code(child: dict) -> str | None:
+    """Project code used to match Mongo for a NAS bucket child row."""
+    from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
+
+    folder_name = (child.get('folderName') or '').strip()
+    if is_reserved_nas_folder_name(folder_name):
+        return None
+    code = (child.get('code') or '').strip() or folder_name
+    if is_reserved_nas_folder_name(code):
+        return None
+    return code or None
+
+
 def _merge_bucket_children(nas_children: list, extra: list) -> list:
     by_key: dict[str, dict] = {}
     for row in nas_children or []:
@@ -140,9 +153,9 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
     parent_bucket = nas_path_from_web_bucket(bucket)
     children = sorted(children, key=lambda c: (c.get('folderName') or '').lower())
     unique_codes = list({
-        (c.get('code') or '').strip()
+        lc
         for c in children
-        if (c.get('code') or '').strip()
+        if (lc := _bucket_child_lookup_code(c))
     })
     proj_by_code_upper = {}
     proj_by_code_and_parent: dict[tuple[str, str], dict] = {}
@@ -176,21 +189,17 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
         ]):
             record_counts[row['_id']] = row['totalRecords']
 
-    from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
-
     sites = []
     for child in children:
         folder_name = (child.get('folderName') or '').strip()
-        if is_reserved_nas_folder_name(folder_name):
-            continue
-        code = (child.get('code') or '').strip() or folder_name
-        if is_reserved_nas_folder_name(code):
+        code = _bucket_child_lookup_code(child)
+        if not code:
             continue
         proj = None
         if code:
             code_upper = code.upper()
             proj = proj_by_code_and_parent.get((code_upper, parent_bucket_upper))
-            if proj is None:
+            if proj is None and not parent_bucket_upper:
                 proj = proj_by_code_upper.get(code_upper)
         row = {
             'folderName': folder_name,
