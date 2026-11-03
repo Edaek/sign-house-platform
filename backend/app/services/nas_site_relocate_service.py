@@ -19,6 +19,37 @@ from app.services.wa_project_validation import find_project_by_code
 logger = logging.getLogger(__name__)
 
 
+def _site_dir_parent_bucket_name(site_dir: Path) -> str | None:
+    """Top-level NAS bucket folder name containing this site directory (KTEST/kelly → KTEST)."""
+    watch = nas_mount._resolved_watch_dir()
+    if not watch or not site_dir.is_dir():
+        return None
+    try:
+        rel = site_dir.resolve().relative_to(Path(watch).resolve())
+    except ValueError:
+        return None
+    if len(rel.parts) < 2:
+        return None
+    return rel.parts[0]
+
+
+def _rewrite_path_bucket_folder(path: str | None, old_bucket: str, new_bucket: str, folder_name: str) -> str | None:
+    """When a site folder moved between buckets, fix NAS paths that still mention the old bucket."""
+    if not path or not old_bucket or not new_bucket or not folder_name:
+        return path
+    p = str(path).replace('\\', '/')
+    if old_bucket.upper() == new_bucket.upper():
+        return path
+    pattern = re.compile(
+        rf'/{re.escape(old_bucket)}/{re.escape(folder_name)}(?=/|$)',
+        re.IGNORECASE,
+    )
+    repl = f'/{new_bucket}/{folder_name}'
+    if pattern.search(p):
+        return pattern.sub(repl, p, count=1)
+    return path
+
+
 def _rewrite_path_prefix(path: str | None, old_root: Path, new_root: Path) -> str | None:
     if not path:
         return path
@@ -272,4 +303,142 @@ def relocate_all_site_folders_between_buckets(
         'targetParentBucket': nas_path_from_web_bucket(target_parent_bucket),
         'moved': moved,
         'errors': errors,
+    }
+
+
+def realign_project_record_paths(
+    project_id,
+    old_parent_bucket: str,
+    new_parent_bucket: str,
+    folder_name: str,
+) -> dict:
+    """Rewrite wa_records / pool_images NAS paths after parent bucket changed."""
+    old_b = nas_path_from_web_bucket(old_parent_bucket)
+    new_b = nas_path_from_web_bucket(new_parent_bucket)
+    folder_name = (folder_name or '').strip()
+    pid = project_id if isinstance(project_id, ObjectId) else ObjectId(str(project_id))
+    records_updated = 0
+    for rec in mongo.db.wa_records.find({'projectId': pid}):
+        patch = {}
+        nas_photos = []
+        changed = False
+        for p in rec.get('nasPhotos') or []:
+            np = _rewrite_path_bucket_folder(p, old_b, new_b, folder_name)
+            nas_photos.append(np)
+            if np != p:
+                changed = True
+        if changed:
+            patch['nasPhotos'] = nas_photos
+        sp = rec.get('nasSourcePath')
+        if sp:
+            nsp = _rewrite_path_bucket_folder(sp, old_b, new_b, folder_name)
+            if nsp != sp:
+                patch['nasSourcePath'] = nsp
+                changed = True
+        if changed:
+            patch['updatedAt'] = datetime.utcnow()
+            mongo.db.wa_records.update_one({'_id': rec['_id']}, {'$set': patch})
+            records_updated += 1
+
+    pool_updated = 0
+    for img in mongo.db.pool_images.find({'projectId': pid}):
+        path = img.get('nasPath')
+        if not path:
+            continue
+        new_path = _rewrite_path_bucket_folder(path, old_b, new_b, folder_name)
+        if new_path != path:
+            mongo.db.pool_images.update_one(
+                {'_id': img['_id']},
+                {'$set': {'nasPath': new_path, 'updatedAt': datetime.utcnow()}},
+            )
+            pool_updated += 1
+
+    return {'recordsUpdated': records_updated, 'poolImagesUpdated': pool_updated}
+
+
+def realign_wa_projects_with_nas(*, dry_run: bool = False) -> dict:
+    """
+    Point wa_projects (and record NAS paths) at the bucket where the site folder actually lives.
+
+    Use after manual SMB moves or relocate outside the app so the web UI matches the share.
+    """
+    if not nas_mount.is_available():
+        return {'ok': False, 'error': 'NAS mount not available'}
+
+    updated: list[dict] = []
+    skipped = 0
+    now = datetime.utcnow()
+
+    for proj in mongo.db.wa_projects.find({'status': {'$ne': 'archived'}}):
+        parent_raw = (proj.get('nasParentBucket') or '').strip()
+        code = (proj.get('code') or '').strip()
+        if not parent_raw or not code:
+            skipped += 1
+            continue
+        from app.services.wa_project_bucket_rules import is_bucket_container_project
+
+        if is_bucket_container_project(proj):
+            skipped += 1
+            continue
+
+        folder = nas_mount._folder_for_project(code, proj)
+        if folder is None or not folder.is_dir():
+            skipped += 1
+            continue
+
+        actual_parent = _site_dir_parent_bucket_name(folder)
+        if not actual_parent:
+            skipped += 1
+            continue
+
+        mongo_parent = nas_path_from_web_bucket(parent_raw)
+        if actual_parent.upper() == mongo_parent.upper():
+            skipped += 1
+            continue
+
+        folder_label = (proj.get('nasFolderName') or folder.name or code).strip()
+        row = {
+            'projectId': str(proj['_id']),
+            'code': code,
+            'fromParentBucket': mongo_parent,
+            'toParentBucket': actual_parent,
+            'nasFolder': str(folder),
+        }
+        if dry_run:
+            updated.append(row)
+            continue
+
+        mongo.db.wa_projects.update_one(
+            {'_id': proj['_id']},
+            {'$set': {
+                'nasParentBucket': actual_parent,
+                'nasFolderName': folder.name,
+                'nasFolder': str(folder),
+                'updatedAt': now,
+            }},
+        )
+        path_stats = realign_project_record_paths(
+            proj['_id'],
+            mongo_parent,
+            actual_parent,
+            folder_label,
+        )
+        from app.services.nas_site_remark_service import consolidate_photo_day_remark_txts
+
+        remark_merge = consolidate_photo_day_remark_txts(str(folder), folder.name)
+        row.update(path_stats)
+        row['remarkTxtMergedDays'] = remark_merge.get('days') or []
+        updated.append(row)
+
+    try:
+        nas_mount._refresh_bucket_children_caches()
+    except Exception:
+        logger.exception('[NAS] bucket cache refresh after realign failed')
+
+    return {
+        'ok': True,
+        'dryRun': dry_run,
+        'projectsRealigned': len(updated),
+        'projectsSkipped': skipped,
+        'updates': updated,
     }

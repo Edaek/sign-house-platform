@@ -5,6 +5,7 @@ from bson import ObjectId
 from app.services.nas_watcher_service import nas_mount
 from app.services.project_number_match_service import is_range_folder_code
 from app.services.nas_site_relocate_service import (
+    realign_wa_projects_with_nas,
     relocate_all_site_folders_between_buckets,
     relocate_site_folder_between_buckets,
 )
@@ -204,6 +205,19 @@ def link_bucket_folder_route():
     )
     if not result.get('ok'):
         return jsonify(result), 409 if 'already exists' in (result.get('error') or '') else 400
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/realign-projects', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def realign_projects_route():
+    """Match wa_projects parent bucket + NAS paths to where site folders actually are on the share."""
+    data = request.get_json() or {}
+    dry_run = bool(data.get('dryRun') or data.get('dry_run'))
+    result = realign_wa_projects_with_nas(dry_run=dry_run)
+    if not result.get('ok'):
+        return jsonify(result), 503
     return jsonify(result)
 
 

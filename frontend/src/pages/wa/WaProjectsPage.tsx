@@ -397,6 +397,7 @@ export default function WaProjectsPage() {
         foldersCreated,
         totalCreated,
         totalRemoved,
+        projectsRealigned,
         skipped,
       } = await syncNasFromDrive()
       if (skipped) {
@@ -407,6 +408,7 @@ export default function WaProjectsPage() {
       const parts = []
       if (foldersCreated?.length) parts.push(`${foldersCreated.length} folder(s) pushed to NAS`)
       if (created.length) parts.push(`${created.length} project(s) created from NAS`)
+      if (projectsRealigned) parts.push(`${projectsRealigned} project(s) realigned to NAS folders`)
       if (removed?.length) parts.push(`${removed.length} project(s) removed (NAS folder deleted)`)
       if (totalCreated) parts.push(`${totalCreated} NAS photo(s) imported`)
       if (totalRemoved) parts.push(`${totalRemoved} record(s) removed (NAS file deleted)`)

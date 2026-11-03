@@ -218,6 +218,7 @@ interface WaStore {
     foldersCreated: string[]
     totalCreated: number
     totalRemoved: number
+    projectsRealigned?: number
     skipped?: boolean
     skipReason?: string
   }>
@@ -455,6 +456,7 @@ export const useWaStore = create<WaStore>((set) => ({
     let data: {
       projectsCreated?: string[]
       projectsRemoved?: string[]
+      projectsRealigned?: number
       foldersCreated?: string[]
       recordsImported?: number
       recordsRemoved?: number
@@ -482,6 +484,7 @@ export const useWaStore = create<WaStore>((set) => ({
       foldersCreated: data.foldersCreated || [],
       totalCreated: data.recordsImported ?? data.totalCreated ?? 0,
       totalRemoved: data.recordsRemoved ?? 0,
+      projectsRealigned: data.projectsRealigned ?? 0,
       skipped: Boolean(data.skipped),
       skipReason: data.reason,
     }

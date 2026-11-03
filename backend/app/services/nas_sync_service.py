@@ -763,14 +763,48 @@ def sync_projects_from_nas(owner_id):
         from app.services.wa_project_validation import find_project_by_code
 
         parent_bucket = (folder.get('parentBucket') or '').strip() or None
+        folder_label = (folder.get('folderName') or code).strip()
         existing = find_project_by_code(code, parent_bucket=parent_bucket)
+        if not existing and parent_bucket:
+            loose = list(mongo.db.wa_projects.find({
+                'status': {'$ne': 'archived'},
+                'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+            }))
+            if len(loose) == 1:
+                existing = loose[0]
+            else:
+                for cand in loose:
+                    cand_fn = (cand.get('nasFolderName') or cand.get('code') or '').strip()
+                    if cand_fn.upper() == folder_label.upper():
+                        existing = cand
+                        break
         if existing:
-            fn = (folder.get('folderName') or '').strip()
-            if fn and (existing.get('nasFolderName') or '').strip() != fn:
-                mongo.db.wa_projects.update_one(
-                    {'_id': existing['_id']},
-                    {'$set': {'nasFolderName': fn, 'updatedAt': now}},
-                )
+            old_parent = (existing.get('nasParentBucket') or '').strip()
+            patch = {'updatedAt': now}
+            if parent_bucket:
+                patch['nasParentBucket'] = parent_bucket
+            if folder_label:
+                patch['nasFolderName'] = folder_label
+            live = nas_mount._folder_for_project(
+                code,
+                {**existing, **patch},
+            )
+            if live is not None:
+                patch['nasFolder'] = str(live)
+            mongo.db.wa_projects.update_one({'_id': existing['_id']}, {'$set': patch})
+            if parent_bucket and old_parent:
+                from app.services.nas_bucket_code import nas_path_from_web_bucket
+                from app.services.nas_site_relocate_service import realign_project_record_paths
+
+                op = nas_path_from_web_bucket(old_parent)
+                np = nas_path_from_web_bucket(parent_bucket)
+                if op.upper() != np.upper():
+                    realign_project_record_paths(
+                        existing['_id'],
+                        op,
+                        np,
+                        folder_label,
+                    )
             skipped.append(code)
             continue
         fn = (folder.get('folderName') or code).strip()
@@ -1691,6 +1725,9 @@ def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
             return to_nas
 
         proj = sync_projects_from_nas(oid)
+        from app.services.nas_site_relocate_service import realign_wa_projects_with_nas
+
+        realign = realign_wa_projects_with_nas()
         deletions = reconcile_deletions_from_nas()
         records_imported = 0
         if import_files:
@@ -1707,6 +1744,8 @@ def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
             'foldersCreated': to_nas.get('foldersCreated', []),
             'foldersCreateErrors': to_nas.get('errors', []),
             'projectsCreated': proj.get('created', []),
+            'projectsRealigned': realign.get('projectsRealigned', 0),
+            'projectsRealignedDetail': realign.get('updates', []),
             'projectsRemoved': deletions.get('projectsRemoved', []),
             'recordsImported': records_imported,
             'recordsRemoved': deletions.get('recordsRemoved', 0),
