@@ -305,12 +305,18 @@ export const useWaStore = create<WaStore>((set) => ({
     } catch (err: unknown) {
       set({ projects: [] })
       const ax = err as { code?: string; message?: string; response?: { status?: number } }
+      const status = ax.response?.status
+      const isLocalDev = import.meta.env.DEV && !import.meta.env.VITE_API_URL?.trim()
       const msg =
         ax.code === 'ECONNABORTED'
           ? 'Project list timed out (NAS may be slow). Retry or click Sync NAS.'
-          : ax.response?.status === 401
+          : status === 401
             ? 'Session expired — please sign in again'
-            : 'Could not load projects. Ensure the backend is running on port 5002.'
+            : status === 404
+              ? 'Project list API not found — deploy the latest Sign House backend or check the API gateway.'
+              : isLocalDev
+                ? 'Could not load projects. Ensure the backend is running (local default port 5002).'
+                : 'Could not load projects. Check that the API server is up and reachable.'
       import('react-hot-toast').then(({ default: toast }) => toast.error(msg))
     } finally {
       set({ loading: false })
@@ -529,9 +535,13 @@ export const useWaStore = create<WaStore>((set) => ({
       // sync-bucket may be missing on very old backends
     }
 
-    const loadProjects = async () => {
-      const { data } = await api.get<WaProject[]>('/wa/projects')
-      return data
+    const loadProjects = async (): Promise<WaProject[]> => {
+      try {
+        const { data } = await api.get<WaProject[]>('/wa/projects')
+        return data
+      } catch {
+        return []
+      }
     }
 
     let projects = await loadProjects()
@@ -544,6 +554,9 @@ export const useWaStore = create<WaStore>((set) => ({
         name: folder,
         parentBucketCode: bucketCode,
       })
+      set((state) => ({
+        projects: [created, ...state.projects.filter((p) => p.id !== created.id)],
+      }))
       return finish(created, true, false)
     } catch (createErr: unknown) {
       const cStatus = (createErr as { response?: { status?: number } })?.response?.status

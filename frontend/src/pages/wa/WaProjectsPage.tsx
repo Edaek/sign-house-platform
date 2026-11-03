@@ -535,23 +535,7 @@ export default function WaProjectsPage() {
         </div>
       )}
 
-      {loading && projects.length === 0 ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
-        </div>
-      ) : projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <FolderOpen className="h-12 w-12 text-slate-300 dark:text-slate-600 mb-4" />
-          <p className="text-slate-500 dark:text-slate-400">No projects yet</p>
-          <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Create your first project to get started</p>
-        </div>
-      ) : atBucketRoot && filteredBuckets.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <Search className="h-12 w-12 text-slate-300 dark:text-slate-600 mb-4" />
-          <p className="text-slate-500 dark:text-slate-400">No folders match your search</p>
-          <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Try a different code or project name</p>
-        </div>
-      ) : !atBucketRoot && bucketSyncing && bucketSites.length === 0 ? (
+      {!atBucketRoot && bucketSyncing && bucketSites.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
           <RefreshCw className="h-10 w-10 animate-spin text-sign-500 mb-3" />
           <p>Loading folders from shared drive: {bucketFolderLabel(selectedBucketCode!)}…</p>
@@ -572,18 +556,7 @@ export default function WaProjectsPage() {
             </>
           )}
         </div>
-      ) : atBucketRoot ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredBuckets.map((bucket) => (
-            <BucketCard
-              key={bucket.code}
-              bucket={bucket}
-              nasFolderCount={nasFolderCountsByBucket[bucket.code]}
-              onOpen={() => setSelectedBucketCode(bucket.code)}
-            />
-          ))}
-        </div>
-      ) : (
+      ) : !atBucketRoot ? (
         <div className="space-y-4">
           {bucketSyncing && <NasFolderLoadProgress />}
           {(() => {
@@ -619,6 +592,33 @@ export default function WaProjectsPage() {
               />
             ))}
           </div>
+        </div>
+      ) : loading && projects.length === 0 ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="w-8 h-8 border-2 border-sign-500/30 border-t-sign-500 rounded-full animate-spin" />
+        </div>
+      ) : projects.length === 0 && buckets.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <FolderOpen className="h-12 w-12 text-slate-300 dark:text-slate-600 mb-4" />
+          <p className="text-slate-500 dark:text-slate-400">No projects yet</p>
+          <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Create your first project to get started</p>
+        </div>
+      ) : filteredBuckets.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <Search className="h-12 w-12 text-slate-300 dark:text-slate-600 mb-4" />
+          <p className="text-slate-500 dark:text-slate-400">No folders match your search</p>
+          <p className="text-sm text-slate-400 dark:text-slate-500 mt-1">Try a different code or project name</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredBuckets.map((bucket) => (
+            <BucketCard
+              key={bucket.code}
+              bucket={bucket}
+              nasFolderCount={nasFolderCountsByBucket[bucket.code]}
+              onOpen={() => setSelectedBucketCode(bucket.code)}
+            />
+          ))}
         </div>
       )}
     </div>
