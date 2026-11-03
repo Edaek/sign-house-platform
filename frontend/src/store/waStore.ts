@@ -189,6 +189,8 @@ interface WaStore {
     foldersCreated: string[]
     totalCreated: number
     totalRemoved: number
+    skipped?: boolean
+    skipReason?: string
   }>
   syncNasBucket: (bucketCode: string) => Promise<{
     created: string[]
@@ -418,6 +420,8 @@ export const useWaStore = create<WaStore>((set) => ({
       recordsImported?: number
       recordsRemoved?: number
       totalCreated?: number
+      skipped?: boolean
+      reason?: string
     }
     try {
       ;({ data } = await api.post('/wa/nas/sync-bidirectional', {}, syncTimeout))
@@ -439,6 +443,8 @@ export const useWaStore = create<WaStore>((set) => ({
       foldersCreated: data.foldersCreated || [],
       totalCreated: data.recordsImported ?? data.totalCreated ?? 0,
       totalRemoved: data.recordsRemoved ?? 0,
+      skipped: Boolean(data.skipped),
+      skipReason: data.reason,
     }
   },
 

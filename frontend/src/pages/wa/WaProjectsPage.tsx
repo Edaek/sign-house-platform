@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useWaStore, type WaProject } from '../../store/waStore'
 import {
@@ -73,6 +73,7 @@ export default function WaProjectsPage() {
     nasStatusLoading,
     fetchNasStatus,
     syncNasFromDrive,
+    syncNasBucket,
     fetchNasBucketSites,
     fetchNasRootBuckets,
   } = useWaStore()
@@ -93,6 +94,7 @@ export default function WaProjectsPage() {
   }
 
   const [search, setSearch] = useState('')
+  const [linkingNasFolder, setLinkingNasFolder] = useState<string | null>(null)
   const [syncingNas, setSyncingNas] = useState(false)
   const [bucketSyncing, setBucketSyncing] = useState(false)
   const [bucketSites, setBucketSites] = useState<WaProject[]>([])
@@ -153,7 +155,7 @@ export default function WaProjectsPage() {
     let cancelled = false
     let sitesShown = 0
     const applySites = (sites: WaProject[], staleFromCache: boolean, hint?: string) => {
-      if (cancelled || sites.length === 0) return
+      if (cancelled) return
       sitesShown = Math.max(sitesShown, sites.length)
       setBucketSites(sites)
       setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
@@ -180,13 +182,11 @@ export default function WaProjectsPage() {
     }
     setBucketSyncing(localSites.length === 0)
 
-    fetchNasBucketSites(nasBucket, { timeoutMs: 60000 })
+    fetchNasBucketSites(nasBucket, { liveScan: true, timeoutMs: 120000 })
       .then(({ sites, staleFromCache, hint }) => {
         if (cancelled) return
         applySites(sites, staleFromCache ?? false, hint)
-        if (sites.length > 0) {
-          setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
-        }
+        setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
         return fetchProjects()
       })
       .catch(() => {
@@ -208,7 +208,7 @@ export default function WaProjectsPage() {
     const poll = window.setInterval(() => {
       fetchNasBucketSites(nasBucket, { liveScan: true, timeoutMs: 120000 })
         .then(({ sites, staleFromCache }) => {
-          if (cancelled || sites.length === 0) return
+          if (cancelled) return
           applySites(sites, staleFromCache ?? false)
           if (!staleFromCache) setBucketSitesSource('nas')
         })
@@ -220,6 +220,42 @@ export default function WaProjectsPage() {
       window.clearInterval(poll)
     }
   }, [selectedBucketCode, nasStatus?.connected, fetchNasBucketSites, fetchProjects])
+
+  const refreshCurrentBucketFromNas = useCallback(async () => {
+    if (!selectedBucketCode) return
+    setBucketSyncing(true)
+    try {
+      await syncNasBucket(selectedBucketCode)
+      await fetchProjects()
+      const { sites, staleFromCache, hint } = await fetchNasBucketSites(selectedBucketCode, {
+        liveScan: true,
+        timeoutMs: 120000,
+      })
+      setBucketSites(sites)
+      setBucketSitesSource(staleFromCache ? 'cache' : 'nas')
+      setBucketSitesHint(hint?.trim() || null)
+      setNasFolderCountsByBucket((prev) => ({
+        ...prev,
+        [selectedBucketCode]: sites.length,
+      }))
+    } finally {
+      setBucketSyncing(false)
+    }
+  }, [selectedBucketCode, syncNasBucket, fetchProjects, fetchNasBucketSites])
+
+  const handleLinkNasOnlyFolder = useCallback(async () => {
+    if (!selectedBucketCode) return
+    setLinkingNasFolder(selectedBucketCode)
+    try {
+      await refreshCurrentBucketFromNas()
+      toast.success('Folder linked — you can open it now')
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { error?: string } } }
+      toast.error(ax.response?.data?.error || 'Could not link folder from shared drive')
+    } finally {
+      setLinkingNasFolder(null)
+    }
+  }, [selectedBucketCode, refreshCurrentBucketFromNas])
 
   const buckets = useMemo(
     () => mergeProjectsWithNasRootBuckets(projects, nasRootBuckets).buckets,
@@ -318,15 +354,34 @@ export default function WaProjectsPage() {
   const handleNasSync = async () => {
     setSyncingNas(true)
     try {
-      const { created, removed, foldersCreated, totalCreated, totalRemoved } = await syncNasFromDrive()
+      const {
+        created,
+        removed,
+        foldersCreated,
+        totalCreated,
+        totalRemoved,
+        skipped,
+        skipReason,
+      } = await syncNasFromDrive()
+      if (skipped) {
+        toast('Another NAS sync is still running — wait a moment, then refresh this page.')
+        if (selectedBucketCode) await refreshCurrentBucketFromNas()
+        return
+      }
       const parts = []
       if (foldersCreated?.length) parts.push(`${foldersCreated.length} folder(s) pushed to NAS`)
       if (created.length) parts.push(`${created.length} project(s) created from NAS`)
       if (removed?.length) parts.push(`${removed.length} project(s) removed (NAS folder deleted)`)
       if (totalCreated) parts.push(`${totalCreated} NAS photo(s) imported`)
       if (totalRemoved) parts.push(`${totalRemoved} record(s) removed (NAS file deleted)`)
-      toast.success(parts.length ? parts.join('; ') : 'NAS is already in sync')
+      toast.success(parts.length ? parts.join('; ') : 'NAS sync finished')
       await fetchNasStatus()
+      if (selectedBucketCode) {
+        await refreshCurrentBucketFromNas()
+      } else {
+        const roots = await fetchNasRootBuckets()
+        setNasRootBuckets(roots)
+      }
     } catch (err: unknown) {
       const ax = err as { response?: { status?: number; data?: { error?: string; message?: string } }; code?: string }
       const msg = ax.response?.data?.error || ax.response?.data?.message
@@ -518,6 +573,8 @@ export default function WaProjectsPage() {
                 key={project.nasFolderName || project.id}
                 project={project}
                 nasConnected={!!nasStatus?.connected}
+                linkingNas={linkingNasFolder !== null}
+                onLinkNasFolder={handleLinkNasOnlyFolder}
               />
             ))}
           </div>
@@ -590,9 +647,13 @@ function BucketCard({
 function SiteProjectCard({
   project,
   nasConnected,
+  linkingNas,
+  onLinkNasFolder,
 }: {
   project: WaProject
   nasConnected: boolean
+  linkingNas?: boolean
+  onLinkNasFolder?: () => void
 }) {
   return (
     <div className="group card hover:border-slate-400 dark:hover:border-slate-500 transition-colors p-5">
@@ -632,7 +693,15 @@ function SiteProjectCard({
       <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-700">
         <WaStatusBadge status={project.status} size="sm" />
         {project.id.startsWith('nas:') ? (
-          <span className="text-xs text-slate-400">Shared drive only</span>
+          <button
+            type="button"
+            disabled={linkingNas}
+            onClick={onLinkNasFolder}
+            className="inline-flex items-center gap-1 text-xs font-medium text-sign-600 hover:text-sign-500 dark:text-sign-400 disabled:opacity-50"
+          >
+            {linkingNas ? 'Linking…' : 'Link in app'}
+            {!linkingNas && <ArrowRight className="h-3 w-3" />}
+          </button>
         ) : (
           <Link
             to={{

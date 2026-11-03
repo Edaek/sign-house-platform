@@ -145,6 +145,8 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
         if (c.get('code') or '').strip()
     })
     proj_by_code_upper = {}
+    proj_by_code_and_parent: dict[tuple[str, str], dict] = {}
+    parent_bucket_upper = (parent_bucket or '').upper()
     if unique_codes:
         or_codes = [
             {'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'}}
@@ -155,12 +157,16 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
             '$or': or_codes,
         }):
             key = (proj.get('code') or '').strip().upper()
-            if key:
-                proj_by_code_upper[key] = proj
+            if not key:
+                continue
+            proj_by_code_upper[key] = proj
+            parent_key = (proj.get('nasParentBucket') or '').strip().upper()
+            proj_by_code_and_parent[(key, parent_key)] = proj
 
     record_counts = {}
-    if proj_by_code_upper:
-        pid_list = [p['_id'] for p in proj_by_code_upper.values()]
+    matched_projects = list({id(p): p for p in proj_by_code_upper.values()}.values())
+    if matched_projects:
+        pid_list = [p['_id'] for p in matched_projects]
         for row in mongo.db.wa_records.aggregate([
             {'$match': {
                 'projectId': {'$in': pid_list},
@@ -170,11 +176,22 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
         ]):
             record_counts[row['_id']] = row['totalRecords']
 
+    from app.services.wa_project_bucket_rules import is_reserved_nas_folder_name
+
     sites = []
     for child in children:
         folder_name = (child.get('folderName') or '').strip()
-        code = (child.get('code') or '').strip()
-        proj = proj_by_code_upper.get(code.upper()) if code else None
+        if is_reserved_nas_folder_name(folder_name):
+            continue
+        code = (child.get('code') or '').strip() or folder_name
+        if is_reserved_nas_folder_name(code):
+            continue
+        proj = None
+        if code:
+            code_upper = code.upper()
+            proj = proj_by_code_and_parent.get((code_upper, parent_bucket_upper))
+            if proj is None:
+                proj = proj_by_code_upper.get(code_upper)
         row = {
             'folderName': folder_name,
             'code': code or None,
