@@ -20,6 +20,7 @@ import {
   basenamePath,
   type NasFileEntry,
   waPhotoForNasFile,
+  waRecordImagePhotos,
 } from '../../lib/nasSiteDays'
 
 function photoSrc(photo: string) {
@@ -225,16 +226,20 @@ function DayWaRecords({
               <WaStatusBadge status={r.status} size="sm" />
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 line-clamp-2">{recordRemarkDisplay(r)}</p>
-            {r.photos.length > 0 && (
-              <div className="flex gap-1 mt-2 flex-wrap">
-                {r.photos.slice(0, 4).map((p) => (
-                  <img key={p} src={photoSrc(p)} alt="" className="h-10 w-10 rounded object-cover border" />
-                ))}
-                {r.photos.length > 4 && (
-                  <span className="text-[10px] text-slate-500 self-center">+{r.photos.length - 4}</span>
-                )}
-              </div>
-            )}
+            {(() => {
+              const imgs = waRecordImagePhotos(r)
+              if (imgs.length === 0) return null
+              return (
+                <div className="flex gap-1 mt-2 flex-wrap">
+                  {imgs.slice(0, 4).map((p) => (
+                    <img key={p} src={photoSrc(p)} alt="" className="h-10 w-10 rounded object-cover border" />
+                  ))}
+                  {imgs.length > 4 && (
+                    <span className="text-[10px] text-slate-500 self-center">+{imgs.length - 4}</span>
+                  )}
+                </div>
+              )
+            })()}
           </button>
         </li>
       ))}

@@ -1748,6 +1748,9 @@ def import_nas_files_for_project(project_id, media_dir=None):
 
     for meta in files:
         name = meta['name']
+        if (name or '').lower().endswith('.txt'):
+            skipped += 1
+            continue
         nas_path = meta.get('absolutePath') or _nas_file_path(
             project['code'],
             name,

@@ -15,6 +15,22 @@ export interface SiteDayGroup {
 }
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif)$/i
+const WA_PHOTO_EXT = /\.(jpe?g|png|webp|gif|bmp|heic)$/i
+
+/** NAS-imported site remark .txt — shown on the left NAS panel, not as a WA media card. */
+export function isNasRemarkTxtRecord(record: WaRecord): boolean {
+  const msg = (record.rawMessage || '').trim()
+  if (/^\[NAS import\].*\.txt$/i.test(msg)) return true
+  const nasPaths = [...(record.nasPhotos || []), record.nasSourcePath || ''].filter(Boolean)
+  if (nasPaths.length > 0 && nasPaths.every((p) => /\.txt$/i.test(String(p)))) return true
+  const photos = record.photos || []
+  if (photos.length > 0 && photos.every((p) => /\.txt$/i.test(p))) return true
+  return false
+}
+
+export function waRecordImagePhotos(record: WaRecord): string[] {
+  return (record.photos || []).filter((p) => WA_PHOTO_EXT.test(p))
+}
 
 /** Site folder date from `Photo/YYYY-MM-DD/...` or `*_YYYY-MM-DD.txt` remark files. */
 export function siteDayFromNasPath(relativePath: string): string | null {
@@ -74,6 +90,7 @@ export function buildSiteDayGroups(
   for (const r of records) {
     // Move leaves a tombstone on the source project; timeline follows NAS + active records only.
     if ((r.status || '').toLowerCase() === 'moved') continue
+    if (isNasRemarkTxtRecord(r)) continue
     for (const day of siteDaysForRecord(r)) {
       const bucket = ensure(day).records
       if (!bucket.some((x) => x.id === r.id)) bucket.push(r)

@@ -398,7 +398,6 @@ export default function WaProjectsPage() {
         totalCreated,
         totalRemoved,
         skipped,
-        skipReason,
       } = await syncNasFromDrive()
       if (skipped) {
         toast('Another NAS sync is still running — wait a moment, then refresh this page.')
