@@ -33,6 +33,48 @@ class RenameNasSiteFolderTests(unittest.TestCase):
         update_web.assert_called_once()
         _call_proj, call_data = update_web.call_args[0]
         self.assertEqual(call_data['nasFolderName'], 'kelly-v2')
+        self.assertEqual(call_data['code'], 'KELLY-V2')
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_syncs_code_when_name_was_code(self, mongo, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'kelly',
+            'nasParentBucket': 'KTEST',
+            'nasFolderName': 'kelly',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        update_web.return_value = {
+            'ok': True,
+            'project': {**project, 'code': 'KTEST2', 'nasFolderName': 'KTEST2'},
+        }
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            rename_nas_site_folder(project_id=str(pid), new_folder_name='KTEST2')
+        call_data = update_web.call_args[0][1]
+        self.assertEqual(call_data['nasFolderName'], 'KTEST2')
+        self.assertEqual(call_data['code'], 'KTEST2')
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_does_not_sync_code_when_folder_differs_from_code(self, mongo, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'PJ-1005',
+            'nasParentBucket': 'T-1000-2002',
+            'nasFolderName': '1005-long-label',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        update_web.return_value = {'ok': True, 'project': project}
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            rename_nas_site_folder(project_id=str(pid), new_folder_name='1005-renamed')
+        call_data = update_web.call_args[0][1]
+        self.assertEqual(call_data['nasFolderName'], '1005-renamed')
+        self.assertNotIn('code', call_data)
 
     @patch('app.services.nas_sync_service.update_web_project')
     @patch('app.services.wa_project_validation.find_project_by_code')

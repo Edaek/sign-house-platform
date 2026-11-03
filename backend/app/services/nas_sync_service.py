@@ -1320,6 +1320,17 @@ def _refresh_site_nas_folders_under_bucket(bucket_code: str):
         )
 
 
+def _project_code_matches_folder_name(project) -> bool:
+    """True when wa_projects.code matches the NAS folder label (kelly/kelly, 1005/1005)."""
+    from app.services.wa_project_validation import normalize_code
+
+    old_code = (project.get('code') or '').strip()
+    if not old_code:
+        return False
+    old_folder = (project.get('nasFolderName') or '').strip() or old_code
+    return normalize_code(old_folder).upper() == normalize_code(old_code).upper()
+
+
 def update_web_project(project, data, *, sync_nas=True):
     """Update WA project; optionally rename NAS folder (Web ↔ path on share)."""
     from app.services.wa_project_validation import normalize_code, assert_code_available
@@ -1333,7 +1344,23 @@ def update_web_project(project, data, *, sync_nas=True):
         not parent_on_row and _is_nas_root_bucket_dir(old_code)
     )
 
-    new_code = normalize_code(data.get('code', old_code)) if data.get('code') is not None else normalize_code(old_code)
+    nas_folder_label = data.get('nasFolderName')
+    if nas_folder_label is not None:
+        nas_folder_label = (nas_folder_label or '').strip()
+    else:
+        nas_folder_label = None
+
+    if data.get('code') is not None:
+        new_code = normalize_code(data.get('code', old_code))
+    elif (
+        not is_bucket
+        and nas_folder_label
+        and _project_code_matches_folder_name(project)
+    ):
+        new_code = normalize_code(nas_folder_label) or nas_folder_label
+    else:
+        new_code = normalize_code(old_code)
+
     if not new_code:
         return {'ok': False, 'error': 'Project code is required'}
     if is_bucket and new_code != normalize_code(old_code):
@@ -1347,12 +1374,6 @@ def update_web_project(project, data, *, sync_nas=True):
         )
         if err:
             return {'ok': False, 'error': err}
-
-    nas_folder_label = data.get('nasFolderName')
-    if nas_folder_label is not None:
-        nas_folder_label = (nas_folder_label or '').strip()
-    else:
-        nas_folder_label = None
 
     code_changed = new_code != normalize_code(old_code)
 
@@ -1549,8 +1570,15 @@ def rename_nas_site_folder(
         return {'ok': False, 'error': 'Site folder name cannot equal parent bucket name'}
 
     patch: dict = {'nasFolderName': new_folder_name}
-    if new_code is not None and str(new_code).strip():
-        patch['code'] = str(new_code).strip()
+    explicit_code = (str(new_code).strip() if new_code is not None else '')
+    if explicit_code:
+        patch['code'] = explicit_code
+    elif _project_code_matches_folder_name(project):
+        from app.services.wa_project_validation import normalize_code
+
+        synced = normalize_code(new_folder_name) or new_folder_name
+        if synced.upper() != (project.get('code') or '').strip().upper():
+            patch['code'] = synced
 
     result = update_web_project(project, patch, sync_nas=bool(sync_nas))
     if not result.get('ok'):

@@ -498,7 +498,8 @@ def wa_rename_nas_site_folder(
     Example: rename kelly → kelly-shop under parent KTEST. Updates Mongo nasFolderName
     and moves the directory on NAS when sync_nas=true. Pass project_id or
     project_code + nas_parent_bucket when the same code exists in multiple buckets.
-    Optional new_code also renames the wa_projects.code (and record projectCode fields).
+    When project code matched the old folder name (e.g. both kelly), code updates to
+    new_folder_name automatically; pass new_code only to override.
     """
     try:
         body: dict[str, Any] = {
