@@ -162,6 +162,63 @@ def collect_move_remark_bundle(old_records, nas_photo_paths) -> dict:
     }
 
 
+def consolidate_photo_day_remark_txts(site_root: str, folder_label: str) -> dict:
+    """
+    Merge all .txt files under Photo/YYYY-MM-DD/ into one canonical remark file per day.
+
+    Used after relocating a site folder (e.g. KTEST2/kelly → KTEST/kelly) when legacy
+    names left multiple txts for the same date (KTEST2_2026-11-03.txt + kelly_2026-11-03.txt).
+    """
+    root = (site_root or '').strip()
+    label = (folder_label or '').strip() or 'site'
+    if not root or not os.path.isdir(root):
+        return {'ok': True, 'days': [], 'merged': 0}
+
+    photo = os.path.join(root, PHOTO_SUBDIR)
+    if not os.path.isdir(photo):
+        return {'ok': True, 'days': [], 'merged': 0}
+
+    merged_days: list[str] = []
+    try:
+        for day_name in sorted(os.listdir(photo)):
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', day_name):
+                continue
+            day_dir = os.path.join(photo, day_name)
+            if not os.path.isdir(day_dir):
+                continue
+            txts = sorted(
+                os.path.join(day_dir, f)
+                for f in os.listdir(day_dir)
+                if f.lower().endswith('.txt') and os.path.isfile(os.path.join(day_dir, f))
+            )
+            if not txts:
+                continue
+            canonical = os.path.join(day_dir, site_remark_filename(folder_name=label, day_str=day_name))
+            parts = [read_remark_txt_file(p) for p in txts]
+            body = merge_remark_texts(*parts)
+            if not body:
+                for p in txts:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+                continue
+            with open(canonical, 'w', encoding='utf-8') as fh:
+                fh.write(body if body.endswith('\n') else body + '\n')
+            for p in txts:
+                if os.path.normcase(p) != os.path.normcase(canonical):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        logger.warning('[NAS] Could not remove extra remark txt %s', p)
+            merged_days.append(day_name)
+    except OSError as exc:
+        logger.error('[NAS] consolidate remark txts failed under %s: %s', root, exc)
+        return {'ok': False, 'error': str(exc), 'days': merged_days, 'merged': len(merged_days)}
+
+    return {'ok': True, 'days': merged_days, 'merged': len(merged_days)}
+
+
 def site_remark_filename(
     *,
     folder_name: str,

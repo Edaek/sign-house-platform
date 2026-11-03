@@ -4,6 +4,10 @@ from bson import ObjectId
 
 from app.services.nas_watcher_service import nas_mount
 from app.services.project_number_match_service import is_range_folder_code
+from app.services.nas_site_relocate_service import (
+    relocate_all_site_folders_between_buckets,
+    relocate_site_folder_between_buckets,
+)
 from app.services.nas_sync_service import (
     sync_projects_from_nas,
     sync_bucket_site_projects_from_nas,
@@ -200,6 +204,52 @@ def link_bucket_folder_route():
     )
     if not result.get('ok'):
         return jsonify(result), 409 if 'already exists' in (result.get('error') or '') else 400
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/relocate-site-folder', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def relocate_site_folder_route():
+    """Move one site folder to another NAS bucket parent (e.g. KTEST2/kelly → KTEST/kelly)."""
+    data = request.get_json() or {}
+    folder_name = (data.get('siteFolderName') or data.get('folderName') or '').strip()
+    source = (data.get('sourceParentBucket') or data.get('fromParentBucket') or '').strip()
+    target = (data.get('targetParentBucket') or data.get('toParentBucket') or '').strip()
+    dry_run = bool(data.get('dryRun') or data.get('dry_run'))
+    if not folder_name or not source or not target:
+        return jsonify({
+            'ok': False,
+            'error': 'siteFolderName, sourceParentBucket, and targetParentBucket are required',
+        }), 400
+    result = relocate_site_folder_between_buckets(
+        folder_name,
+        source,
+        target,
+        dry_run=dry_run,
+    )
+    if not result.get('ok'):
+        return jsonify(result), 409 if 'already exists' in (result.get('error') or '').lower() else 400
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/relocate-bucket-children', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def relocate_bucket_children_route():
+    """Move all site subfolders from one bucket to another (e.g. KTEST2/* → KTEST/*)."""
+    data = request.get_json() or {}
+    source = (data.get('sourceParentBucket') or data.get('fromParentBucket') or '').strip()
+    target = (data.get('targetParentBucket') or data.get('toParentBucket') or '').strip()
+    dry_run = bool(data.get('dryRun') or data.get('dry_run'))
+    if not source or not target:
+        return jsonify({
+            'ok': False,
+            'error': 'sourceParentBucket and targetParentBucket are required',
+        }), 400
+    result = relocate_all_site_folders_between_buckets(source, target, dry_run=dry_run)
+    if not result.get('ok'):
+        return jsonify(result), 409 if result.get('errors') else 400
     return jsonify(result)
 
 

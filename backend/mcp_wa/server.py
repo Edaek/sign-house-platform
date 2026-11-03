@@ -485,6 +485,51 @@ def wa_import_nas_all() -> str:
 
 
 @mcp.tool()
+def wa_relocate_nas_site_folder(
+    site_folder_name: str,
+    source_parent_bucket: str,
+    target_parent_bucket: str,
+    dry_run: bool = False,
+) -> str:
+    """Move a site NAS folder to another bucket parent (admin/manager).
+
+    Example: move kelly from KTEST2 to KTEST — updates wa_projects and record NAS paths.
+    Use dry_run=true to preview paths without moving files.
+    """
+    try:
+        body = {
+            'siteFolderName': site_folder_name.strip(),
+            'sourceParentBucket': source_parent_bucket.strip(),
+            'targetParentBucket': target_parent_bucket.strip(),
+            'dryRun': bool(dry_run),
+        }
+        return json_result(_client().post('/wa/nas/relocate-site-folder', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_relocate_nas_bucket_children(
+    source_parent_bucket: str,
+    target_parent_bucket: str,
+    dry_run: bool = False,
+) -> str:
+    """Move every site subfolder from one bucket to another (admin/manager).
+
+    Example: KTEST2/K-1000 and KTEST2/kelly → under KTEST/. dry_run previews only.
+    """
+    try:
+        body = {
+            'sourceParentBucket': source_parent_bucket.strip(),
+            'targetParentBucket': target_parent_bucket.strip(),
+            'dryRun': bool(dry_run),
+        }
+        return json_result(_client().post('/wa/nas/relocate-bucket-children', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_send_message(to: str, message: str, quoted_msg_id: str = '') -> str:
     """Send WhatsApp private text via Wakka."""
     try:
