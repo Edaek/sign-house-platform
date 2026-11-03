@@ -485,6 +485,31 @@ def wa_import_nas_all() -> str:
 
 
 @mcp.tool()
+def wa_sync_site_code_from_folder(
+    project_id: str = '',
+    project_code: str = '',
+    nas_parent_bucket: str = '',
+) -> str:
+    """Set project code to match NAS folder name (admin/manager).
+
+    Use when the share was renamed but Mongo code is stale (e.g. code kelly, folder KTEST2).
+    """
+    try:
+        body: dict[str, Any] = {}
+        if project_id.strip():
+            body['projectId'] = project_id.strip()
+        if project_code.strip():
+            body['projectCode'] = project_code.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if not body.get('projectId') and not body.get('projectCode'):
+            return 'Error: project_id or project_code required'
+        return json_result(_client().post('/wa/nas/sync-site-code-from-folder', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_rename_nas_site_folder(
     new_folder_name: str,
     project_id: str = '',

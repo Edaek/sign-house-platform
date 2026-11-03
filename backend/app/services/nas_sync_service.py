@@ -1515,7 +1515,6 @@ def rename_nas_site_folder(
         is_bucket_container_project,
         is_reserved_nas_folder_name,
     )
-    from app.services.wa_project_validation import find_project_by_code
     from app.services.nas_bucket_code import nas_path_from_web_bucket
 
     new_folder_name = (new_folder_name or '').strip()
@@ -1524,43 +1523,31 @@ def rename_nas_site_folder(
     if is_reserved_nas_folder_name(new_folder_name):
         return {'ok': False, 'error': f'Reserved NAS folder name: {new_folder_name}'}
 
-    project = None
-    if project_id:
-        try:
-            oid = ObjectId(str(project_id))
-        except Exception:
-            return {'ok': False, 'error': 'Invalid projectId'}
-        project = mongo.db.wa_projects.find_one({'_id': oid, 'status': {'$ne': 'archived'}})
-    else:
-        code = (project_code or '').strip()
-        if not code:
-            return {'ok': False, 'error': 'projectId or projectCode is required'}
-        parent = (nas_parent_bucket or '').strip() or None
-        project = find_project_by_code(code, parent_bucket=parent)
-        if not project:
-            loose = list(mongo.db.wa_projects.find({
-                'status': {'$ne': 'archived'},
-                'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
-            }))
-            if len(loose) > 1:
-                return {
-                    'ok': False,
-                    'error': 'Multiple projects match code; pass nasParentBucket',
-                    'matches': [
-                        {
-                            'projectId': str(p['_id']),
-                            'code': p.get('code'),
-                            'nasParentBucket': p.get('nasParentBucket'),
-                            'nasFolderName': p.get('nasFolderName'),
-                        }
-                        for p in loose
-                    ],
+    project, find_err = _find_wa_site_project_for_nas_ops(
+        project_id=project_id,
+        project_code=project_code,
+        nas_parent_bucket=nas_parent_bucket,
+    )
+    if find_err == 'Multiple projects match code; pass nasParentBucket':
+        loose = list(mongo.db.wa_projects.find({
+            'status': {'$ne': 'archived'},
+            'code': {'$regex': f'^{re.escape((project_code or "").strip())}$', '$options': 'i'},
+        }))
+        return {
+            'ok': False,
+            'error': find_err,
+            'matches': [
+                {
+                    'projectId': str(p['_id']),
+                    'code': p.get('code'),
+                    'nasParentBucket': p.get('nasParentBucket'),
+                    'nasFolderName': p.get('nasFolderName'),
                 }
-            if len(loose) == 1:
-                project = loose[0]
-
-    if not project:
-        return {'ok': False, 'error': 'Project not found'}
+                for p in loose
+            ],
+        }
+    if find_err:
+        return {'ok': False, 'error': find_err}
     if is_bucket_container_project(project):
         return {'ok': False, 'error': 'Cannot rename NAS bucket container projects'}
 
@@ -1568,6 +1555,39 @@ def rename_nas_site_folder(
     parent_nas = nas_path_from_web_bucket(parent_raw) if parent_raw else ''
     if parent_nas and parent_nas.upper() == new_folder_name.upper():
         return {'ok': False, 'error': 'Site folder name cannot equal parent bucket name'}
+
+    current_fn = (project.get('nasFolderName') or project.get('code') or '').strip()
+    if current_fn.upper() == new_folder_name.upper():
+        from app.services.wa_project_validation import normalize_code
+
+        patch = {'nasFolderName': new_folder_name}
+        if normalize_code(project.get('code')) != normalize_code(new_folder_name):
+            patch['code'] = normalize_code(new_folder_name) or new_folder_name
+        if len(patch) == 1 and normalize_code(project.get('code')) == normalize_code(new_folder_name):
+            updated = mongo.db.wa_projects.find_one({'_id': project['_id']})
+            return {
+                'ok': True,
+                'projectId': str(project['_id']),
+                'code': updated.get('code') if updated else project.get('code'),
+                'nasFolderName': new_folder_name,
+                'nasParentBucket': project.get('nasParentBucket'),
+                'nasFolder': (updated or project).get('nasFolder'),
+                'codeSynced': False,
+                'message': 'Folder name unchanged; code already matches.',
+            }
+        result = update_web_project(project, patch, sync_nas=False)
+        if not result.get('ok'):
+            return result
+        updated = result.get('project') or project
+        return {
+            'ok': True,
+            'projectId': str(updated['_id']),
+            'code': updated.get('code'),
+            'nasFolderName': updated.get('nasFolderName'),
+            'nasParentBucket': updated.get('nasParentBucket'),
+            'nasFolder': updated.get('nasFolder'),
+            'codeSynced': True,
+        }
 
     patch: dict = {'nasFolderName': new_folder_name}
     explicit_code = (str(new_code).strip() if new_code is not None else '')
@@ -1600,6 +1620,106 @@ def rename_nas_site_folder(
         'nasFolderName': updated.get('nasFolderName'),
         'nasParentBucket': updated.get('nasParentBucket'),
         'nasFolder': updated.get('nasFolder'),
+    }
+
+
+def _find_wa_site_project_for_nas_ops(
+    *,
+    project_id=None,
+    project_code=None,
+    nas_parent_bucket=None,
+):
+    from app.services.wa_project_validation import find_project_by_code
+
+    if project_id:
+        try:
+            oid = ObjectId(str(project_id))
+        except Exception:
+            return None, 'Invalid projectId'
+        proj = mongo.db.wa_projects.find_one({'_id': oid, 'status': {'$ne': 'archived'}})
+        return (proj, None) if proj else (None, 'Project not found')
+
+    code = (project_code or '').strip()
+    if not code:
+        return None, 'projectId or projectCode is required'
+    parent = (nas_parent_bucket or '').strip() or None
+    proj = find_project_by_code(code, parent_bucket=parent)
+    if not proj:
+        loose = list(mongo.db.wa_projects.find({
+            'status': {'$ne': 'archived'},
+            'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+        }))
+        if len(loose) > 1:
+            return None, 'Multiple projects match code; pass nasParentBucket'
+        if len(loose) == 1:
+            proj = loose[0]
+    if not proj:
+        return None, 'Project not found'
+    return proj, None
+
+
+def sync_site_code_to_folder_name(
+    *,
+    project_id=None,
+    project_code=None,
+    nas_parent_bucket=None,
+) -> dict:
+    """Set wa_projects.code to match nasFolderName / live NAS dir (after folder-only rename)."""
+    from app.services.wa_project_bucket_rules import is_bucket_container_project
+    from app.services.wa_project_validation import normalize_code
+
+    project, err = _find_wa_site_project_for_nas_ops(
+        project_id=project_id,
+        project_code=project_code,
+        nas_parent_bucket=nas_parent_bucket,
+    )
+    if err:
+        return {'ok': False, 'error': err}
+    if is_bucket_container_project(project):
+        return {'ok': False, 'error': 'Cannot sync code for NAS bucket container projects'}
+
+    folder_label = (project.get('nasFolderName') or '').strip()
+    if nas_mount.is_available():
+        live = nas_mount._folder_for_project(project.get('code'), project)
+        if live is not None:
+            folder_label = live.name
+    if not folder_label:
+        folder_label = (project.get('code') or '').strip()
+    if not folder_label:
+        return {'ok': False, 'error': 'No NAS folder name to sync from'}
+
+    target_code = normalize_code(folder_label) or folder_label
+    if normalize_code(project.get('code')) == target_code:
+        return {
+            'ok': True,
+            'projectId': str(project['_id']),
+            'code': project.get('code'),
+            'nasFolderName': folder_label,
+            'codeSynced': False,
+            'message': 'Code already matches folder name.',
+        }
+
+    result = update_web_project(
+        project,
+        {'code': target_code, 'nasFolderName': folder_label},
+        sync_nas=False,
+    )
+    if not result.get('ok'):
+        return result
+    updated = result.get('project') or project
+    try:
+        from app.api.wa_projects import clear_mongo_bucket_rows_cache
+
+        clear_mongo_bucket_rows_cache()
+    except Exception:
+        pass
+    return {
+        'ok': True,
+        'projectId': str(updated['_id']),
+        'code': updated.get('code'),
+        'nasFolderName': updated.get('nasFolderName'),
+        'nasParentBucket': updated.get('nasParentBucket'),
+        'codeSynced': True,
     }
 
 

@@ -40,6 +40,7 @@ DEFAULT_ALLOW = frozenset({
     'wa_append_site_remark',
     'wa_move_record_to_project',
     'wa_rename_nas_site_folder',
+    'wa_sync_site_code_from_folder',
     'wa_get_whatsapp_status',
     'wa_get_infra_status',
     'wa_browse_nas',
@@ -196,6 +197,22 @@ def _exec_wa_move_record_to_project(c: SignHouseClient, a: dict) -> str:
     return json_result(c.post('/wa/image-pool/move', json_body=body))
 
 
+def _exec_wa_sync_site_code_from_folder(c: SignHouseClient, a: dict) -> str:
+    pid = (a.get('project_id') or a.get('projectId') or '').strip()
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    body: dict[str, Any] = {}
+    if pid:
+        body['projectId'] = pid
+    if code:
+        body['projectCode'] = code
+    if pb:
+        body['nasParentBucket'] = pb
+    if not pid and not code:
+        return 'Error: project_id or project_code required'
+    return json_result(c.post('/wa/nas/sync-site-code-from-folder', json_body=body))
+
+
 def _exec_wa_rename_nas_site_folder(c: SignHouseClient, a: dict) -> str:
     new_name = (a.get('new_folder_name') or a.get('newFolderName') or '').strip()
     if not new_name:
@@ -347,6 +364,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_append_site_remark': _exec_wa_append_site_remark,
     'wa_move_record_to_project': _exec_wa_move_record_to_project,
     'wa_rename_nas_site_folder': _exec_wa_rename_nas_site_folder,
+    'wa_sync_site_code_from_folder': _exec_wa_sync_site_code_from_folder,
     'wa_whoami': _exec_wa_whoami,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
@@ -392,6 +410,11 @@ TOOL_SPECS: List[dict] = [
         'name': 'wa_rename_nas_site_folder',
         'description': 'Rename site folder on NAS (admin/manager); same as Web Manage Projects sync rename.',
         'args_hint': '{new_folder_name, project_id, project_code, nas_parent_bucket, new_code, sync_nas}',
+    },
+    {
+        'name': 'wa_sync_site_code_from_folder',
+        'description': 'Set project code to match NAS folder name when folder was renamed without code sync.',
+        'args_hint': '{project_id, project_code, nas_parent_bucket}',
     },
     {'name': 'wa_browse_nas', 'description': 'Browse NAS folders', 'args_hint': '{code}'},
     {'name': 'wa_whoami', 'description': 'Current API user', 'args_hint': '{}'},

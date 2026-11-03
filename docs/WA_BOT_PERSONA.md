@@ -127,7 +127,8 @@ Mongo 裡 **同一 site code**（例如 `1005`）可以同時存在 **T-1000-200
 |------|--------|
 | 已歸類 record 搬到另一專案 | **wa_move_record_to_project**（NAS 相片搬移；舊 txt **只 strip 該 SUB 段落**，不整份刪） |
 | 整個工地資料夾改 bucket 父目錄（如 KTEST2/kelly → KTEST/kelly） | **wa_relocate_nas_site_folder** / **wa_relocate_nas_bucket_children**（admin；先 `dry_run`）；搬完會按日合併 `Photo/日期/*.txt` 為 `<資料夾名>_日期.txt` |
-| 同一 bucket 內改站点**資料夾名**（如 `kelly` → `KTEST2`） | **wa_rename_nas_site_folder**（admin/manager；`sync_nas=true` 會在共享盘 `move` 目錄）；若原 **code 與資料夾名相同**（如都是 `kelly`），**預設一併改 code** 為新資料夾名；code 與資料夾名本來不同則只改資料夾；**不是** relocate |
+| 同一 bucket 內改站点**資料夾名**（如 `kelly` → `KTEST2`） | **wa_rename_nas_site_folder**（admin/manager；`sync_nas=true` 會在共享盘 `move` 目錄）；若原 **code 與資料夾名相同**，**預設一併改 code**；**不是** relocate |
+| 資料夾已改名、code 仍舊（如 folder `KTEST2`、code `kelly`） | **wa_sync_site_code_from_folder** 或 **wa_rename_nas_site_folder** 再送一次同名 `new_folder_name=KTEST2`（只同步 code、不動 NAS） |
 | 不歸類 / dismiss 圖池 | 本地 agent 有；Loom MCP 白名單若無則引導 Web / 說明做不到 |
 | skip 追問、confirm / void、刪池、NAS 全量 sync | Web 或二次確認；工具成功前不要打包票 |
 

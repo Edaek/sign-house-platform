@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 from bson import ObjectId
 
-from app.services.nas_sync_service import rename_nas_site_folder
+from app.services.nas_sync_service import rename_nas_site_folder, sync_site_code_to_folder_name
 
 
 class RenameNasSiteFolderTests(unittest.TestCase):
@@ -104,6 +104,52 @@ class RenameNasSiteFolderTests(unittest.TestCase):
             r = rename_nas_site_folder(project_id=str(pid), new_folder_name='KTEST1')
         self.assertFalse(r['ok'])
         self.assertIn('container', r['error'].lower())
+
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_rename_same_folder_syncs_stale_code(self, mongo, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'kelly',
+            'nasParentBucket': 'KTEST',
+            'nasFolderName': 'KTEST2',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        update_web.return_value = {
+            'ok': True,
+            'project': {**project, 'code': 'KTEST2'},
+        }
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            r = rename_nas_site_folder(project_id=str(pid), new_folder_name='KTEST2')
+        self.assertTrue(r['ok'])
+        self.assertTrue(r.get('codeSynced'))
+        call_data = update_web.call_args[0][1]
+        self.assertEqual(call_data['code'], 'KTEST2')
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.nas_mount')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_sync_site_code_from_folder(self, mongo, nas_mount, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'kelly',
+            'nasFolderName': 'KTEST2',
+            'nasParentBucket': 'KTEST',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        nas_mount.is_available.return_value = True
+        live = type('P', (), {'name': 'KTEST2'})()
+        nas_mount._folder_for_project.return_value = live
+        update_web.return_value = {'ok': True, 'project': {**project, 'code': 'KTEST2'}}
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            r = sync_site_code_to_folder_name(project_id=str(pid))
+        self.assertTrue(r['ok'])
+        self.assertTrue(r.get('codeSynced'))
 
 
 if __name__ == '__main__':

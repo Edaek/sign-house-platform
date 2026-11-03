@@ -16,6 +16,7 @@ from app.services.nas_sync_service import (
     import_nas_files_for_project,
     import_all_projects_from_nas,
     rename_nas_site_folder,
+    sync_site_code_to_folder_name,
     run_bidirectional_nas_sync,
     get_last_nas_sync_status,
     reconcile_after_nas_folder_deleted,
@@ -206,6 +207,26 @@ def link_bucket_folder_route():
     )
     if not result.get('ok'):
         return jsonify(result), 409 if 'already exists' in (result.get('error') or '') else 400
+    return jsonify(result)
+
+
+@wa_nas_bp.route('/sync-site-code-from-folder', methods=['POST'])
+@jwt_required()
+@require_role('admin', 'manager')
+def sync_site_code_from_folder_route():
+    """Align wa_projects.code with NAS folder name (e.g. folder already KTEST2, code still kelly)."""
+    data = request.get_json() or {}
+    result = sync_site_code_to_folder_name(
+        project_id=data.get('projectId') or data.get('project_id'),
+        project_code=data.get('projectCode') or data.get('project_code'),
+        nas_parent_bucket=(
+            data.get('nasParentBucket') or data.get('nas_parent_bucket') or ''
+        ).strip()
+        or None,
+    )
+    if not result.get('ok'):
+        status = 404 if result.get('error') == 'Project not found' else 400
+        return jsonify(result), status
     return jsonify(result)
 
 
