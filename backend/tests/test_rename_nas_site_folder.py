@@ -59,7 +59,7 @@ class RenameNasSiteFolderTests(unittest.TestCase):
 
     @patch('app.services.nas_sync_service.update_web_project')
     @patch('app.services.nas_sync_service.mongo')
-    def test_does_not_sync_code_when_folder_differs_from_code(self, mongo, update_web):
+    def test_always_syncs_code_to_new_folder_name(self, mongo, update_web):
         pid = ObjectId()
         project = {
             '_id': pid,
@@ -74,7 +74,30 @@ class RenameNasSiteFolderTests(unittest.TestCase):
             rename_nas_site_folder(project_id=str(pid), new_folder_name='1005-renamed')
         call_data = update_web.call_args[0][1]
         self.assertEqual(call_data['nasFolderName'], '1005-renamed')
-        self.assertNotIn('code', call_data)
+        self.assertEqual(call_data['code'], '1005-RENAMED')
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_new_code_override_keeps_pj_code(self, mongo, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'PJ-1005',
+            'nasParentBucket': 'T-1000-2002',
+            'nasFolderName': '1005-long-label',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        update_web.return_value = {'ok': True, 'project': project}
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            rename_nas_site_folder(
+                project_id=str(pid),
+                new_folder_name='1005-renamed',
+                new_code='PJ-1005',
+            )
+        call_data = update_web.call_args[0][1]
+        self.assertEqual(call_data['nasFolderName'], '1005-renamed')
+        self.assertEqual(call_data['code'], 'PJ-1005')
 
     @patch('app.services.nas_sync_service.update_web_project')
     @patch('app.services.wa_project_validation.find_project_by_code')
@@ -105,6 +128,29 @@ class RenameNasSiteFolderTests(unittest.TestCase):
         self.assertFalse(r['ok'])
         self.assertIn('container', r['error'].lower())
 
+
+    @patch('app.services.nas_sync_service.update_web_project')
+    @patch('app.services.nas_sync_service.mongo')
+    def test_rename_same_folder_syncs_stale_display_name(self, mongo, update_web):
+        pid = ObjectId()
+        project = {
+            '_id': pid,
+            'code': 'KTEST2',
+            'name': 'kelly',
+            'nasParentBucket': 'KTEST',
+            'nasFolderName': 'KTEST2',
+            'status': 'active',
+        }
+        mongo.db.wa_projects.find_one.return_value = project
+        update_web.return_value = {
+            'ok': True,
+            'project': {**project, 'name': 'KTEST2'},
+        }
+        with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
+            r = rename_nas_site_folder(project_id=str(pid), new_folder_name='KTEST2')
+        self.assertTrue(r['ok'])
+        self.assertTrue(r.get('nameSynced'))
+        update_web.assert_called_once()
 
     @patch('app.services.nas_sync_service.update_web_project')
     @patch('app.services.nas_sync_service.mongo')

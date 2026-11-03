@@ -493,6 +493,7 @@ def wa_sync_site_code_from_folder(
     """Set project code to match NAS folder name (admin/manager).
 
     Use when the share was renamed but Mongo code is stale (e.g. code kelly, folder KTEST2).
+    Also aligns Web display name (name) with code and folder for classify/search.
     """
     try:
         body: dict[str, Any] = {}
@@ -523,8 +524,8 @@ def wa_rename_nas_site_folder(
     Example: rename kelly → kelly-shop under parent KTEST. Updates Mongo nasFolderName
     and moves the directory on NAS when sync_nas=true. Pass project_id or
     project_code + nas_parent_bucket when the same code exists in multiple buckets.
-    When project code matched the old folder name (e.g. both kelly), code updates to
-    new_folder_name automatically; pass new_code only to override.
+    By default code, nasFolderName, and Web display name (name) all become new_folder_name
+    so WhatsApp classify and Web lists stay in sync. Pass new_code only to keep a PJ-style code.
     """
     try:
         body: dict[str, Any] = {

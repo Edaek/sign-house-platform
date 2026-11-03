@@ -1331,6 +1331,18 @@ def _project_code_matches_folder_name(project) -> bool:
     return normalize_code(old_folder).upper() == normalize_code(old_code).upper()
 
 
+def _site_rename_mongo_patch(new_folder_name: str, new_code=None) -> dict:
+    """WhatsApp/Loom rename: code + nasFolderName align to new folder (new_code overrides)."""
+    from app.services.wa_project_validation import normalize_code
+
+    explicit = (str(new_code).strip() if new_code is not None else '')
+    target = normalize_code(explicit or new_folder_name) or (explicit or new_folder_name)
+    return {
+        'nasFolderName': new_folder_name,
+        'code': target,
+    }
+
+
 def update_web_project(project, data, *, sync_nas=True):
     """Update WA project; optionally rename NAS folder (Web ↔ path on share)."""
     from app.services.wa_project_validation import normalize_code, assert_code_available
@@ -1490,6 +1502,22 @@ def update_web_project(project, data, *, sync_nas=True):
             {'$set': {'projectCode': new_code, 'updatedAt': datetime.utcnow()}},
         )
 
+    if data.get('name') is not None:
+        nm = (data.get('name') or '').strip()
+        mongo_updates['name'] = nm
+        mongo_updates['nameNormalized'] = nm.casefold()
+    elif not is_bucket and data.get('alignDisplayName', True):
+        if code_changed or nas_folder_label is not None or data.get('code') is not None:
+            folder_for_name = (
+                mongo_updates.get('nasFolderName')
+                or (project.get('nasFolderName') or '').strip()
+                or target_dir_name
+            )
+            display = _nas_site_project_display_name(folder_for_name, new_code)
+            if (project.get('name') or '').strip() != display:
+                mongo_updates['name'] = display
+                mongo_updates['nameNormalized'] = display.casefold()
+
     mongo.db.wa_projects.update_one({'_id': project['_id']}, {'$set': mongo_updates})
     updated = mongo.db.wa_projects.find_one({'_id': project['_id']})
     if updated and nas_mount.is_available() and not is_bucket:
@@ -1560,20 +1588,25 @@ def rename_nas_site_folder(
     if current_fn.upper() == new_folder_name.upper():
         from app.services.wa_project_validation import normalize_code
 
-        patch = {'nasFolderName': new_folder_name}
-        if normalize_code(project.get('code')) != normalize_code(new_folder_name):
-            patch['code'] = normalize_code(new_folder_name) or new_folder_name
-        if len(patch) == 1 and normalize_code(project.get('code')) == normalize_code(new_folder_name):
+        patch = _site_rename_mongo_patch(new_folder_name, new_code)
+        target_code = patch['code']
+        code_norm = normalize_code(project.get('code'))
+        target_norm = normalize_code(target_code)
+        display = _nas_site_project_display_name(new_folder_name, target_code)
+        name_stale = (project.get('name') or '').strip() != display
+        if code_norm == target_norm and not name_stale:
             updated = mongo.db.wa_projects.find_one({'_id': project['_id']})
             return {
                 'ok': True,
                 'projectId': str(project['_id']),
                 'code': updated.get('code') if updated else project.get('code'),
+                'name': (updated or project).get('name'),
                 'nasFolderName': new_folder_name,
                 'nasParentBucket': project.get('nasParentBucket'),
                 'nasFolder': (updated or project).get('nasFolder'),
                 'codeSynced': False,
-                'message': 'Folder name unchanged; code already matches.',
+                'nameSynced': False,
+                'message': 'Folder name unchanged; code and display name already match.',
             }
         result = update_web_project(project, patch, sync_nas=False)
         if not result.get('ok'):
@@ -1583,23 +1616,15 @@ def rename_nas_site_folder(
             'ok': True,
             'projectId': str(updated['_id']),
             'code': updated.get('code'),
+            'name': updated.get('name'),
             'nasFolderName': updated.get('nasFolderName'),
             'nasParentBucket': updated.get('nasParentBucket'),
             'nasFolder': updated.get('nasFolder'),
-            'codeSynced': True,
+            'codeSynced': code_norm != target_norm,
+            'nameSynced': name_stale or code_norm != target_norm,
         }
 
-    patch: dict = {'nasFolderName': new_folder_name}
-    explicit_code = (str(new_code).strip() if new_code is not None else '')
-    if explicit_code:
-        patch['code'] = explicit_code
-    elif _project_code_matches_folder_name(project):
-        from app.services.wa_project_validation import normalize_code
-
-        synced = normalize_code(new_folder_name) or new_folder_name
-        if synced.upper() != (project.get('code') or '').strip().upper():
-            patch['code'] = synced
-
+    patch = _site_rename_mongo_patch(new_folder_name, new_code)
     result = update_web_project(project, patch, sync_nas=bool(sync_nas))
     if not result.get('ok'):
         return result
@@ -1613,13 +1638,19 @@ def rename_nas_site_folder(
         logger.exception('[NAS] cache refresh after site folder rename failed')
 
     updated = result.get('project') or project
+    from app.services.wa_project_validation import normalize_code
+
+    old_norm = normalize_code(project.get('code'))
+    new_norm = normalize_code(updated.get('code'))
     return {
         'ok': True,
         'projectId': str(updated['_id']),
         'code': updated.get('code'),
+        'name': updated.get('name'),
         'nasFolderName': updated.get('nasFolderName'),
         'nasParentBucket': updated.get('nasParentBucket'),
         'nasFolder': updated.get('nasFolder'),
+        'codeSynced': old_norm != new_norm,
     }
 
 
@@ -1689,14 +1720,18 @@ def sync_site_code_to_folder_name(
         return {'ok': False, 'error': 'No NAS folder name to sync from'}
 
     target_code = normalize_code(folder_label) or folder_label
-    if normalize_code(project.get('code')) == target_code:
+    display = _nas_site_project_display_name(folder_label, target_code)
+    name_stale = (project.get('name') or '').strip() != display
+    if normalize_code(project.get('code')) == target_code and not name_stale:
         return {
             'ok': True,
             'projectId': str(project['_id']),
             'code': project.get('code'),
+            'name': project.get('name'),
             'nasFolderName': folder_label,
             'codeSynced': False,
-            'message': 'Code already matches folder name.',
+            'nameSynced': False,
+            'message': 'Code and display name already match folder name.',
         }
 
     result = update_web_project(
@@ -1717,9 +1752,11 @@ def sync_site_code_to_folder_name(
         'ok': True,
         'projectId': str(updated['_id']),
         'code': updated.get('code'),
+        'name': updated.get('name'),
         'nasFolderName': updated.get('nasFolderName'),
         'nasParentBucket': updated.get('nasParentBucket'),
-        'codeSynced': True,
+        'codeSynced': normalize_code(project.get('code')) != normalize_code(updated.get('code')),
+        'nameSynced': (project.get('name') or '').strip() != (updated.get('name') or '').strip(),
     }
 
 
