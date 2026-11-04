@@ -4,12 +4,24 @@ from __future__ import annotations
 from typing import List, Optional
 
 
-def _assign_success_message(project, count: int) -> str:
-    from app.services.nas_site_remark_service import hk_today_str
+def _assign_success_message(project, count: int, *, pool_ids=None) -> str:
+    from app import mongo
+    from app.services.nas_site_remark_service import assign_photo_day_hk
     from app.services.project_number_match_service import wa_classify_display_label_mongo_only
+    from bson import ObjectId
 
     label_txt = wa_classify_display_label_mongo_only(project, max_len=500)
-    day = hk_today_str()
+    day = assign_photo_day_hk([])
+    if pool_ids:
+        oids = []
+        for pid in pool_ids:
+            try:
+                oids.append(ObjectId(pid))
+            except Exception:
+                continue
+        if oids:
+            imgs = list(mongo.db.pool_images.find({'_id': {'$in': oids}}))
+            day = assign_photo_day_hk(imgs)
     return (
         f'✅ 已歸類 {count} 張照片至：\n{label_txt}\n'
         f'📁 共享盤：Photo/{day}/（不是 PJ-xxxxA 短名資料夾根目錄）'
@@ -58,7 +70,7 @@ def try_loomy_mongo_site_classify_reply(
                 group_id=group_id,
             )
             if n > 0:
-                return _assign_success_message(proj, n)
+                return _assign_success_message(proj, n, pool_ids=pool_ids)
         return None
 
     if len(targets) > 1:
@@ -88,7 +100,7 @@ def try_loomy_mongo_site_classify_reply(
             group_id=group_id,
         )
         if n > 0:
-            return _assign_success_message(ext.project, n)
+            return _assign_success_message(ext.project, n, pool_ids=pool_ids)
 
     if ext.candidates:
         fuzzy_targets = [(p, s) for p, s in ext.candidates if is_wa_classify_target(p)]

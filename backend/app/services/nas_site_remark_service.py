@@ -4,8 +4,8 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
 from app import mongo
@@ -18,6 +18,30 @@ PHOTO_SUBDIR = 'Photo'
 
 def hk_today_str() -> str:
     return datetime.now(HK).date().isoformat()
+
+
+def hk_date_str_from_utc_naive(dt: datetime | None) -> str:
+    """Mongo UTC naive timestamps → Hong Kong calendar date (YYYY-MM-DD)."""
+    if dt is None:
+        return hk_today_str()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(HK).date().isoformat()
+
+
+def assign_photo_day_hk(pool_images: List[Any]) -> str:
+    """
+    NAS Photo/YYYY-MM-DD and day remark txt use the pool intake date in HK.
+    Falls back to hk_today_str() when createdAt is missing.
+    """
+    days: List[str] = []
+    for img in pool_images or []:
+        ca = img.get('createdAt') if isinstance(img, dict) else None
+        if ca is not None:
+            days.append(hk_date_str_from_utc_naive(ca))
+    if not days:
+        return hk_today_str()
+    return max(days)
 
 
 def site_folder_name_from_day_dir(day_dir: str) -> str:

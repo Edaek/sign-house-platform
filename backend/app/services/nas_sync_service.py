@@ -1026,14 +1026,20 @@ def _record_site_days(record) -> set[str]:
         if d:
             days.add(d)
     if not days:
+        from app.services.nas_site_remark_service import hk_date_str_from_utc_naive
+
         ca = record.get('createdAt')
         if ca is not None:
             if hasattr(ca, 'strftime'):
-                days.add(ca.strftime('%Y-%m-%d'))
+                days.add(hk_date_str_from_utc_naive(ca))
             else:
                 s = str(ca)
                 if len(s) >= 10:
-                    days.add(s[:10])
+                    try:
+                        parsed = datetime.fromisoformat(s.replace('Z', '+00:00'))
+                        days.add(hk_date_str_from_utc_naive(parsed))
+                    except ValueError:
+                        days.add(s[:10])
     return days
 
 

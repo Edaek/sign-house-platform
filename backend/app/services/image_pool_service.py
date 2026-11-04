@@ -676,11 +676,11 @@ def assign_images_to_project(
     cancel_reminder(images[0]['phone'])
 
     from app.services.nas_site_remark_service import (
-        hk_today_str,
+        assign_photo_day_hk,
         set_site_remark_context,
     )
 
-    assign_day = hk_today_str()
+    assign_day = assign_photo_day_hk(images)
     phone = images[0].get('phone') or ''
     set_site_remark_context(
         phone,

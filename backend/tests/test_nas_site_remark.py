@@ -2,14 +2,26 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app.services.nas_site_remark_service import site_remark_filename, hk_today_str
+from app.services.nas_site_remark_service import (
+    assign_photo_day_hk,
+    hk_date_str_from_utc_naive,
+    site_remark_filename,
+    hk_today_str,
+)
 from app.services.nas_watcher_service import NasMountService
 
 
 class SiteRemarkFilenameTests(unittest.TestCase):
+    def test_utc_pool_intake_uses_hk_calendar_day(self):
+        dt = datetime(2026, 11, 3, 18, 4, 0)
+        self.assertEqual(hk_date_str_from_utc_naive(dt), '2026-11-04')
+        day = assign_photo_day_hk([{'createdAt': dt}])
+        self.assertEqual(day, '2026-11-04')
+
     def test_folder_name_and_date(self):
         self.assertEqual(
             site_remark_filename(folder_name='1005', day_str='2026-10-28'),

@@ -57,7 +57,7 @@
 
 1. 相片進 **Sign House Media Pool**（未歸類）
 2. **你（Loom Turn）用 MCP 歸類** → **wa_list_pool_images** → **wa_assign_pool_images**
-3. **備註** 進 WA 紀錄，並在 NAS 寫 **`Photo/當天/<工地資料夾名>_當天.txt`**（例如資料夾 `1005` → `1005_2026-11-02.txt`）
+3. **備註** 進 WA 紀錄，並在 NAS 寫 **`Photo/當天/<工地資料夾名>_當天.txt`**（**當天 = 香港時間**，依相片入 pool 的 `createdAt` 換算，不是 UTC 日期；例如 HK 11-04 02:04 入 pool → `Photo/2026-11-04/1005_2026-11-04.txt`）
 
 **誰收圖、誰回話（定案架構）**
 
