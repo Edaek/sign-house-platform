@@ -20,7 +20,13 @@ class RenameNasSiteFolderTests(unittest.TestCase):
         }
         mongo.db.wa_projects.find_one.return_value = project
         updated = {**project, 'nasFolderName': 'kelly-v2', 'nasFolder': '/vol/KTEST/kelly-v2'}
-        update_web.return_value = {'ok': True, 'project': updated}
+        update_web.return_value = {
+            'ok': True,
+            'project': updated,
+            'remarkTxtMergeOk': True,
+            'remarkTxtMergedDays': ['2026-11-03'],
+            'remarkTxtMerged': 1,
+        }
 
         with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
             r = rename_nas_site_folder(
@@ -30,6 +36,8 @@ class RenameNasSiteFolderTests(unittest.TestCase):
 
         self.assertTrue(r['ok'])
         self.assertEqual(r['nasFolderName'], 'kelly-v2')
+        self.assertEqual(r.get('remarkTxtMergedDays'), ['2026-11-03'])
+        self.assertTrue(r.get('remarkTxtMergeOk'))
         update_web.assert_called_once()
         _call_proj, call_data = update_web.call_args[0]
         self.assertEqual(call_data['nasFolderName'], 'kelly-v2')
@@ -175,10 +183,11 @@ class RenameNasSiteFolderTests(unittest.TestCase):
         call_data = update_web.call_args[0][1]
         self.assertEqual(call_data['code'], 'KTEST2')
 
+    @patch('app.services.nas_sync_service._consolidate_remark_txts_after_site_label')
     @patch('app.services.nas_sync_service.update_web_project')
     @patch('app.services.nas_sync_service.nas_mount')
     @patch('app.services.nas_sync_service.mongo')
-    def test_sync_site_code_from_folder(self, mongo, nas_mount, update_web):
+    def test_sync_site_code_from_folder(self, mongo, nas_mount, update_web, consolidate):
         pid = ObjectId()
         project = {
             '_id': pid,
@@ -191,11 +200,19 @@ class RenameNasSiteFolderTests(unittest.TestCase):
         nas_mount.is_available.return_value = True
         live = type('P', (), {'name': 'KTEST2'})()
         nas_mount._folder_for_project.return_value = live
-        update_web.return_value = {'ok': True, 'project': {**project, 'code': 'KTEST2'}}
+        update_web.return_value = {
+            'ok': True,
+            'project': {**project, 'code': 'KTEST2'},
+            'remarkTxtMergeOk': True,
+            'remarkTxtMergedDays': ['2026-11-03'],
+            'remarkTxtMerged': 1,
+        }
+        consolidate.return_value = {'ok': True, 'merged': 0, 'days': []}
         with patch('app.services.wa_project_bucket_rules.is_bucket_container_project', return_value=False):
             r = sync_site_code_to_folder_name(project_id=str(pid))
         self.assertTrue(r['ok'])
         self.assertTrue(r.get('codeSynced'))
+        self.assertTrue(r.get('remarkTxtMergeOk'))
 
 
 if __name__ == '__main__':

@@ -156,18 +156,71 @@ def append_site_remark():
     phone = (data.get('phone') or '').strip() or None
     group_id = (data.get('groupId') or '').strip() or None
 
+    remark_file = (data.get('remarkFilename') or data.get('remark_filename') or '').strip() or None
+
     result = append_site_remark_to_nas(
         project_code,
         text,
         day_str=day,
         preferred_folder_name=nas_folder,
         preferred_parent_bucket=nas_bucket,
+        preferred_remark_filename=remark_file,
     )
     if not result.get('ok'):
-        return jsonify(result), 503
+        status = 409 if result.get('error') == 'duplicate_remark_txt' else 503
+        return jsonify(result), status
 
     if phone and not result.get('skipped'):
         _merge_remark_into_latest_record(phone, text, project_code, group_id=group_id)
+
+    return jsonify(result)
+
+
+@wa_image_pool_bp.route('/site-remark/rename', methods=['POST'])
+@jwt_required()
+def rename_site_remark():
+    """Rename the NAS day remark .txt (custom basename allowed; duplicate names in day folder rejected)."""
+    data = request.get_json() or {}
+    project_code = (data.get('projectCode') or data.get('project_code') or '').strip()
+    new_name = (data.get('newFilename') or data.get('new_filename') or '').strip()
+    if not project_code or not new_name:
+        return jsonify({'error': 'projectCode and newFilename required'}), 400
+
+    from app.services.nas_site_remark_service import (
+        rename_site_remark_txt,
+        set_site_remark_context,
+        hk_today_str,
+    )
+
+    nas_folder = (data.get('nasFolderName') or '').strip() or None
+    nas_bucket = (data.get('nasParentBucket') or '').strip() or None
+    day = (data.get('day') or '').strip() or None
+    old_name = (data.get('oldFilename') or data.get('old_filename') or '').strip() or None
+    phone = (data.get('phone') or '').strip() or None
+    group_id = (data.get('groupId') or '').strip() or None
+
+    result = rename_site_remark_txt(
+        project_code,
+        new_name,
+        day_str=day,
+        old_filename=old_name,
+        preferred_folder_name=nas_folder,
+        preferred_parent_bucket=nas_bucket,
+    )
+    if not result.get('ok'):
+        status = 409 if result.get('error') == 'duplicate_remark_txt' else 400
+        return jsonify(result), status
+
+    if phone and result.get('fileName') and not result.get('unchanged'):
+        set_site_remark_context(
+            phone,
+            project_code,
+            group_id=group_id,
+            day_str=day or hk_today_str(),
+            nas_folder_name=nas_folder,
+            nas_parent_bucket=nas_bucket,
+            remark_file_name=result['fileName'],
+        )
 
     return jsonify(result)
 

@@ -1349,6 +1349,69 @@ def _site_rename_mongo_patch(new_folder_name: str, new_code=None) -> dict:
     }
 
 
+def _consolidate_remark_txts_after_site_label(project, folder_label: str) -> dict:
+    """Merge legacy day .txt names under Photo/ after folder rename or code↔folder sync."""
+    from app.services.nas_site_remark_service import (
+        clear_remark_filename_contexts_for_project,
+        consolidate_photo_day_remark_txts,
+    )
+
+    label = (folder_label or '').strip()
+    if not label:
+        return {'ok': True, 'merged': 0, 'days': []}
+
+    site_root = str((project or {}).get('nasFolder') or '').strip()
+    if not site_root or not os.path.isdir(site_root):
+        if nas_mount.is_available():
+            try:
+                live = nas_mount._folder_for_project((project or {}).get('code'), project)
+            except Exception:
+                live = None
+            if live is not None and Path(live).is_dir():
+                site_root = str(Path(live).resolve())
+    if not site_root or not os.path.isdir(site_root):
+        return {'ok': True, 'skipped': True, 'merged': 0, 'days': []}
+    result = consolidate_photo_day_remark_txts(site_root, label)
+    if result.get('ok') and not result.get('skipped'):
+        code = (project or {}).get('code') or label
+        clear_remark_filename_contexts_for_project(code)
+    return result
+
+
+_REMARK_MERGE_FAIL_ZH = (
+    '資料夾已更新，但備註 txt 合併未完成，請在 Web 檢查 NAS 或稍後重試。'
+)
+
+
+def _remark_merge_response_fields(merge: dict) -> dict:
+    skipped = bool(merge.get('skipped'))
+    merge_ok = bool(merge.get('ok', True)) if not skipped else True
+    out: dict = {
+        'remarkTxtMergeOk': merge_ok,
+        'remarkTxtMergedDays': merge.get('days') or [],
+        'remarkTxtMerged': merge.get('merged', 0),
+        'remarkTxtExtraFilesRemoved': merge.get('extraFilesRemoved', 0),
+    }
+    if not merge_ok:
+        out['remarkTxtMergeMessage'] = _REMARK_MERGE_FAIL_ZH
+        if merge.get('error'):
+            out['remarkTxtMergeError'] = merge.get('error')
+    return out
+
+
+def _copy_remark_merge_fields(target: dict, source: dict) -> None:
+    for key in (
+        'remarkTxtMergeOk',
+        'remarkTxtMergedDays',
+        'remarkTxtMerged',
+        'remarkTxtMergeMessage',
+        'remarkTxtMergeError',
+        'remarkTxtExtraFilesRemoved',
+    ):
+        if key in source:
+            target[key] = source[key]
+
+
 def update_web_project(project, data, *, sync_nas=True):
     """Update WA project; optionally rename NAS folder (Web ↔ path on share)."""
     from app.services.wa_project_validation import normalize_code, assert_code_available
@@ -1528,7 +1591,24 @@ def update_web_project(project, data, *, sync_nas=True):
     updated = mongo.db.wa_projects.find_one({'_id': project['_id']})
     if updated and nas_mount.is_available() and not is_bucket:
         nas_folder_index(force_refresh=True)
-    return {'ok': True, 'project': updated}
+
+    old_label = ((project.get('nasFolderName') or '').strip() or old_code)
+    new_label = ((updated.get('nasFolderName') or '').strip() or new_code)
+    nas_folder_path_changed = 'nasFolder' in mongo_updates
+    label_changed = (
+        nas_folder_label is not None
+        and new_label.upper() != old_label.upper()
+    )
+    should_merge_remarks = (
+        not is_bucket
+        and (nas_folder_path_changed or label_changed or code_changed)
+    )
+
+    out: dict = {'ok': True, 'project': updated}
+    if should_merge_remarks and updated:
+        merge = _consolidate_remark_txts_after_site_label(updated, new_label)
+        out.update(_remark_merge_response_fields(merge))
+    return out
 
 
 def rename_nas_site_folder(
@@ -1602,23 +1682,27 @@ def rename_nas_site_folder(
         name_stale = (project.get('name') or '').strip() != display
         if code_norm == target_norm and not name_stale:
             updated = mongo.db.wa_projects.find_one({'_id': project['_id']})
-            return {
+            doc = updated or project
+            merge = _consolidate_remark_txts_after_site_label(doc, new_folder_name)
+            payload = {
                 'ok': True,
                 'projectId': str(project['_id']),
-                'code': updated.get('code') if updated else project.get('code'),
-                'name': (updated or project).get('name'),
+                'code': doc.get('code'),
+                'name': doc.get('name'),
                 'nasFolderName': new_folder_name,
                 'nasParentBucket': project.get('nasParentBucket'),
-                'nasFolder': (updated or project).get('nasFolder'),
+                'nasFolder': doc.get('nasFolder'),
                 'codeSynced': False,
                 'nameSynced': False,
                 'message': 'Folder name unchanged; code and display name already match.',
             }
+            payload.update(_remark_merge_response_fields(merge))
+            return payload
         result = update_web_project(project, patch, sync_nas=False)
         if not result.get('ok'):
             return result
         updated = result.get('project') or project
-        return {
+        payload = {
             'ok': True,
             'projectId': str(updated['_id']),
             'code': updated.get('code'),
@@ -1629,6 +1713,8 @@ def rename_nas_site_folder(
             'codeSynced': code_norm != target_norm,
             'nameSynced': name_stale or code_norm != target_norm,
         }
+        _copy_remark_merge_fields(payload, result)
+        return payload
 
     patch = _site_rename_mongo_patch(new_folder_name, new_code)
     result = update_web_project(project, patch, sync_nas=bool(sync_nas))
@@ -1648,7 +1734,7 @@ def rename_nas_site_folder(
 
     old_norm = normalize_code(project.get('code'))
     new_norm = normalize_code(updated.get('code'))
-    return {
+    payload = {
         'ok': True,
         'projectId': str(updated['_id']),
         'code': updated.get('code'),
@@ -1658,6 +1744,8 @@ def rename_nas_site_folder(
         'nasFolder': updated.get('nasFolder'),
         'codeSynced': old_norm != new_norm,
     }
+    _copy_remark_merge_fields(payload, result)
+    return payload
 
 
 def _find_wa_site_project_for_nas_ops(
@@ -1729,7 +1817,8 @@ def sync_site_code_to_folder_name(
     display = _nas_site_project_display_name(folder_label, target_code)
     name_stale = (project.get('name') or '').strip() != display
     if normalize_code(project.get('code')) == target_code and not name_stale:
-        return {
+        merge = _consolidate_remark_txts_after_site_label(project, folder_label)
+        payload = {
             'ok': True,
             'projectId': str(project['_id']),
             'code': project.get('code'),
@@ -1739,6 +1828,8 @@ def sync_site_code_to_folder_name(
             'nameSynced': False,
             'message': 'Code and display name already match folder name.',
         }
+        payload.update(_remark_merge_response_fields(merge))
+        return payload
 
     result = update_web_project(
         project,
@@ -1754,7 +1845,7 @@ def sync_site_code_to_folder_name(
         clear_mongo_bucket_rows_cache()
     except Exception:
         pass
-    return {
+    payload = {
         'ok': True,
         'projectId': str(updated['_id']),
         'code': updated.get('code'),
@@ -1764,6 +1855,8 @@ def sync_site_code_to_folder_name(
         'codeSynced': normalize_code(project.get('code')) != normalize_code(updated.get('code')),
         'nameSynced': (project.get('name') or '').strip() != (updated.get('name') or '').strip(),
     }
+    _copy_remark_merge_fields(payload, result)
+    return payload
 
 
 def _infer_parent_bucket_from_path(project, watch_dir):

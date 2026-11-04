@@ -654,6 +654,30 @@ class NasMountService:
         day_dir.mkdir(parents=True, exist_ok=True)
         return str(day_dir)
 
+    def resolve_photo_day_dir(
+        self,
+        project_code,
+        day_str=None,
+        *,
+        preferred_folder_name=None,
+        preferred_parent_bucket=None,
+    ):
+        """Existing Photo/YYYY-MM-DD only — never creates project or day folders."""
+        if not self.is_available():
+            return None
+        day = day_str or self._hk_today_str()
+        proj = self._resolve_site_folder_path(
+            project_code,
+            preferred_folder_name=preferred_folder_name,
+            preferred_parent_bucket=preferred_parent_bucket,
+        )
+        if proj is None:
+            return None
+        day_dir = proj / PHOTO_SUBDIR / day
+        if not day_dir.is_dir():
+            return None
+        return str(day_dir)
+
     def copy_file_to_project(
         self,
         local_file_path,

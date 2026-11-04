@@ -272,6 +272,44 @@ def wa_append_site_remark(
 
 
 @mcp.tool()
+def wa_rename_site_remark_txt(
+    project_code: str,
+    new_filename: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    phone: str = '',
+    day: str = '',
+    old_filename: str = '',
+) -> str:
+    """Rename the on-site remark .txt for a calendar day (Hong Kong date folder under Photo/).
+
+    Default new writes use <site-folder>_<date>.txt; workers may pick any .txt basename instead.
+    If new_filename already exists in the same Photo/YYYY-MM-DD folder, the API returns
+    duplicate_remark_txt — tell the user to choose another name (message field is 繁中).
+    When multiple .txt files exist for that day, pass old_filename. Pass phone so later
+    wa_append_site_remark appends to the renamed file for today.
+    """
+    try:
+        body: dict[str, Any] = {
+            'projectCode': project_code.strip(),
+            'newFilename': new_filename.strip(),
+        }
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if phone.strip():
+            body['phone'] = phone.strip()
+        if day.strip():
+            body['day'] = day.strip()
+        if old_filename.strip():
+            body['oldFilename'] = old_filename.strip()
+        return json_result(_client().post('/wa/image-pool/site-remark/rename', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_retry_pool_download(image_ids: list[str]) -> str:
     """Retry Wakka download for pool images."""
     try:

@@ -22,6 +22,7 @@ INPROCESS_TOOL_NAMES = frozenset({
     'wa_get_project',
     'wa_assign_pool_images',
     'wa_append_site_remark',
+    'wa_rename_site_remark_txt',
     'wa_list_keywords',
     'wa_get_record',
 })
@@ -220,17 +221,55 @@ def _exec_append_site_remark(a: dict) -> str:
         _merge_remark_into_latest_record,
     )
 
+    remark_file = (a.get('remark_filename') or a.get('remarkFilename') or '').strip() or None
     result = append_site_remark_to_nas(
         code,
         text,
         day_str=(a.get('day') or '').strip() or None,
         preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
         preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+        preferred_remark_filename=remark_file,
+        fallback_to_canonical_if_missing=bool(a.get('fallback_to_canonical')),
     )
     phone = (a.get('phone') or '').strip()
     group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
     if phone and result.get('ok') and not result.get('skipped'):
         _merge_remark_into_latest_record(phone, text, code, group_id=group_id)
+    return json_result(result)
+
+
+def _exec_rename_site_remark_txt(a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    new_name = (a.get('new_filename') or a.get('newFilename') or '').strip()
+    if not code or not new_name:
+        return 'Error: project_code and new_filename required'
+    from app.services.nas_site_remark_service import (
+        rename_site_remark_txt,
+        set_site_remark_context,
+        hk_today_str,
+    )
+
+    result = rename_site_remark_txt(
+        code,
+        new_name,
+        day_str=(a.get('day') or '').strip() or None,
+        old_filename=(a.get('old_filename') or a.get('oldFilename') or '').strip() or None,
+        preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+        preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+    )
+    phone = (a.get('phone') or '').strip()
+    group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
+    day = (a.get('day') or '').strip() or None
+    if phone and result.get('ok') and result.get('fileName') and not result.get('unchanged'):
+        set_site_remark_context(
+            phone,
+            code,
+            group_id=group_id,
+            day_str=day or hk_today_str(),
+            nas_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+            nas_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+            remark_file_name=result['fileName'],
+        )
     return json_result(result)
 
 
@@ -261,6 +300,7 @@ _HANDLERS = {
     'wa_get_project': _exec_get_project,
     'wa_assign_pool_images': _exec_assign_pool,
     'wa_append_site_remark': _exec_append_site_remark,
+    'wa_rename_site_remark_txt': _exec_rename_site_remark_txt,
     'wa_list_keywords': _exec_list_keywords,
     'wa_get_record': _exec_get_record,
 }

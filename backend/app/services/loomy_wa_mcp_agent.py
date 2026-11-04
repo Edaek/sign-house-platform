@@ -138,6 +138,8 @@ Before wa_create_project for a bare numeric site code (e.g. 1008): call wa_list_
 Group chat assign: wa_list_pool_images(status=unassigned, phone=sender) then wa_assign_pool_images with the same group_id (@g.us) — never mix image_ids from different phones in one assign.
 If the user included a note (备注/備註/text after the project code), pass it as remark on wa_assign_pool_images — note text only. That writes the NAS day .txt. Say the remark was saved only when siteRemarkQueued is true.
 If photos were already filed and the user adds a note later, call wa_append_site_remark with project_code and text (same nas folder as the assign).
+If the user wants to rename the day remark .txt (any basename, not only <folder>_<date>.txt), use wa_rename_site_remark_txt; on duplicate_remark_txt relay message and ask for another name; pass phone so append follows the new name today.
+After wa_rename_nas_site_folder or wa_sync_site_code_from_folder, if remarkTxtMergeOk is false, tell the user folder/code updated but remark txt merge failed (remarkTxtMergeMessage) — do not claim txt files were merged.
 If media_caption already contains a site/project code (e.g. 2991, PJ-xxxx), resolve via wa_list_projects / wa_get_project and assign — do not ask the user to repeat obvious caption info.
 Only one concise reply per turn; do not repeat the legacy「收到照片请回覆专案编码」template.
 Do NOT use blocked tools; user-facing text goes in reply_zh (not wa_send_message).

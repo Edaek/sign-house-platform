@@ -183,7 +183,18 @@ def patch_project(project_id):
     if not result.get('ok'):
         return jsonify({'error': result.get('error') or 'Update failed'}), 400
     updated = result.get('project') or project
-    return jsonify(serialize_doc(updated))
+    body = serialize_doc(updated)
+    for key in (
+        'remarkTxtMergeOk',
+        'remarkTxtMergedDays',
+        'remarkTxtMerged',
+        'remarkTxtMergeMessage',
+        'remarkTxtMergeError',
+        'remarkTxtExtraFilesRemoved',
+    ):
+        if key in result:
+            body[key] = result[key]
+    return jsonify(body)
 
 
 @wa_admin_bp.route('/projects/<project_id>', methods=['DELETE'])

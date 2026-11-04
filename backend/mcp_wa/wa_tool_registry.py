@@ -38,6 +38,7 @@ DEFAULT_ALLOW = frozenset({
     'wa_get_project',
     'wa_assign_pool_images',
     'wa_append_site_remark',
+    'wa_rename_site_remark_txt',
     'wa_move_record_to_project',
     'wa_rename_nas_site_folder',
     'wa_sync_site_code_from_folder',
@@ -259,6 +260,30 @@ def _exec_wa_append_site_remark(c: SignHouseClient, a: dict) -> str:
     return json_result(c.post('/wa/image-pool/site-remark', json_body=body))
 
 
+def _exec_wa_rename_site_remark_txt(c: SignHouseClient, a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    new_name = (a.get('new_filename') or a.get('newFilename') or '').strip()
+    if not code or not new_name:
+        return 'Error: project_code and new_filename required'
+    body: dict[str, Any] = {'projectCode': code, 'newFilename': new_name}
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    phone = (a.get('phone') or '').strip()
+    day = (a.get('day') or '').strip()
+    old = (a.get('old_filename') or a.get('oldFilename') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    if phone:
+        body['phone'] = phone
+    if day:
+        body['day'] = day
+    if old:
+        body['oldFilename'] = old
+    return json_result(c.post('/wa/image-pool/site-remark/rename', json_body=body))
+
+
 def _exec_wa_whoami(c: SignHouseClient, _a: dict) -> str:
     return json_result(c.get('/auth/me'))
 
@@ -362,6 +387,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_get_project': _exec_wa_get_project,
     'wa_assign_pool_images': _exec_wa_assign_pool_images,
     'wa_append_site_remark': _exec_wa_append_site_remark,
+    'wa_rename_site_remark_txt': _exec_wa_rename_site_remark_txt,
     'wa_move_record_to_project': _exec_wa_move_record_to_project,
     'wa_rename_nas_site_folder': _exec_wa_rename_nas_site_folder,
     'wa_sync_site_code_from_folder': _exec_wa_sync_site_code_from_folder,
@@ -400,6 +426,11 @@ TOOL_SPECS: List[dict] = [
         'name': 'wa_append_site_remark',
         'description': 'Append a site note to Photo/YYYY-MM-DD/<code>_date.txt after photos were already filed.',
         'args_hint': '{project_code, text, nas_folder_name, nas_parent_bucket, phone, day}',
+    },
+    {
+        'name': 'wa_rename_site_remark_txt',
+        'description': 'Rename day remark .txt (custom name ok); rejects duplicate basename in same Photo/day folder.',
+        'args_hint': '{project_code, new_filename, old_filename, nas_folder_name, nas_parent_bucket, phone, day}',
     },
     {
         'name': 'wa_move_record_to_project',

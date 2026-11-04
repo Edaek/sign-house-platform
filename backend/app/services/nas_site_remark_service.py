@@ -72,7 +72,7 @@ def read_remark_txt_file(path: str) -> str:
 
 
 def remark_txt_paths_for_nas_photos(nas_photo_paths) -> list[str]:
-    """Photo paths under Photo/YYYY-MM-DD/ → sibling day remark txt paths."""
+    """Photo paths under Photo/YYYY-MM-DD/ → all sibling .txt paths that day (incl. custom names)."""
     out = []
     seen = set()
     for photo_path in nas_photo_paths or []:
@@ -86,10 +86,18 @@ def remark_txt_paths_for_nas_photos(nas_photo_paths) -> list[str]:
         if not day_dir or not os.path.isdir(day_dir):
             continue
         folder = site_folder_name_from_day_dir(day_dir)
-        txt = os.path.join(day_dir, site_remark_filename(folder_name=folder, day_str=day))
-        if txt not in seen:
-            seen.add(txt)
-            out.append(txt)
+        candidates = [
+            os.path.join(day_dir, name)
+            for name in list_remark_txt_basenames(day_dir)
+        ]
+        if not candidates:
+            candidates = [
+                os.path.join(day_dir, site_remark_filename(folder_name=folder, day_str=day)),
+            ]
+        for txt in candidates:
+            if txt not in seen:
+                seen.add(txt)
+                out.append(txt)
     return out
 
 
@@ -203,6 +211,7 @@ def consolidate_photo_day_remark_txts(site_root: str, folder_label: str) -> dict
         return {'ok': True, 'days': [], 'merged': 0}
 
     merged_days: list[str] = []
+    extra_files_removed = 0
     try:
         for day_name in sorted(os.listdir(photo)):
             if not re.match(r'^\d{4}-\d{2}-\d{2}$', day_name):
@@ -218,6 +227,11 @@ def consolidate_photo_day_remark_txts(site_root: str, folder_label: str) -> dict
             if not txts:
                 continue
             canonical = os.path.join(day_dir, site_remark_filename(folder_name=label, day_str=day_name))
+            if (
+                len(txts) == 1
+                and os.path.normcase(txts[0]) == os.path.normcase(canonical)
+            ):
+                continue
             parts = [read_remark_txt_file(p) for p in txts]
             body = merge_remark_texts(*parts)
             if not body:
@@ -233,14 +247,26 @@ def consolidate_photo_day_remark_txts(site_root: str, folder_label: str) -> dict
                 if os.path.normcase(p) != os.path.normcase(canonical):
                     try:
                         os.remove(p)
+                        extra_files_removed += 1
                     except OSError:
                         logger.warning('[NAS] Could not remove extra remark txt %s', p)
             merged_days.append(day_name)
     except OSError as exc:
         logger.error('[NAS] consolidate remark txts failed under %s: %s', root, exc)
-        return {'ok': False, 'error': str(exc), 'days': merged_days, 'merged': len(merged_days)}
+        return {
+            'ok': False,
+            'error': str(exc),
+            'days': merged_days,
+            'merged': len(merged_days),
+            'extraFilesRemoved': extra_files_removed,
+        }
 
-    return {'ok': True, 'days': merged_days, 'merged': len(merged_days)}
+    return {
+        'ok': True,
+        'days': merged_days,
+        'merged': len(merged_days),
+        'extraFilesRemoved': extra_files_removed,
+    }
 
 
 def site_remark_filename(
@@ -256,6 +282,132 @@ def site_remark_filename(
         stem = 'site'
     day = day_str or hk_today_str()
     return f'{stem}_{day}.txt'
+
+
+def normalize_remark_txt_basename(name: str) -> tuple[Optional[str], Optional[str]]:
+    """User-chosen remark .txt basename; must be unique within the Photo/day folder."""
+    raw = (name or '').strip()
+    if not raw:
+        return None, 'file name is required'
+    base = os.path.basename(raw.replace('\\', '/'))
+    if base in ('.', '..') or '..' in base.split('/'):
+        return None, 'invalid file name'
+    if not base.lower().endswith('.txt'):
+        base = f'{base}.txt'
+    for ch in '/\\:*?"<>|':
+        if ch in base:
+            return None, f'file name cannot contain {ch!r}'
+    if not base or base == '.txt':
+        return None, 'invalid file name'
+    return base, None
+
+
+def list_remark_txt_basenames(day_dir: str) -> list[str]:
+    if not day_dir or not os.path.isdir(day_dir):
+        return []
+    return sorted(
+        f
+        for f in os.listdir(day_dir)
+        if f.lower().endswith('.txt') and os.path.isfile(os.path.join(day_dir, f))
+    )
+
+
+def remark_txt_name_taken(day_dir: str, basename: str, *, except_basename: Optional[str] = None) -> bool:
+    """Case-insensitive duplicate check within one Photo/YYYY-MM-DD folder."""
+    target = (basename or '').strip()
+    if not target:
+        return False
+    skip = (except_basename or '').strip()
+    try:
+        names = list_remark_txt_basenames(day_dir)
+    except OSError:
+        return False
+    target_key = target.casefold()
+    skip_key = skip.casefold() if skip else ''
+    for n in names:
+        if n.casefold() == target_key and n.casefold() != skip_key:
+            return True
+    return False
+
+
+def rename_site_remark_txt(
+    project_code: str,
+    new_filename: str,
+    *,
+    day_str: Optional[str] = None,
+    old_filename: Optional[str] = None,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
+) -> dict:
+    """Rename a day remark .txt under Photo/YYYY-MM-DD/; custom names allowed (not forced canonical)."""
+    new_base, err = normalize_remark_txt_basename(new_filename)
+    if err or not new_base:
+        return {'ok': False, 'error': err or 'invalid file name'}
+
+    from app.services.nas_watcher_service import nas_mount
+
+    if not nas_mount.is_available():
+        return {'ok': False, 'error': 'NAS mount not available'}
+
+    day = day_str or hk_today_str()
+    pref = (preferred_folder_name or '').strip() or None
+    bucket = (preferred_parent_bucket or '').strip() or None
+    try:
+        day_dir = nas_mount.resolve_photo_day_dir(
+            project_code,
+            day,
+            preferred_folder_name=pref,
+            preferred_parent_bucket=bucket,
+        )
+        if not day_dir:
+            return {'ok': False, 'error': 'Photo day folder not found on NAS (no remark txt for that date?)'}
+
+        old_base = (old_filename or '').strip()
+        if old_base:
+            old_base = os.path.basename(old_base.replace('\\', '/'))
+            if not old_base.lower().endswith('.txt'):
+                old_base = f'{old_base}.txt'
+        else:
+            txts = list_remark_txt_basenames(day_dir)
+            if len(txts) == 0:
+                return {'ok': False, 'error': 'no remark txt in this day folder'}
+            if len(txts) > 1:
+                return {
+                    'ok': False,
+                    'error': 'multiple remark txt files; pass old_filename',
+                    'existingFiles': txts,
+                }
+            old_base = txts[0]
+
+        old_path = os.path.join(day_dir, old_base)
+        if not os.path.isfile(old_path):
+            return {'ok': False, 'error': 'source remark txt not found', 'path': old_path}
+
+        new_path = os.path.join(day_dir, new_base)
+        if os.path.normcase(old_path) == os.path.normcase(new_path):
+            return {'ok': True, 'path': new_path, 'unchanged': True, 'fileName': new_base}
+
+        if remark_txt_name_taken(day_dir, new_base, except_basename=old_base):
+            return {
+                'ok': False,
+                'error': 'duplicate_remark_txt',
+                'message': f'同目录已有同名文件「{new_base}」，请换一个名称。',
+                'dayDir': day_dir,
+                'existingFiles': list_remark_txt_basenames(day_dir),
+            }
+
+        os.rename(old_path, new_path)
+        logger.info('[NAS] Renamed site remark txt %s → %s', old_path, new_path)
+        return {
+            'ok': True,
+            'path': new_path,
+            'fileName': new_base,
+            'previousFileName': old_base,
+            'day': day,
+        }
+    except OSError as exc:
+        logger.error('[NAS] Rename site remark txt failed: %s', exc)
+        return {'ok': False, 'error': str(exc)}
 
 
 def _remark_context_key(group_id: Optional[str], sender: str) -> str:
@@ -274,6 +426,7 @@ def set_site_remark_context(
     day_str: Optional[str] = None,
     nas_folder_name: Optional[str] = None,
     nas_parent_bucket: Optional[str] = None,
+    remark_file_name: Optional[str] = None,
 ) -> None:
     day = day_str or hk_today_str()
     payload = {
@@ -285,10 +438,13 @@ def set_site_remark_context(
     }
     fn = (nas_folder_name or '').strip()
     pb = (nas_parent_bucket or '').strip()
+    rfn = (remark_file_name or '').strip()
     if fn:
         payload['nasFolderName'] = fn
     if pb:
         payload['nasParentBucket'] = pb
+    if rfn:
+        payload['remarkFileName'] = rfn
     mongo.db.wa_system.update_one(
         {'_id': _remark_context_key(group_id, sender)},
         {'$set': payload},
@@ -305,6 +461,26 @@ def get_site_remark_context(group_id: Optional[str], sender: str) -> Optional[di
     return doc
 
 
+def clear_remark_filename_contexts_for_project(project_code: str) -> int:
+    """Drop custom remarkFileName after NAS consolidate (canonical day txt restored)."""
+    code = (project_code or '').strip()
+    if not code:
+        return 0
+    try:
+        result = mongo.db.wa_system.update_many(
+            {
+                '_id': {'$regex': r'^nas_site_remark_ctx:'},
+                'projectCode': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+                'remarkFileName': {'$exists': True},
+            },
+            {'$unset': {'remarkFileName': ''}},
+        )
+        return int(result.modified_count)
+    except Exception as exc:
+        logger.warning('[NAS] clear remarkFileName contexts failed for %s: %s', code, exc)
+        return 0
+
+
 def append_site_remark_to_nas(
     project_code: str,
     text: str,
@@ -312,6 +488,8 @@ def append_site_remark_to_nas(
     day_str: Optional[str] = None,
     preferred_folder_name: Optional[str] = None,
     preferred_parent_bucket: Optional[str] = None,
+    preferred_remark_filename: Optional[str] = None,
+    fallback_to_canonical_if_missing: bool = False,
 ) -> dict:
     """Append remark text to Photo/YYYY-MM-DD/<site-folder>_YYYY-MM-DD.txt on NAS mount."""
     body = (text or '').strip()
@@ -336,8 +514,25 @@ def append_site_remark_to_nas(
         if not day_dir:
             return {'ok': False, 'error': 'project folder not found on NAS'}
         folder_label = site_folder_name_from_day_dir(day_dir)
-        fname = site_remark_filename(folder_name=folder_label, day_str=day)
-        path = os.path.join(day_dir, fname)
+        custom = (preferred_remark_filename or '').strip()
+        if custom:
+            fname, norm_err = normalize_remark_txt_basename(custom)
+            if norm_err or not fname:
+                return {'ok': False, 'error': norm_err or 'invalid file name'}
+            path = os.path.join(day_dir, fname)
+            if not os.path.isfile(path) and fallback_to_canonical_if_missing:
+                fname = site_remark_filename(folder_name=folder_label, day_str=day)
+                path = os.path.join(day_dir, fname)
+            elif not os.path.isfile(path) and remark_txt_name_taken(day_dir, fname):
+                return {
+                    'ok': False,
+                    'error': 'duplicate_remark_txt',
+                    'message': f'同目录已有同名文件「{fname}」，请换名称或追加到已有文件。',
+                    'existingFiles': list_remark_txt_basenames(day_dir),
+                }
+        else:
+            fname = site_remark_filename(folder_name=folder_label, day_str=day)
+            path = os.path.join(day_dir, fname)
         prefix = ''
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             prefix = '\n\n'
@@ -383,6 +578,8 @@ def try_append_followup_site_remark(
         day_str=ctx.get('day'),
         preferred_folder_name=ctx.get('nasFolderName'),
         preferred_parent_bucket=ctx.get('nasParentBucket'),
+        preferred_remark_filename=ctx.get('remarkFileName'),
+        fallback_to_canonical_if_missing=True,
     )
     if not result.get('ok'):
         return False
