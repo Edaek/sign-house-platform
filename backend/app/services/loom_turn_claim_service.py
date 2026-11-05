@@ -1,8 +1,7 @@
 """Dedup parallel Loom Turns for the same WhatsApp inbound message.
 
-When Wakka feeds both Gateway and Loom (or notify HTTP + Wakka), two Turns can
-start for one worker message. The first claim on wa message id or pool batch wins;
-later paths see duplicateInboundTurn so Persona can SILENCE.
+Only the worker's *current* inbound message id is claimed (from Loom Turn → MCP).
+Do not claim pool batchIds — follow-up text (e.g.「1」「2」) must call wa_list_pool_images again.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ SAME_TURN_GRACE_S = float(os.environ.get('LOOM_WA_TURN_CLAIM_GRACE_S', '2'))
 CLAIM_TTL_S = float(os.environ.get('LOOM_WA_TURN_CLAIM_TTL_S', '90'))
 
 _DUP_MSG = (
-    'Another Loom turn already owns this WhatsApp message. '
+    'Another Loom turn already owns this same WhatsApp inbound message. '
     'SILENCE — do not send WhatsApp. The other turn owns the worker reply.'
 )
 
@@ -59,7 +58,7 @@ def pool_image_ids_for_turn_claim(images: Iterable[dict[str, Any]]) -> list[str]
 
 
 def pool_inbound_turn_anchor_ids(images: Iterable[dict[str, Any]]) -> list[str]:
-    """One anchor per worker WA message (batchId preferred for multi-photo bursts)."""
+    """Legacy pool batch anchor — not used for duplicateInboundTurn (follow-ups must list_pool)."""
     rows = list(images)
     if not rows:
         return []
@@ -155,6 +154,7 @@ def claim_wa_inbound_message_turn(message_ids: Iterable[str]) -> dict[str, Any]:
 
 
 def claim_pool_classify_turn(image_ids: Iterable[str]) -> dict[str, Any]:
+    """Internal — not exposed on wa_list_pool_images (blocks follow-up「1/2」turns)."""
     ids = [str(x).strip() for x in image_ids if str(x).strip()]
     if not ids:
         return {
@@ -181,17 +181,19 @@ def claim_loom_inbound_turn(
     *,
     image_ids: Iterable[str] | None = None,
     wa_message_ids: Iterable[str] | None = None,
+    active_inbound_message_id: str | None = None,
 ) -> dict[str, Any]:
-    """Unified claim for MCP list_pool and Loom notify (same worker message)."""
-    msg_out = claim_wa_inbound_message_turn(wa_message_ids or [])
-    if msg_out.get('duplicateInboundTurn'):
-        return msg_out
-    pool_out = claim_pool_classify_turn(image_ids or [])
-    if pool_out.get('duplicateInboundTurn'):
-        pool_out['duplicateInboundMessage'] = _DUP_MSG
-    elif msg_out.get('inboundMessageAnchor'):
-        pool_out['inboundMessageAnchor'] = msg_out['inboundMessageAnchor']
-    return pool_out
+    """Dedupe only the worker's current inbound WhatsApp message id (this turn)."""
+    del image_ids, wa_message_ids  # pool batch claims break text follow-ups
+    anchor = (active_inbound_message_id or '').strip()
+    if not anchor:
+        return {
+            'duplicateInboundTurn': False,
+            'classifyTurnClaim': 'skipped_no_inbound_message_id',
+            'inboundMessageAnchor': '',
+            'duplicateInboundMessage': '',
+        }
+    return claim_wa_inbound_message_turn([anchor])
 
 
 def loom_notify_should_skip_duplicate(inbound_message_id: str) -> bool:

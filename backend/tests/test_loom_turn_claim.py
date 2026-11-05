@@ -1,4 +1,4 @@
-"""Parallel Loom Turns listing the same pool batch should claim once."""
+"""Loom turn claim: same worker inbound message only (not pool batch)."""
 import time
 import unittest
 from unittest.mock import patch
@@ -21,28 +21,47 @@ class LoomTurnClaimTests(unittest.TestCase):
             _mem.clear()
 
     @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
-    def test_second_list_after_grace_is_duplicate(self, _mongo):
-        ids = ['img-a', 'img-b']
-        first = claim_pool_classify_turn(ids)
+    def test_list_pool_without_inbound_message_id_never_duplicate(self, _mongo):
+        first = claim_loom_inbound_turn(active_inbound_message_id=None)
+        second = claim_loom_inbound_turn(active_inbound_message_id=None)
         self.assertFalse(first['duplicateInboundTurn'])
+        self.assertFalse(second['duplicateInboundTurn'])
+
+    @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
+    def test_follow_up_turns_different_inbound_ids_not_duplicate(self, _mongo):
+        self.assertFalse(
+            claim_loom_inbound_turn(active_inbound_message_id='text-msg-1')['duplicateInboundTurn'],
+        )
         with _mem_lock:
-            key = next(iter(_mem))
-            _mem[key] = time.time() - 3
-        second = claim_pool_classify_turn(ids)
-        self.assertTrue(second['duplicateInboundTurn'])
-        self.assertIn('SILENCE', second['duplicateInboundMessage'])
+            for k in list(_mem):
+                _mem[k] = time.time() - 3
+        self.assertFalse(
+            claim_loom_inbound_turn(active_inbound_message_id='text-msg-2')['duplicateInboundTurn'],
+        )
+
+    @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
+    def test_same_inbound_message_second_turn_is_duplicate(self, _mongo):
+        mid = 'false_group@g.us_ABC'
+        self.assertFalse(
+            claim_loom_inbound_turn(active_inbound_message_id=mid)['duplicateInboundTurn'],
+        )
+        with _mem_lock:
+            for k in list(_mem):
+                _mem[k] = time.time() - 3
+        self.assertTrue(
+            claim_loom_inbound_turn(active_inbound_message_id=mid)['duplicateInboundTurn'],
+        )
 
     @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
     def test_same_turn_retry_within_grace_is_not_duplicate(self, _mongo):
-        ids = ['only-one']
-        self.assertFalse(claim_pool_classify_turn(ids)['duplicateInboundTurn'])
-        self.assertFalse(claim_pool_classify_turn(ids)['duplicateInboundTurn'])
+        mid = 'only-one'
+        self.assertFalse(claim_wa_inbound_message_turn([mid])['duplicateInboundTurn'])
+        self.assertFalse(claim_wa_inbound_message_turn([mid])['duplicateInboundTurn'])
 
     @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
-    def test_empty_ids_skipped(self, _mongo):
-        out = claim_pool_classify_turn([])
-        self.assertFalse(out['duplicateInboundTurn'])
-        self.assertEqual(out['classifyTurnClaim'], 'skipped_no_ids')
+    def test_pool_classify_turn_still_available_internally(self, _mongo):
+        ids = ['img-a']
+        self.assertFalse(claim_pool_classify_turn(ids)['duplicateInboundTurn'])
 
     def test_turn_claim_scopes_to_latest_batch(self):
         images = [
@@ -50,33 +69,6 @@ class LoomTurnClaimTests(unittest.TestCase):
             {'_id': 'old1', 'batchId': 'batch-b', 'messageId': 'm2'},
         ]
         self.assertEqual(pool_image_ids_for_turn_claim(images), ['new1'])
-
-    @patch('app.services.loom_turn_claim_service._claim_mongo')
-    def test_parallel_turn_mongo_duplicate_is_silent(self, mongo_claim):
-        mongo_claim.side_effect = [False, True]
-        ids = ['img-a']
-        self.assertFalse(claim_pool_classify_turn(ids)['duplicateInboundTurn'])
-        self.assertTrue(claim_pool_classify_turn(ids)['duplicateInboundTurn'])
-
-    @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
-    def test_wa_message_second_turn_is_duplicate(self, _mongo):
-        mid = 'false_group@g.us_ABC'
-        self.assertFalse(claim_wa_inbound_message_turn([mid])['duplicateInboundTurn'])
-        with _mem_lock:
-            key = next(iter(_mem))
-            _mem[key] = time.time() - 3
-        self.assertTrue(claim_wa_inbound_message_turn([mid])['duplicateInboundTurn'])
-
-    @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
-    def test_loom_unified_claim_message_wins_before_pool(self, _mongo):
-        mid = 'msg-1'
-        first = claim_loom_inbound_turn(image_ids=['p1'], wa_message_ids=[mid])
-        self.assertFalse(first['duplicateInboundTurn'])
-        with _mem_lock:
-            for k in list(_mem):
-                _mem[k] = time.time() - 3
-        second = claim_loom_inbound_turn(image_ids=['p1'], wa_message_ids=[mid])
-        self.assertTrue(second['duplicateInboundTurn'])
 
     @patch('app.services.loom_turn_claim_service._claim_mongo', return_value=None)
     def test_notify_skip_after_mcp_claim(self, _mongo):

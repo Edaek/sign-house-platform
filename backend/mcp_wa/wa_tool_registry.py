@@ -162,6 +162,12 @@ def _exec_wa_list_pool_images(c: SignHouseClient, a: dict) -> str:
         'page': int(a.get('page') or 1),
         'limit': int(a.get('limit') or 50),
     }
+    gid = (a.get('group_id') or a.get('groupId') or '').strip()
+    if gid:
+        params['group_id'] = gid
+    mid = (a.get('inbound_message_id') or a.get('inboundMessageId') or '').strip()
+    if mid:
+        params['inbound_message_id'] = mid
     return json_result(c.get('/wa/image-pool', params=params))
 
 
@@ -400,6 +406,9 @@ def _exec_wa_inbound_reply_policy(c: SignHouseClient, a: dict) -> str:
     gid = (a.get('group_id') or a.get('groupId') or '').strip()
     if gid:
         params['group_id'] = gid
+    mid = (a.get('inbound_message_id') or a.get('inboundMessageId') or '').strip()
+    if mid:
+        params['inbound_message_id'] = mid
     return json_result(c.get('/wa/loom/worker-reply-policy', params=params))
 
 
@@ -532,7 +541,7 @@ TOOL_SPECS: List[dict] = [
     {
         'name': 'wa_list_pool_images',
         'description': 'List pool images',
-        'args_hint': '{status, phone, page, limit}',
+        'args_hint': '{status, phone, group_id, inbound_message_id, page, limit}',
     },
     {'name': 'wa_list_projects', 'description': 'List WA projects', 'args_hint': '{status}'},
     {'name': 'wa_get_project', 'description': 'Get project by id', 'args_hint': '{project_id}'},
@@ -590,7 +599,7 @@ TOOL_SPECS: List[dict] = [
             'false until wa_list_pool_images; forbids interim「收到/我去 pool」before MCP. '
             'No LOOM_WA_INBOUND_NOTIFY_URL required when Wakka→Loom.'
         ),
-        'args_hint': '{phone, group_id?}',
+        'args_hint': '{phone, group_id?, inbound_message_id?}',
     },
     {'name': 'wa_list_keywords', 'description': 'Type keywords', 'args_hint': '{}'},
     {'name': 'wa_search_records', 'description': 'Search records', 'args_hint': '{q, phone, project}'},

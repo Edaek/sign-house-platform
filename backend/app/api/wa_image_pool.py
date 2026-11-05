@@ -63,18 +63,16 @@ def list_or_stats():
             'pages': (total + limit - 1) // limit if limit else 1,
         },
     }
+    inbound_mid = (
+        request.args.get('inbound_message_id')
+        or request.args.get('inboundMessageId')
+        or ''
+    ).strip()
     if status == 'unassigned' and images:
-        from app.services.loom_turn_claim_service import (
-            claim_loom_inbound_turn,
-            pool_image_ids_for_turn_claim,
-            pool_inbound_turn_anchor_ids,
-        )
+        from app.services.loom_turn_claim_service import claim_loom_inbound_turn
 
         payload.update(
-            claim_loom_inbound_turn(
-                image_ids=pool_image_ids_for_turn_claim(images),
-                wa_message_ids=pool_inbound_turn_anchor_ids(images),
-            ),
+            claim_loom_inbound_turn(active_inbound_message_id=inbound_mid or None),
         )
     list_phone = (request.args.get('phone') or '').strip()
     group_id = (request.args.get('group_id') or request.args.get('groupId') or '').strip() or None

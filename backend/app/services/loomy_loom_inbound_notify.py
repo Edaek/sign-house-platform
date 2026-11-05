@@ -200,15 +200,9 @@ def log_loom_runtime_notify_on_startup() -> None:
     if url:
         logger.info('[LoomNotify] WA inbound → Loom runtime at %s', url.split('?')[0][:120])
     else:
-        if platform_chat:
-            logger.warning(
-                '[LoomNotify] LOOM_PLATFORM_CHAT_URL is set but ignored for Gateway inbound '
-                '(use LOOM_WA_INBOUND_NOTIFY_URL only). Prefer SIGNHOUSE_WA_GATEWAY=false + Wakka→Loom '
-                'to avoid double replies.',
-            )
         logger.warning(
-            '[LoomNotify] Gateway on but LOOM_WA_INBOUND_NOTIFY_URL unset — '
-            'text→loom_runtime_deferred (Pool OK). If Wakka ALSO feeds Loom Turn directly, '
-            'workers get double WhatsApp replies — use Wakka→Gateway only + notify URL, '
-            'and disable Loom Wakka inbound in NOps.',
+            '[LoomNotify] Gateway on but no Loom inbound URL — text/caption replies are deferred '
+            '(Pool intake OK). Set LOOM_WA_INBOUND_NOTIFY_URL (+ BEARER), or LOOM_PLATFORM_CHAT_URL '
+            'with LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK=true (default). '
+            'Then disable Loom Wakka inbound on the same number to avoid double bubbles.',
         )

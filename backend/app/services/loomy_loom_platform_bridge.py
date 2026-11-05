@@ -78,13 +78,23 @@ def _session_id(ctx: Dict[str, Any]) -> str:
 
 
 def explicit_loom_inbound_notify_url() -> str:
-    """Gateway → Loom runtime push URL only (never LOOM_PLATFORM_CHAT_URL)."""
+    """Gateway → Loom runtime push URL (LOOM_WA_INBOUND_NOTIFY_URL)."""
     return (os.environ.get('LOOM_WA_INBOUND_NOTIFY_URL') or '').strip()
 
 
+def _platform_chat_notify_fallback_allowed() -> bool:
+    raw = (os.environ.get('LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK') or 'true').strip().lower()
+    return raw not in ('0', 'false', 'no', 'off')
+
+
 def loom_inbound_notify_url() -> str:
-    """Loom runtime webhook when Gateway forwards inbound to Loom HTTP."""
-    return explicit_loom_inbound_notify_url()
+    """Loom runtime webhook when Gateway forwards inbound (text + pool) to Loom HTTP."""
+    explicit = explicit_loom_inbound_notify_url()
+    if explicit:
+        return explicit
+    if not _platform_chat_notify_fallback_allowed():
+        return ''
+    return (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
 
 
 def wa_loom_runtime_notify_configured() -> bool:
@@ -114,12 +124,13 @@ def _should_relay_loom_reply_to_whatsapp(
 ) -> bool:
     """
     Sign House sends Loom reply_zh via Wakka when relay is allowed.
-    brain=loom: default never relay — Loom Turn owns WhatsApp (avoids double bubbles).
-    Agent + Gateway notify: relay when LOOM_WA_INBOUND_NOTIFY_URL is set unless Loom already sent.
+    brain=loom + Wakka→Loom Turn: default no relay (Loom Turn owns WhatsApp).
+    brain=loom + Gateway→HTTP notify only: relay reply_zh when Loom HTTP did not send WA.
     """
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
 
     raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip().lower()
+    notify_only = runtime_inbound and bool(loom_inbound_notify_url())
     if loom_already_sent:
         return raw in ('1', 'true', 'yes', 'on', 'force')
     if raw in ('0', 'false', 'no', 'off'):
@@ -127,9 +138,11 @@ def _should_relay_loom_reply_to_whatsapp(
     if raw in ('1', 'true', 'yes', 'on'):
         return True
     if wa_loom_runtime_brain_enabled():
+        if notify_only:
+            return True
         return False
     if runtime_inbound:
-        return bool(explicit_loom_inbound_notify_url())
+        return bool(loom_inbound_notify_url())
     return True
 
 

@@ -433,9 +433,8 @@ def _loom_text_inbound_response(
         flush_immediately=bool((user_text or '').strip()),
     )
     if not notified and (user_text or '').strip():
-        logger.warning(
-            '[Inbound] loom_runtime_deferred — set LOOM_WA_INBOUND_NOTIFY_URL (+ BEARER) '
-            'and disable Loom direct Wakka on this number (see docs/DEMO_WA_SETUP.md). text=%r',
+        logger.info(
+            '[Inbound] text intake only (Wakka→Loom Turn); Sign House does not forward text. text=%r',
             (user_text or '')[:80],
         )
     return jsonify({
@@ -713,11 +712,25 @@ def wa_loom_worker_reply_policy():
     """MCP/Loom: whether worker WhatsApp is allowed this turn (no interim before list_pool)."""
     phone = (request.args.get('phone') or '').strip()
     group_id = (request.args.get('group_id') or request.args.get('groupId') or '').strip() or None
+    inbound_mid = (
+        request.args.get('inbound_message_id')
+        or request.args.get('inboundMessageId')
+        or ''
+    ).strip()
     if not phone:
         return jsonify({'error': 'phone required'}), 400
+    from app.services.loom_turn_claim_service import claim_loom_inbound_turn
     from app.services.loom_wa_worker_reply_policy import build_worker_whatsapp_policy
 
-    return jsonify(build_worker_whatsapp_policy(phone=phone, group_id=group_id))
+    claim = claim_loom_inbound_turn(active_inbound_message_id=inbound_mid or None)
+    payload = build_worker_whatsapp_policy(
+        phone=phone,
+        group_id=group_id,
+        duplicate_inbound_turn=bool(claim.get('duplicateInboundTurn')),
+    )
+    if inbound_mid:
+        payload.update(claim)
+    return jsonify(payload)
 
 
 @wa_inbound_bp.route('/brain/status', methods=['GET'])
@@ -727,6 +740,7 @@ def wa_brain_status():
 
     from app.services.loomy_loom_platform_bridge import (
         explicit_loom_inbound_notify_url,
+        loom_inbound_notify_url,
         loom_platform_all_turns_enabled,
         wa_loom_platform_classify_enabled,
     )
@@ -745,7 +759,8 @@ def wa_brain_status():
         'no',
         'off',
     )
-    notify_url = bool(explicit_loom_inbound_notify_url())
+    notify_url = bool(loom_inbound_notify_url())
+    notify_explicit = bool(explicit_loom_inbound_notify_url())
     platform_chat = bool((os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip())
     relay_raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip()
     hints: list[str] = []
@@ -813,6 +828,8 @@ def wa_brain_status():
         'loomMcpInProcessTools': inprocess,
         'signhouseWaGatewayExpected': gateway_on,
         'loomInboundNotifyUrlConfigured': notify_url,
+        'loomInboundNotifyExplicit': notify_explicit,
+        'textInboundForwardsToLoom': notify_url,
         'loomPlatformChatUrlConfigured': platform_chat,
         'loomPlatformClassifyBridge': wa_loom_platform_classify_enabled(),
         'loomPlatformAllTurns': loom_platform_all_turns_enabled(),

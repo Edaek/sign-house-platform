@@ -169,7 +169,7 @@ SIGNHOUSE_WA_GATEWAY=false
 
 ### 方案 B（Demo 常用）：Gateway 进 Pool + Wakka→Loom Turn
 
-**推荐**：Wakka **同时**喂 Sign House Gateway（图进 Pool）与 Loom Turn（工人回复）。**不必**配 `LOOM_WA_INBOUND_NOTIFY_URL`；Loom 每个 Turn **先调** `wa_inbound_reply_policy` / `wa_list_pool_images`，遵守 `workerWhatsAppPolicy`（禁止 MCP 前发「收到/我去 pool」）。
+**推荐**：Wakka→**Loom Turn** 收工人消息；Sign House **Gateway 只进 Pool**。**不需要** `LOOM_WA_INBOUND_NOTIFY_URL` / `LOOM_PLATFORM_CHAT_URL`。每 Turn 先 MCP 再 **一条** WA；MCP 须传 **inbound_message_id=本輪工人消息**。
 
 **防双 bubble**：禁止 NOps 与 Gateway **重复订阅**同号导致两路 Turn；Persona 每轮 **一条 WA**。可选 notify 仅当要让 Gateway **POST 文字**给 Loom。详见 [DEMO_WA_SETUP.md](./DEMO_WA_SETUP.md)。
 
@@ -227,7 +227,7 @@ Loom 已收到 inbound 時，該回就要回，不要無聲（但須遵守下方
 Mattermost @signhouseloomy：同樣要有回覆（純 ping 也先回「在」）。
 
 【WhatsApp 每輪只發一條——最重要】
-每個 WhatsApp Turn **第一個 MCP 工具**：wa_inbound_reply_policy(phone, group_id)（或緊接 wa_list_pool_images(phone, group_id)）。
+每個 WhatsApp Turn **第一個 MCP 工具**：wa_inbound_reply_policy(phone, group_id, **inbound_message_id=本輪工人消息 id**)（或緊接 wa_list_pool_images(..., **inbound_message_id=本輪 id**））。**必帶本輪 inbound_message_id**，勿用 Pool 裡舊圖的 batchId 當 id（否則 follow-up「1/2」會被誤判 duplicate）。
 讀 workerWhatsAppPolicy：
 - allowWorkerWhatsAppNow=false → **禁止**向工人發任何 WhatsApp（含「收到」「我去 pool 睇下」「正在查 pool」）。Gateway 已可能把圖入 Pool，勿假裝還要去查。
 - allowWorkerWhatsAppNow=true → 本輪 **只發一條** 繁中，含 MCP 結果（路徑 / 成功 / 要揀 1 還是 2）。

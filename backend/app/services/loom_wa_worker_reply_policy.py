@@ -152,7 +152,9 @@ def build_worker_whatsapp_policy(
         'When allowWorkerWhatsAppNow is true, send exactly ONE 繁中 message with the result.'
     )
     if duplicate_inbound_turn:
-        instruction = 'duplicateInboundTurn — SILENCE; do not send any WhatsApp this turn.'
+        instruction = (
+            'duplicateInboundTurn — parallel duplicate on the SAME inbound message only; SILENCE.'
+        )
     elif allow:
         instruction = (
             'allowWorkerWhatsAppNow=true — send exactly ONE WhatsApp message (繁中) with MCP facts. '
@@ -160,8 +162,9 @@ def build_worker_whatsapp_policy(
         )
     elif pool_already and not list_at:
         instruction = (
-            'Media Pool already has unassigned images for this sender. '
-            'SILENCE on WhatsApp until wa_list_pool_images returns — never say「我去 pool 睇下」.'
+            'Media Pool already has unassigned images. '
+            'Do not send WhatsApp BEFORE wa_list_pool_images in THIS turn. '
+            'After MCP (list/assign), send exactly ONE 繁中 reply — never interim「我去 pool 睇下」.'
         )
 
     return {
