@@ -55,7 +55,7 @@
 
 - **推薦**：Wakka → Loom Turn；Sign House 跑 API + **`/mcp/`**（`SIGNHOUSE_WA_GATEWAY=false`）。見 [LOOM_WA_MCP.md](./LOOM_WA_MCP.md)。
 - **備選**：Gateway 收 inbound 再 POST Loom（`SIGNHOUSE_WA_GATEWAY=true`）。見 [LOOM_WA_PLATFORM_BRIDGE.md](./LOOM_WA_PLATFORM_BRIDGE.md)。
-- **要 Pool + Loom 回覆（方案 B）**：`SIGNHOUSE_WA_GATEWAY=true` + **`LOOM_WA_INBOUND_NOTIFY_URL`** + `run.py --all`；**勿** Wakka 同時直連 Loom（否則一條消息兩次進 Loom）。`LOOM_WA_RELAY_WHATSAPP_REPLY=false`（Loom 自己发卡）。
+- **要 Pool + Loom 回覆（方案 B）**：`SIGNHOUSE_WA_GATEWAY=true` + **`LOOM_WA_INBOUND_NOTIFY_URL`** + `run.py --all`；**勿** Wakka 同時直連 Loom（否則一條消息兩次進 Loom）。`brain=loom` 時 Sign House **默認不 relay** `reply_zh`（`LOOM_WA_RELAY_WHATSAPP_REPLY=false`，僅 Loom Turn 发卡）。
 - **要 Pool 且只有 Gateway 收 Wakka**：必配 notify，讓 Loom 只從 Sign House HTTP 收文字/上下文；Loom NOps 關閉重複 Wakka 入站。
 - **工人可見回覆**由 **Loom Turn** 生成；**同一輪只發一條 WhatsApp**：MCP 跑完再寫回覆，**禁止**先「收到正在做」再「搞定」分兩條（除非工人明確要進度）。
 - 生產 **`SIGNHOUSE_WA_BRAIN=loom`**（或 `WA_INBOUND_CLASSIFY_MODE=loom`）。

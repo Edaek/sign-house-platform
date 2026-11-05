@@ -6,6 +6,8 @@ from app.services.wa_classify_mode import (
     MODE_LOOM,
     classify_mode,
     mattermost_pool_notify_enabled,
+    signhouse_executes_loom_http_actions,
+    signhouse_inbound_auto_assign_enabled,
     signhouse_whatsapp_outbound_allowed,
     wa_inbound_loomy_dispatch_enabled,
     wa_loom_runtime_brain_enabled,
@@ -38,6 +40,8 @@ class WaClassifyModeTests(unittest.TestCase):
         self.assertTrue(wa_inbound_loomy_dispatch_enabled(cfg))
         self.assertFalse(worker_auto_classify_enabled(cfg))
         self.assertFalse(signhouse_whatsapp_outbound_allowed(cfg))
+        self.assertFalse(signhouse_inbound_auto_assign_enabled(cfg))
+        self.assertFalse(signhouse_executes_loom_http_actions(cfg))
 
     def test_loom_signhouse_send_opt_in(self):
         cfg = {

@@ -195,6 +195,8 @@ def send_message(to, text, quoted_msg_id=None, quoted_payload=None):
     return _wakka_request('/api/v1/messages/send', 'POST', body)
 
 def send_media(to, media_url, caption=None, filename=None):
+    if _block_signhouse_outbound_in_loom_mode(channel='private', target=str(to)):
+        return None
     body = {'to': wakka_private_recipient(to), 'mediaUrl': media_url}
     if caption: body['caption'] = caption
     if filename: body['filename'] = filename

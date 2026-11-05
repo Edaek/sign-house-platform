@@ -155,6 +155,34 @@ def worker_auto_classify_enabled(config: Optional[Mapping[str, Any]] = None) -> 
     return False
 
 
+def signhouse_inbound_auto_assign_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """Gateway caption/burst → assign without Loom MCP (off when brain=loom)."""
+    if wa_loom_runtime_brain_enabled(config):
+        return False
+    raw = _cfg_val(
+        config,
+        'SIGNHOUSE_WA_INBOUND_AUTO_ASSIGN',
+        'SIGNHOUSE_WA_INBOUND_AUTO_ASSIGN',
+        'true',
+    )
+    return raw in ('1', 'true', 'yes', 'on')
+
+
+def signhouse_executes_loom_http_actions(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """Run Loom Platform HTTP `actions` inside Sign House (agent bridge only)."""
+    if wa_loom_runtime_brain_enabled(config):
+        return False
+    if not wa_loomy_agent_enabled(config):
+        return False
+    raw = _cfg_val(
+        config,
+        'LOOMY_WA_LOOM_PLATFORM_CLASSIFY',
+        'LOOMY_WA_LOOM_PLATFORM_CLASSIFY',
+        '',
+    )
+    return raw in ('1', 'true', 'yes', 'on')
+
+
 def pool_receipt_prompts_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
     return False
 

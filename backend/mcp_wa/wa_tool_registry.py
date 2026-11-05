@@ -183,10 +183,18 @@ def _exec_wa_assign_pool_images(c: SignHouseClient, a: dict) -> str:
     pid = (a.get('project_id') or a.get('projectId') or '').strip()
     if not ids or not pid:
         return 'Error: image_ids and project_id required'
+    notify = bool(a.get('notify_whatsapp') or a.get('notifyWhatsApp'))
+    try:
+        from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+        if wa_loom_runtime_brain_enabled():
+            notify = False
+    except Exception:
+        pass
     body: dict[str, Any] = {
         'imageIds': ids,
         'projectId': pid,
-        'notifyWhatsApp': bool(a.get('notify_whatsapp') or a.get('notifyWhatsApp')),
+        'notifyWhatsApp': notify,
     }
     gid = (a.get('group_id') or a.get('groupId') or '').strip()
     if gid:

@@ -698,6 +698,8 @@ def wa_brain_status():
     )
     from app.services.wa_classify_mode import (
         classify_mode,
+        signhouse_executes_loom_http_actions,
+        signhouse_inbound_auto_assign_enabled,
         signhouse_whatsapp_outbound_allowed,
         wa_loom_runtime_brain_enabled,
         wa_loomy_agent_enabled,
@@ -717,7 +719,8 @@ def wa_brain_status():
         hints.append('brain=agent: Sign House local Ollama may send WA (not Loom-only).')
     if wa_loom_runtime_brain_enabled() and not signhouse_whatsapp_outbound_allowed():
         hints.append(
-            'brain=loom: Sign House will not send WhatsApp (commands/move/relay blocked); Loom Turn + MCP only.',
+            'brain=loom: Sign House will not send or relay WhatsApp (Loom Turn + MCP only; '
+            'relay only if LOOM_WA_RELAY_WHATSAPP_REPLY=true).',
         )
     if gateway_on and notify_url:
         hints.append(
@@ -726,11 +729,12 @@ def wa_brain_status():
     if gateway_on and not notify_url:
         hints.append(
             'Gateway without LOOM_WA_INBOUND_NOTIFY_URL: Pool intake OK; text→loom_runtime_deferred. '
-            'If Loom also consumes Wakka, you have two inbound paths — set notify URL and stop duplicate Loom Wakka, '
-            'or use SIGNHOUSE_WA_GATEWAY=false + Wakka→Loom only (no Pool).',
+            'For Loom-only replies: SIGNHOUSE_WA_GATEWAY=false + Wakka→Loom Turn only, or set notify URL '
+            'with LOOM_WA_RELAY_WHATSAPP_REPLY=false (default in brain=loom).',
         )
         hints.append(
-            'WhatsApp double bubbles (收到→搞定): usually Loom sends twice per turn — use one reply after MCP in Persona.',
+            'WhatsApp double bubbles (收到→搞定): stop Sign House relay + second Wakka consumer; '
+            'Loom Persona: one reply after MCP (no interim「收到正在做」).',
         )
     if platform_chat and not notify_url:
         hints.append('LOOM_PLATFORM_CHAT_URL alone does not trigger Gateway→Loom push (avoids accidental double POST).')
@@ -740,10 +744,19 @@ def wa_brain_status():
         )
     if loom_platform_all_turns_enabled():
         hints.append('LOOMY_WA_LOOM_PLATFORM_ALL_TURNS routes extra HTTP turns — risk of duplicate with Loom Turn.')
+    inprocess = os.environ.get('LOOMY_WA_INPROCESS_TOOLS', 'true').strip().lower() not in (
+        '0',
+        'false',
+        'no',
+        'off',
+    )
     return jsonify({
         'brain': classify_mode(),
         'localAgentEnabled': wa_loomy_agent_enabled(),
         'loomRuntimeBrain': wa_loom_runtime_brain_enabled(),
+        'signhouseInboundAutoAssign': signhouse_inbound_auto_assign_enabled(),
+        'signhouseExecutesLoomHttpActions': signhouse_executes_loom_http_actions(),
+        'loomMcpInProcessTools': inprocess,
         'signhouseWaGatewayExpected': gateway_on,
         'loomInboundNotifyUrlConfigured': notify_url,
         'loomPlatformChatUrlConfigured': platform_chat,
@@ -874,6 +887,10 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 return jsonify({'handled': True, 'type': 'media_unavailable'})
 
             caption, project = _resolve_media_project(data, sender, group_id=None)
+            from app.services.wa_classify_mode import signhouse_inbound_auto_assign_enabled
+
+            if not signhouse_inbound_auto_assign_enabled():
+                project = None
             base_msg_id = data.get('messageId', '') or ''
             inbound_batch_id = _quote_msg_id(data) or base_msg_id
             pool_ids = []
@@ -993,6 +1010,10 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
 
 def _handle_group_media(data, sender, from_name, group_id, final_photos, *, sender_jid=None):
     caption, project = _resolve_media_project(data, sender, group_id=group_id)
+    from app.services.wa_classify_mode import signhouse_inbound_auto_assign_enabled
+
+    if not signhouse_inbound_auto_assign_enabled():
+        project = None
     base_msg_id = data.get('messageId', '')
     photo_paths = [p for p in final_photos if p]
     quote_id = _quote_msg_id(data)

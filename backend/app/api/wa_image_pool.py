@@ -91,7 +91,9 @@ def assign_images():
     if nas_bucket:
         proj['nasParentBucket'] = nas_bucket
     group_id = (data.get('groupId') or '').strip() or None
-    notify_whatsapp = bool(data.get('notifyWhatsApp'))
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+    notify_whatsapp = bool(data.get('notifyWhatsApp')) and not wa_loom_runtime_brain_enabled()
     remark = (data.get('remark') or '').strip() or None
 
     try:

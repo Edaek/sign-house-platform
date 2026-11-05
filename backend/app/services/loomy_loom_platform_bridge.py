@@ -114,9 +114,11 @@ def _should_relay_loom_reply_to_whatsapp(
 ) -> bool:
     """
     Sign House sends Loom reply_zh via Wakka when relay is allowed.
-    runtime_inbound (Gateway→LOOM_WA_INBOUND_NOTIFY_URL): default relay only if notify URL set.
-    Agent platform HTTP (runtime_inbound=false): default relay unless Loom set whatsapp_sent.
+    brain=loom: default never relay — Loom Turn owns WhatsApp (avoids double bubbles).
+    Agent + Gateway notify: relay when LOOM_WA_INBOUND_NOTIFY_URL is set unless Loom already sent.
     """
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
     raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip().lower()
     if loom_already_sent:
         return raw in ('1', 'true', 'yes', 'on', 'force')
@@ -124,6 +126,8 @@ def _should_relay_loom_reply_to_whatsapp(
         return False
     if raw in ('1', 'true', 'yes', 'on'):
         return True
+    if wa_loom_runtime_brain_enabled():
+        return False
     if runtime_inbound:
         return bool(explicit_loom_inbound_notify_url())
     return True
@@ -400,7 +404,16 @@ def _process_loom_chat_response(
             if (act.get('name') or '') == 'wa_assign_pool_images':
                 assigned = True
                 break
-    _run_loom_actions(actions, ctx)
+        from app.services.wa_classify_mode import signhouse_executes_loom_http_actions
+
+        if signhouse_executes_loom_http_actions():
+            _run_loom_actions(actions, ctx)
+        else:
+            logger.info(
+                '[LoomPlatform] Skipped %d HTTP action(s) — brain=loom uses Loom Turn + /mcp/ only',
+                len(actions),
+            )
+            assigned = False
     _apply_loom_response_state(body_dict, ctx, assigned=assigned)
 
     reply = _extract_reply(body_dict)

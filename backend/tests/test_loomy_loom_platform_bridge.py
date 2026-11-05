@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from app.services.loomy_loom_platform_bridge import (
+    _should_relay_loom_reply_to_whatsapp,
     build_loom_classify_payload,
     explicit_loom_inbound_notify_url,
     is_pool_classify_turn,
@@ -32,6 +33,19 @@ class LoomPlatformBridgeTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop('LOOMY_WA_LOOM_PLATFORM_CLASSIFY', None)
             self.assertFalse(wa_loom_platform_classify_enabled())
+
+    @patch('app.services.wa_classify_mode.wa_loom_runtime_brain_enabled', return_value=True)
+    def test_loom_brain_never_relays_reply_by_default(self, _mock_loom):
+        os.environ.pop('LOOM_WA_RELAY_WHATSAPP_REPLY', None)
+        self.assertFalse(_should_relay_loom_reply_to_whatsapp(runtime_inbound=True))
+        self.assertFalse(
+            _should_relay_loom_reply_to_whatsapp(runtime_inbound=True, loom_already_sent=False),
+        )
+
+    @patch('app.services.wa_classify_mode.wa_loom_runtime_brain_enabled', return_value=True)
+    def test_loom_brain_relay_opt_in_only(self, _mock_loom):
+        with patch.dict(os.environ, {'LOOM_WA_RELAY_WHATSAPP_REPLY': 'true'}):
+            self.assertTrue(_should_relay_loom_reply_to_whatsapp(runtime_inbound=True))
 
     def test_classify_turn_with_pool(self):
         self.assertTrue(is_pool_classify_turn({'pool_ids': ['abc'], 'user_text': ''}))

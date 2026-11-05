@@ -144,9 +144,13 @@ def send_loomy_wa_ack(
     text: Optional[str] = None,
 ) -> None:
     """Optional one-line ack on WhatsApp when media enters pool (loomy mode)."""
-    from app.services.wa_classify_mode import loomy_wa_pool_ack, wa_inbound_loomy_dispatch_enabled
+    from app.services.wa_classify_mode import (
+        loomy_wa_pool_ack,
+        signhouse_whatsapp_outbound_allowed,
+        wa_inbound_loomy_dispatch_enabled,
+    )
 
-    if not wa_inbound_loomy_dispatch_enabled():
+    if not wa_inbound_loomy_dispatch_enabled() or not signhouse_whatsapp_outbound_allowed():
         return
     body = (text or loomy_wa_pool_ack()).strip()
     if not body:
