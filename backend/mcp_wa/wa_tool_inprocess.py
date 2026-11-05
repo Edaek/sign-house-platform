@@ -116,7 +116,7 @@ def _exec_list_pool(a: dict) -> str:
     )
     from app.models import serialize_doc
 
-    return json_result({
+    payload = {
         'images': [serialize_doc(img) for img in images],
         'pagination': {
             'page': page,
@@ -124,7 +124,12 @@ def _exec_list_pool(a: dict) -> str:
             'total': total,
             'pages': (total + limit - 1) // limit if limit else 1,
         },
-    })
+    }
+    if status == 'unassigned' and images:
+        from app.services.loom_turn_claim_service import claim_pool_classify_turn
+
+        payload.update(claim_pool_classify_turn(str(img['_id']) for img in images))
+    return json_result(payload)
 
 
 def _exec_list_projects(a: dict) -> str:

@@ -253,9 +253,11 @@ def on_message(msg: WAMessage):
         if is_group and _burst_coalescer:
             _burst_coalescer.submit(msg, photos, True)
         else:
+            if _burst_coalescer:
+                _burst_coalescer.remember_forwarded_media(msg)
             forward_to_app(msg, photos, True)
     elif not msg.has_media or msg.type in ('chat', 'text'):
-        if is_group and _burst_coalescer and _burst_coalescer.attach_classify_text(msg):
+        if _burst_coalescer and _burst_coalescer.attach_classify_text(msg):
             return
         forward_to_app(msg, photos, msg.has_media)
 

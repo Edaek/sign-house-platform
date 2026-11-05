@@ -17,7 +17,7 @@ Loom Turn → /mcp/ → Sign House → Loom 发唯一一条 WhatsApp
 
 - [ ] Wakka 上该会话的 webhook / Socket 订阅 **只**指向 Sign House（Mini 上 `python run.py --all`，`PORT=5001`）。
 - [ ] **NOps / Loom**：**关闭** 同一号码的 **Wakka 收消息**（或断开 Loom 侧 WhatsApp 入站）。Loom 只通过 **`LOOM_WA_INBOUND_NOTIFY_URL`** 收 Sign House 转发的上下文。
-- [ ] 未关 Loom Wakka 前 **不要** 指望 Sign House 代码消除双回复。
+- [ ] 未关 Loom Wakka 前，同一张带 caption 的图（如 `1005`）会进 Pool **一次**，但 Loom 仍可能跑 **两轮 Turn** → 两条 ~Axilogy。部署含 `duplicateInboundTurn` 的版本后，第二轮 `wa_list_pool_images` 应 SILENCE。
 
 ### 2. Demo `.env`（`enable-loom-notify`）
 
@@ -65,6 +65,7 @@ NOps：**一条 In → 一条 Out**；WhatsApp 群 **一条** ~Axilogy 回复。
 - **每轮工人只应看到一条 WhatsApp**。
 - **先跑完 MCP**，再用 **一条** 消息说明结果（路径 / 成功 / 需用户选择 bucket）。
 - **禁止**先发「收到 / 正在做 / 我先去读档」再发「搞掂」两条（除非工人明确要求进度）。
+- 若 MCP 返回 `duplicateInboundTurn: true`：**不要发 WhatsApp**。
 
 ---
 

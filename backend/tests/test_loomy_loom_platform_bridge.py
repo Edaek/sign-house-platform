@@ -73,10 +73,12 @@ class LoomPlatformBridgeTests(unittest.TestCase):
         'LOOMY_WA_LOOM_PLATFORM_CLASSIFY': 'true',
         'LOOM_PLATFORM_CHAT_URL': 'http://loom.test/chat',
         'LOOM_PLATFORM_SERVICE_TOKEN': 'secret',
+        'SIGNHOUSE_WA_BRAIN': 'agent',
     })
+    @patch('app.services.wa_classify_mode.wa_loom_runtime_brain_enabled', return_value=False)
     @patch('app.services.loomy_loom_platform_bridge.fetch_project_catalogue_for_loom', return_value=[])
     @patch('app.services.loomy_loom_platform_bridge.requests.post')
-    def test_try_classify_parses_reply(self, mock_post, _mock_cat):
+    def test_try_classify_parses_reply(self, mock_post, _mock_cat, _mock_brain):
         mock_post.return_value.ok = True
         mock_post.return_value.content = b'{"reply_zh":"ok"}'
         mock_post.return_value.json.return_value = {'reply_zh': 'ok'}

@@ -7,6 +7,7 @@ import threading
 from datetime import datetime
 from app.services.wa_time import wa_now
 from typing import Any, Dict, List, Optional
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +15,32 @@ _lock = threading.Lock()
 _pending: Dict[str, Dict[str, Any]] = {}
 _timers: Dict[str, threading.Timer] = {}
 
-DEBOUNCE_S = float(os.environ.get('LOOM_WA_INBOUND_NOTIFY_DEBOUNCE_S', '0.2'))
+DEBOUNCE_S = float(os.environ.get('LOOM_WA_INBOUND_NOTIFY_DEBOUNCE_S', '2.5'))
+NOTIFY_DEDUP_S = float(os.environ.get('LOOM_WA_INBOUND_NOTIFY_DEDUP_S', '45'))
+
+_recent_flush: Dict[str, tuple[float, str]] = {}
 
 
 def _task_key(*, phone: str, group_id: Optional[str]) -> str:
     gid = (group_id or '').strip()
     return f'g:{gid}' if gid else f'p:{phone}'
+
+
+def _ctx_fingerprint(ctx: Dict[str, Any]) -> str:
+    quote = (ctx.get('quoted_msg_id') or '').strip()
+    text = (ctx.get('user_text') or ctx.get('caption') or '').strip()
+    pools = ','.join(str(x) for x in (ctx.get('pool_ids') or [])[:8])
+    return f'{quote}|{text}|{pools}'
+
+
+def _recently_notified(key: str, fingerprint: str) -> bool:
+    row = _recent_flush.get(key)
+    if not row:
+        return False
+    ts, prev = row
+    if time.time() - ts > NOTIFY_DEDUP_S:
+        return False
+    return bool(fingerprint) and fingerprint == prev
 
 
 def _send_wa(phone: str, group_id: Optional[str], text: str, *, quoted_msg_id: Optional[str] = None) -> None:
@@ -62,6 +83,12 @@ def _flush(key: str) -> None:
     with _lock:
         ctx = _pending.pop(key, None)
         _timers.pop(key, None)
+        fp = _ctx_fingerprint(ctx) if ctx else ''
+        if ctx and _recently_notified(key, fp):
+            logger.info('[LoomNotify] Skip duplicate notify %s fp=%s', key, fp[:80])
+            return
+        if ctx:
+            _recent_flush[key] = (time.time(), fp)
     if not ctx:
         return
 
@@ -85,10 +112,11 @@ def schedule_loom_runtime_inbound(
     sender_name: Optional[str] = None,
     quoted_msg_id: Optional[str] = None,
     has_quoted: bool = False,
-    flush_immediately: bool = True,
+    flush_immediately: bool = False,
 ) -> bool:
     """
     Debounced POST to Loom notify URL. Returns True if scheduled (URL configured + loom mode).
+    Default debounce merges photo+caption bursts so one worker message is one Loom POST.
     """
     from app.services.loomy_loom_platform_bridge import wa_loom_runtime_notify_configured
 

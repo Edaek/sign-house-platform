@@ -391,7 +391,8 @@ def _quote_msg_id(data):
 def _schedule_loom_runtime_inbound(**kwargs):
     from app.services.loomy_loom_inbound_notify import schedule_loom_runtime_inbound
 
-    return schedule_loom_runtime_inbound(flush_immediately=True, **kwargs)
+    kwargs.setdefault('flush_immediately', False)
+    return schedule_loom_runtime_inbound(**kwargs)
 
 
 def _loom_text_inbound_response(

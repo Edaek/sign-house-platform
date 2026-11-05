@@ -2,6 +2,7 @@
 import logging
 import re
 import threading
+import time
 from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ class MediaBurstCoalescer:
         self._forward = forward_fn
         self._lock = threading.Lock()
         self._bufs: Dict[str, dict] = {}
+        self._recent: Dict[str, dict] = {}
+        self._recent_ttl_s = float(__import__('os').environ.get('GATEWAY_CAPTION_DEDUP_S', '12'))
 
     @staticmethod
     def _key(msg: 'WAMessage') -> str:
@@ -33,6 +36,15 @@ class MediaBurstCoalescer:
         if is_group:
             return f'g:{msg.from_jid}:{_normalize_sender_jid(sender)}'
         return f'p:{_normalize_sender_jid(sender)}'
+
+    def remember_forwarded_media(self, msg: 'WAMessage', caption: str = '') -> None:
+        key = self._key(msg)
+        with self._lock:
+            self._recent[key] = {
+                'at': time.time(),
+                'caption': (caption or msg.caption or msg.text or '').strip(),
+                'classify_text': '',
+            }
 
     def submit(self, msg: 'WAMessage', photos: List[str], has_media: bool) -> None:
         if not has_media or not photos:
@@ -64,11 +76,20 @@ class MediaBurstCoalescer:
         key = self._key(msg)
         with self._lock:
             buf = self._bufs.get(key)
-            if not buf or not buf.get('items'):
+            if buf and buf.get('items'):
+                buf['classify_text'] = text
+                logger.info('[Gateway] Attached classify text to burst %s: %s', key, text[:40])
+                return True
+            recent = self._recent.get(key)
+            if not recent:
                 return False
-            buf['classify_text'] = text
-            logger.info('[Gateway] Attached classify text to burst %s: %s', key, text[:40])
-            return True
+            if time.time() - float(recent.get('at') or 0) > self._recent_ttl_s:
+                return False
+            prev = (recent.get('caption') or recent.get('classify_text') or '').strip()
+            if prev and prev.casefold() == text.casefold():
+                logger.info('[Gateway] Swallow duplicate caption after media %s: %s', key, text[:40])
+                return True
+            return False
 
     def _flush(self, key: str) -> None:
         with self._lock:
@@ -90,6 +111,13 @@ class MediaBurstCoalescer:
             key, len(buf['items']), len(all_photos), primary.id,
         )
         classify_text = (buf.get('classify_text') or '').strip()
+        caption = (primary.caption or primary.text or classify_text or '').strip()
+        with self._lock:
+            self._recent[key] = {
+                'at': time.time(),
+                'caption': caption,
+                'classify_text': classify_text,
+            }
         self._forward(
             primary, all_photos, True,
             message_ids=all_msg_ids,

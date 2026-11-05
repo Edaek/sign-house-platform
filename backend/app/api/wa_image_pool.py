@@ -54,7 +54,7 @@ def list_or_stats():
     total = mongo.db.pool_images.count_documents(query)
     skip = (page - 1) * limit
     images = list(mongo.db.pool_images.find(query).sort('createdAt', -1).skip(skip).limit(limit))
-    return jsonify({
+    payload = {
         'images': [serialize_doc(img) for img in images],
         'pagination': {
             'page': page,
@@ -62,7 +62,12 @@ def list_or_stats():
             'total': total,
             'pages': (total + limit - 1) // limit if limit else 1,
         },
-    })
+    }
+    if status == 'unassigned' and images:
+        from app.services.loom_turn_claim_service import claim_pool_classify_turn
+
+        payload.update(claim_pool_classify_turn(str(img['_id']) for img in images))
+    return jsonify(payload)
 
 @wa_image_pool_bp.route('/assign', methods=['POST'])
 @jwt_required()
