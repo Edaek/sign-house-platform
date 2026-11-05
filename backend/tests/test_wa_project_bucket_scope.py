@@ -53,8 +53,8 @@ class WaProjectBucketScopeTests(unittest.TestCase):
         self.assertIn('already exists', err or '')
         self.assertIn('S-1000-2000', err or '')
 
-    @patch('app.services.wa_project_validation.find_project_by_code')
-    def test_records_project_id_scoped_by_nas_parent_bucket(self, mock_find):
+    @patch('app.services.wa_project_validation.find_project_by_nas_folder')
+    def test_records_project_id_scoped_by_nas_folder_name(self, mock_find):
         s_id = ObjectId()
         t_id = ObjectId()
         url_project = {'_id': s_id, 'code': '1009', 'nasParentBucket': 'S-1000-2000'}
@@ -67,6 +67,27 @@ class WaProjectBucketScopeTests(unittest.TestCase):
         }
         self.assertEqual(_records_project_id(url_project, req), t_id)
         mock_find.assert_called_once_with('1009', parent_bucket='T-1000-2002')
+
+    @patch('app.services.wa_project_validation.find_project_by_nas_folder')
+    def test_records_project_id_long_folder_not_stub(self, mock_find):
+        stub_id = ObjectId()
+        site_id = ObjectId()
+        url_project = {'_id': stub_id, 'code': 'PJ-2937', 'nasParentBucket': 'PJ-2900-2999'}
+        long_name = 'PJ-2937 粉嶺北(Yau Lee)_RN'
+        mock_find.return_value = {
+            '_id': site_id,
+            'code': long_name,
+            'nasFolderName': long_name,
+            'nasParentBucket': 'PJ-2900-2999',
+        }
+
+        req = MagicMock()
+        req.args = {
+            'nasFolderName': long_name,
+            'nasParentBucket': 'PJ-2900-2999',
+        }
+        self.assertEqual(_records_project_id(url_project, req), site_id)
+        mock_find.assert_called_once_with(long_name, parent_bucket='PJ-2900-2999')
 
 
 if __name__ == '__main__':

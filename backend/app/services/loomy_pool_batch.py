@@ -251,6 +251,10 @@ class PoolAssignNotClassifyTargetError(ValueError):
     """Target project is a bucket container — assign only to site subfolders."""
 
 
+class PoolAssignAmbiguousSiteError(ValueError):
+    """Multiple NAS site folders share the same PJ/site number — worker must pick 1/2."""
+
+
 def _group_jid_matches(stored: str, group_id: str) -> bool:
     a = (stored or '').strip().lower()
     b = (group_id or '').strip().lower()

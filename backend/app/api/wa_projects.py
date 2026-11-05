@@ -48,11 +48,14 @@ def _records_project_id(project, req=None):
         is_range_folder_code,
         parse_nas_site_folder_code,
     )
-    from app.services.wa_project_validation import find_project_by_code
+    from app.services.wa_project_validation import find_project_by_code, find_project_by_nas_folder
 
     fn = (src.args.get('nasFolderName') or '').strip()
     project_code = (project.get('code') or '').strip()
     if fn:
+        scoped = find_project_by_nas_folder(fn, parent_bucket=pb)
+        if scoped:
+            return scoped['_id']
         site_code = parse_nas_site_folder_code(fn) or fn
     elif is_range_folder_code(project_code):
         return project['_id']
@@ -189,47 +192,69 @@ def _merge_bucket_children(
     return list(by_key.values())
 
 
+def _wa_projects_under_parent_buckets(parent_match_values: set) -> list:
+    """All non-archived site projects for NAS bucket list / folder index."""
+    from app.services.nas_bucket_code import nas_path_from_web_bucket
+
+    parent_or = [
+        {'nasParentBucket': {'$regex': f'^{re.escape(v)}$', '$options': 'i'}}
+        for v in parent_match_values
+        if (v or '').strip()
+    ]
+    if not parent_or:
+        return []
+    return list(mongo.db.wa_projects.find({
+        'status': {'$ne': 'archived'},
+        '$or': parent_or,
+    }))
+
+
+def _index_wa_projects_by_nas_folder(projects: list) -> dict[str, dict]:
+    """Map NAS folder label (casefold) → project; prefer nasFolderName over bare site code."""
+    by_folder: dict[str, dict] = {}
+    for proj in projects:
+        code = (proj.get('code') or '').strip()
+        nf = (proj.get('nasFolderName') or '').strip()
+        labels = []
+        if nf:
+            labels.append(nf)
+        if code and code.casefold() != nf.casefold():
+            labels.append(code)
+        for label in labels:
+            key = label.casefold()
+            prev = by_folder.get(key)
+            if prev is None:
+                by_folder[key] = proj
+                continue
+            if str(prev.get('_id')) == str(proj.get('_id')):
+                continue
+            nf_owner = (proj.get('nasFolderName') or '').strip().casefold() == key
+            if nf_owner:
+                by_folder[key] = proj
+    return by_folder
+
+
+def _match_bucket_child_project(folder_name: str, by_folder: dict[str, dict]) -> dict | None:
+    fn = (folder_name or '').strip()
+    if not fn:
+        return None
+    return by_folder.get(fn.casefold())
+
+
 def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: bool) -> dict:
     from app.services.nas_bucket_code import nas_path_from_web_bucket, nas_parent_bucket_match_values
     from app.services.nas_watcher_service import nas_mount
 
     parent_bucket = nas_path_from_web_bucket(bucket)
-    parent_match_values = {v.upper() for v in nas_parent_bucket_match_values(bucket)}
+    parent_match_values = set(nas_parent_bucket_match_values(bucket))
     children = sorted(children, key=lambda c: (c.get('folderName') or '').lower())
-    unique_codes = list({
-        lc
-        for c in children
-        if (lc := _bucket_child_lookup_code(c))
-    })
-    proj_by_code_upper = {}
-    proj_by_code_and_parent: dict[tuple[str, str], dict] = {}
     parent_bucket_upper = (parent_bucket or '').upper()
-    if unique_codes:
-        or_codes = [
-            {'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'}}
-            for code in unique_codes
-        ]
-        for proj in mongo.db.wa_projects.find({
-            'status': {'$ne': 'archived'},
-            '$or': or_codes,
-        }):
-            key = (proj.get('code') or '').strip().upper()
-            if not key:
-                continue
-            proj_by_code_upper[key] = proj
-            from app.services.nas_bucket_code import nas_path_from_web_bucket as _np
-
-            parent_key = _np(proj.get('nasParentBucket') or '').upper()
-            proj_by_code_and_parent[(key, parent_key)] = proj
-            for pv in parent_match_values:
-                proj_by_code_and_parent[(key, _np(pv).upper())] = proj
-            if parent_bucket_upper:
-                proj_by_code_and_parent[(key, parent_bucket_upper)] = proj
+    bucket_projects = _wa_projects_under_parent_buckets(parent_match_values)
+    by_folder = _index_wa_projects_by_nas_folder(bucket_projects)
 
     record_counts = {}
-    matched_projects = list({id(p): p for p in proj_by_code_upper.values()}.values())
-    if matched_projects:
-        pid_list = [p['_id'] for p in matched_projects]
+    if bucket_projects:
+        pid_list = list({p['_id'] for p in bucket_projects})
         for row in mongo.db.wa_records.aggregate([
             {'$match': {
                 'projectId': {'$in': pid_list},
@@ -245,12 +270,7 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
         code = _bucket_child_lookup_code(child)
         if not code:
             continue
-        proj = None
-        if code:
-            code_upper = code.upper()
-            proj = proj_by_code_and_parent.get((code_upper, parent_bucket_upper))
-            if proj is None and not parent_bucket_upper:
-                proj = proj_by_code_upper.get(code_upper)
+        proj = _match_bucket_child_project(folder_name, by_folder)
         row = {
             'folderName': folder_name,
             'code': code or None,

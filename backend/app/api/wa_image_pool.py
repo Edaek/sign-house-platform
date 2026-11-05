@@ -125,10 +125,17 @@ def assign_images():
         )
     except ValueError as exc:
         from app.services.loomy_pool_batch import (
+            PoolAssignAmbiguousSiteError,
             PoolAssignNotClassifyTargetError,
             PoolAssignScopeError,
         )
 
+        if isinstance(exc, PoolAssignAmbiguousSiteError):
+            return jsonify({
+                'error': str(exc),
+                'assigned': 0,
+                'code': 'ambiguous_site_folder',
+            }), 409
         if isinstance(exc, PoolAssignScopeError):
             return jsonify({
                 'error': str(exc),

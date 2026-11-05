@@ -585,6 +585,37 @@ def assign_images_to_project(
             'use a site subfolder under the bucket (create a child project first).'
         )
 
+    from app.services.loomy_pool_batch import PoolAssignAmbiguousSiteError
+    from app.services.project_number_match_service import (
+        classify_peers_for_site_project,
+        wa_classify_list_labels,
+    )
+
+    peers = classify_peers_for_site_project(project)
+    if len(peers) > 1:
+        pref_folder = (project.get('nasFolderName') or '').strip()
+        target_id = str(project.get('_id', ''))
+        if pref_folder:
+            norm_pref = pref_folder.casefold()
+            matched = [
+                p for p, _ in peers
+                if norm_pref
+                in ((p.get('nasFolderName') or p.get('code') or '').strip().casefold())
+            ]
+            if len(matched) == 1 and str(matched[0].get('_id')) == target_id:
+                pass
+            else:
+                labels = wa_classify_list_labels(peers)
+                raise PoolAssignAmbiguousSiteError(
+                    f'Multiple site folders match PJ/site number — ask worker to pick 1/{len(peers)} '
+                    f'before assign. Options:\n{labels}'
+                )
+        else:
+            labels = wa_classify_list_labels(peers)
+            raise PoolAssignAmbiguousSiteError(
+                f'Ambiguous site number — list projects and wait for 1/{len(peers)} before assign:\n{labels}'
+            )
+
     from app.services.loomy_pool_batch import assert_pool_images_assignable
 
     assert_pool_images_assignable(images, group_id=group_id)

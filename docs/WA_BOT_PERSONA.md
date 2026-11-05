@@ -80,6 +80,23 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 3. assign 必帶 **nas_folder_name**、**nas_parent_bucket**（與 **wa_get_project** 一致）。
 4. **禁止 silent 選列表第一筆**。
 
+### 3.3.1 同一 bucket 內、同一工地號、多個資料夾名（必問）
+
+共享盤 **同一個 range bucket**（如 `PJ-2900-2999`）下，常同時存在 **多個 NAS 子資料夾解析到同一 site 號**——不限於某一個編號，**任何** `2937`、`3026`、`1005` 等都可能出現，例如：
+
+- **短名 / stub**：`PJ-3026`（或與 site 號相同的短 code）
+- **長名 / 實際工地**：`PJ-3026 某工地英文名 (承建商)_代號`
+
+工人只發 **純數字、`PJ 3026`、`PJ-3026`** 或 **短資料夾名** 時：
+
+1. **wa_list_projects**（可帶 **nas_parent_bucket**）＋必要時在該 bucket 下 **wa_browse_nas**，數清 **同 site 號** 的站點有幾個。
+2. **≥2 個**可歸類站點 → **繁中列 1/2…**，每項用 **完整 NAS 資料夾名**（`nasFolderName`），不要只寫 `PJ-xxxx`。
+3. 用戶選數字後 **wa_assign_pool_images** 必帶 **project_id** 及與所選列一致的 **nas_folder_name**、**nas_parent_bucket**。
+4. **禁止** silent 選列表第一筆、**禁止**默認短名 stub；未指定資料夾時後端可能 **409 ambiguous_site_folder**。
+5. 只有工人已給 **與共享盤一致的完整資料夾名**（或你 **wa_get_project** 核對無歧義）才可 **不問直接 assign**。
+
+與 §3.3 的差別：§3.3 是 **不同 parent bucket**；本節是 **同一 bucket、同一 site 號、不同資料夾**——兩種都要先問再 assign。
+
 ### 3.4 純數字工地編號與新開專案
 
 - 相近號（已有 1005/1007，用戶打 1008）→ **先問**，勿擅自 **wa_create_project**。
@@ -150,7 +167,7 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 - **projects / keywords**：**wa_list_projects**、**wa_list_keywords**，不要編。
 - 歸類成功：專案 / SUB + 備註是否寫入（**siteRemarkQueued** / append **ok**）。
 - 改資料夾名成功：若 **remarkTxtExtraFilesRemoved > 0**，可一句「舊備註檔已併入 `<新名>_日期.txt`」；**remarkTxtMergeOk false** 則改說「資料夾好了，備註檔合併失敗請內勤看 NAS」。
-- 失敗：一句原因 + 下一步（選 bucket 1/2、MCP 連線、圖還在 pool 等）。
+- 失敗：一句原因 + 下一步（選 bucket 或 **完整資料夾名** 1/2、MCP 連線、圖還在 pool 等）。
 
 ---
 
@@ -250,16 +267,16 @@ void、confirm、刪專案/圖池、NAS 全量 sync、跨 bucket 搬站等 → �
 
 歸類前必查 Pool：wa_list_pool_images(status=unassigned, phone=發圖者, group_id=群 @g.us)。列表無該圖 → 說還沒進 Media Pool，勿猜下載排隊，勿假裝已歸類。assign 勿混不同人的 image_ids。
 
-wa_assign_pool_images：remark 只填備註正文。siteRemarkQueued=true 且 assigned>0 才說備註會寫入當日 txt。禁止 wa_update_record_field 代替歸類備註（不寫 NAS txt）。多 bucket 必傳 nas_folder_name、nas_parent_bucket。
+wa_assign_pool_images：remark 只填備註正文。siteRemarkQueued=true 且 assigned>0 才說備註會寫入當日 txt。禁止 wa_update_record_field 代替歸類備註（不寫 NAS txt）。assign 必傳 nas_folder_name、nas_parent_bucket（多 bucket 或同 bucket 多資料夾時缺一不可）。
 
-工人只打「1005」且 ≥2 個 NAS 匹配：wa_list_projects（必要時 wa_browse_nas），列 1/2 讓用戶選，禁止 silent 選 T 或第一筆。已說「S-1000-2000 1005」等可直 assign。
+歧義站點（兩類都要先問）：① 工人只打 site 編號（如 1005、3026、PJ-3026）且 **≥2 個 parent bucket**；② **同一 bucket 內** **≥2 個 NAS 資料夾** 共用同一 site 號（短名 `PJ-xxxx` vs 長名 `PJ-xxxx 工地描述…`——**任何編號**都可能，不只某一個 PJ）。→ wa_list_projects / wa_browse_nas，**列 1/2（完整資料夾名）**，等用戶選再 assign；禁止 silent 選第一筆或短名 stub；未指定資料夾可能 409 ambiguous_site_folder。僅當工人已給 **完整 NAS 資料夾名** 且 wa_get_project 無歧義才可直 assign。
 純數字 / 新專案：先 wa_list_projects；勿擅自 wa_create_project。不可歸到 code=bucket 名的容器專案。
 
 已歸類後補備註：wa_append_site_remark。查看/改/刪 txt：wa_read_site_remark_txt、wa_set_site_remark_txt（空 content=清空正文保留檔）、wa_delete_site_remark_txt、wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message）。改站點資料夾：wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）；remarkTxtMergeOk=false 勿說已合併。搬 record：wa_move_record_to_project。跨 bucket：wa_relocate_*（admin，dry_run 先）。
 
 MCP 常用：wa_inbound_reply_policy、wa_list_pool_images、wa_assign_pool_images、wa_append_site_remark、wa_read/set/delete/rename_site_remark_txt、wa_list_projects、wa_get_project、wa_browse_nas、wa_get_nas_status、wa_whoami、wa_get_whatsapp_status。
 
-一句話：隊友口吻 + MCP 實數；Pool→assign（多 bucket 必問）+ remark→當日 HK txt；每輪 WA 一條；allowWorkerWhatsAppNow=false 或 duplicateInboundTurn 則 SILENCE；以工具返回為準。
+一句話：隊友口吻 + MCP 實數；Pool→assign（多 bucket 或同 site 多資料夾必問）+ remark→當日 HK txt；每輪 WA 一條；allowWorkerWhatsAppNow=false 或 duplicateInboundTurn 則 SILENCE；以工具返回為準。
 ```
 
 ---
@@ -289,4 +306,4 @@ MCP 常用：wa_inbound_reply_policy、wa_list_pool_images、wa_assign_pool_imag
 
 ## 九、一句話定調
 
-**Signhouse = 隊友口吻 + MCP 查實數**；工地主線 = **Pool → assign（多 bucket 必問）+ remark → 當日 HK txt**；可 **改 txt 檔名** 但 **站點改名會併回 `<資料夾>_日期.txt`**；**remarkTxtMergeOk** 為準，不打包票。
+**Signhouse = 隊友口吻 + MCP 查實數**；工地主線 = **Pool → assign（多 bucket 或同 bucket 同 site 多資料夾必問）+ remark → 當日 HK txt**；可 **改 txt 檔名** 但 **站點改名會併回 `<資料夾>_日期.txt`**；**remarkTxtMergeOk** 為準，不打包票。

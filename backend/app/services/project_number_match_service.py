@@ -88,11 +88,26 @@ def find_buckets_containing_site_number(site_n, *, active_only=True):
 
 
 def _site_number_from_project(proj):
+    """Site integer from code or NAS folder label (e.g. PJ-2937 粉嶺北… → 2937)."""
     code = (proj.get('code') or '').strip()
     if code.isdigit():
         return int(code)
     pj_n = pj_number_from_project_code(code)
-    return pj_n
+    if pj_n is not None:
+        return pj_n
+    for raw in (
+        (proj.get('nasFolderName') or '').strip(),
+        (proj.get('name') or '').strip(),
+        code,
+    ):
+        if not raw:
+            continue
+        parsed = parse_site_folder_code(raw)
+        if parsed:
+            n = pj_number_from_project_code(parsed)
+            if n is not None:
+                return n
+    return None
 
 
 def match_classify_sites_near_number_in_buckets(num_str, bucket_codes, *, active_only=True):
@@ -437,21 +452,30 @@ def match_classify_targets_by_site_number(num_str, *, active_only=True):
         code = (proj.get('code') or '').strip()
         if site_letter_suffix_from_project_code(code):
             continue
+        site_num = _site_number_from_project(proj)
+        if site_num != n:
+            continue
         score = None
         if code.isdigit() and int(code) == n:
             score = 100
         elif code.upper() == canonical.upper():
             score = 99
         else:
-            pj_n = pj_number_from_project_code(code)
-            if pj_n is not None and pj_n == n:
-                score = 98
-        if score is None or pid in seen:
+            score = 98
+        if pid in seen:
             continue
         seen.add(pid)
         hits.append((proj, score))
-    hits.sort(key=lambda t: t[1], reverse=True)
+    hits.sort(key=lambda t: (-t[1], -len((t[0].get('nasFolderName') or t[0].get('code') or ''))))
     return hits
+
+
+def classify_peers_for_site_project(proj) -> list:
+    """Other classify targets sharing the same site number (e.g. two PJ-2937 folders)."""
+    site_num = _site_number_from_project(proj)
+    if site_num is None:
+        return []
+    return match_classify_targets_by_site_number(str(site_num))
 
 
 def _digit_mismatch_count(sn, pn):

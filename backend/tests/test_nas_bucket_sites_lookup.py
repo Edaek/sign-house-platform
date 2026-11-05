@@ -51,6 +51,56 @@ class NasBucketSitesLookupTests(unittest.TestCase):
         self.assertEqual(site['projectId'], 'mongo-id-1')
         self.assertEqual(site['folderName'], 'KTEST1')
 
+    @patch('app.api.wa_projects.mongo')
+    @patch('app.api.wa_projects.serialize_doc')
+    def test_duplicate_site_number_distinct_project_ids(self, mock_ser, mock_mongo):
+        stub = {
+            '_id': 'stub-id',
+            'code': 'PJ-2937',
+            'nasFolderName': 'PJ-2937',
+            'nasParentBucket': 'PJ-2900-2999',
+            'status': 'active',
+        }
+        site = {
+            '_id': 'site-id',
+            'code': 'PJ-2937 粉嶺北(Yau Lee)_RN',
+            'nasFolderName': 'PJ-2937 粉嶺北(Yau Lee)_RN',
+            'nasParentBucket': 'PJ-2900-2999',
+            'status': 'active',
+        }
+        mock_mongo.db.wa_projects.find.return_value = [stub, site]
+        mock_mongo.db.wa_records.aggregate.return_value = [
+            {'_id': 'stub-id', 'totalRecords': 1},
+            {'_id': 'site-id', 'totalRecords': 2},
+        ]
+
+        def ser(doc):
+            return {
+                'id': str(doc['_id']),
+                'code': doc.get('code'),
+                'status': doc.get('status', 'active'),
+            }
+
+        mock_ser.side_effect = ser
+
+        children = [
+            {'folderName': 'PJ-2937', 'code': 'PJ-2937', 'isSiteProject': True},
+            {
+                'folderName': 'PJ-2937 粉嶺北(Yau Lee)_RN',
+                'code': 'PJ-2937',
+                'isSiteProject': True,
+            },
+        ]
+        payload = _build_nas_bucket_sites_payload('PJ-2900-2999', children, from_cache=True)
+        by_folder = {s['folderName']: s for s in payload['sites']}
+        self.assertEqual(by_folder['PJ-2937']['projectId'], 'stub-id')
+        self.assertEqual(by_folder['PJ-2937']['totalRecords'], 1)
+        self.assertEqual(
+            by_folder['PJ-2937 粉嶺北(Yau Lee)_RN']['projectId'],
+            'site-id',
+        )
+        self.assertEqual(by_folder['PJ-2937 粉嶺北(Yau Lee)_RN']['totalRecords'], 2)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -34,6 +34,38 @@ def _code_regex_query(code: str) -> dict:
     return {'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'}}
 
 
+def find_project_by_nas_folder(folder_name, *, parent_bucket=None, exclude_id=None):
+    """Match a NAS child directory to wa_projects by full folder label (not parsed PJ-xxxx only)."""
+    folder = (folder_name or '').strip()
+    if not folder:
+        return None
+    folder_cf = folder.casefold()
+    query = {
+        **_non_archived_filter(),
+        '$or': [
+            {'nasFolderName': {'$regex': f'^{re.escape(folder)}$', '$options': 'i'}},
+            {'code': {'$regex': f'^{re.escape(folder)}$', '$options': 'i'}},
+        ],
+    }
+    if exclude_id is not None:
+        query['_id'] = {'$ne': ObjectId(exclude_id)}
+    candidates = list(mongo.db.wa_projects.find(query))
+    if parent_bucket is not None:
+        pk = _parent_bucket_key(parent_bucket)
+        candidates = [c for c in candidates if _project_parent_key(c) == pk]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    for doc in candidates:
+        if (doc.get('nasFolderName') or '').strip().casefold() == folder_cf:
+            return doc
+    for doc in candidates:
+        if (doc.get('code') or '').strip().casefold() == folder_cf:
+            return doc
+    return None
+
+
 def find_project_by_code(code, *, parent_bucket=None, exclude_id=None):
     code = normalize_code(code)
     if not code:
