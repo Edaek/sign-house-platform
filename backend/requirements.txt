@@ -28,7 +28,7 @@ python-socketio[client]==5.11.1
 requests>=2.31.0
 
 # File transfer (NAS via SFTP)
-paramiko>=3.4.0
+paramiko>=5.1.0
 
 # Fuzzy text matching (WA project search)
 rapidfuzz>=3.0.0
