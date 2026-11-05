@@ -312,6 +312,7 @@ def _exec_set_site_remark_txt(a: dict) -> str:
         preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
         preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
         create_if_missing=bool(a.get('create_if_missing') or a.get('createIfMissing')),
+        delete_file=bool(a.get('delete_file') or a.get('deleteFile')),
     )
     return json_result(result)
 

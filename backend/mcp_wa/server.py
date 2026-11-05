@@ -345,8 +345,9 @@ def wa_set_site_remark_txt(
     day: str = '',
     filename: str = '',
     create_if_missing: bool = False,
+    delete_file: bool = False,
 ) -> str:
-    """Replace entire day remark .txt (modify). Empty content deletes the file (e.g. remove placeholder)."""
+    """Replace entire day remark .txt (modify). Empty content clears body but keeps the file (remove placeholder). Use wa_delete_site_remark_txt to remove the file."""
     try:
         body: dict[str, Any] = {
             'projectCode': project_code.strip(),
@@ -362,6 +363,8 @@ def wa_set_site_remark_txt(
             body['filename'] = filename.strip()
         if create_if_missing:
             body['createIfMissing'] = True
+        if delete_file:
+            body['deleteFile'] = True
         return json_result(_client().post('/wa/image-pool/site-remark/content', json_body=body))
     except SignHouseApiError as exc:
         return str(exc)

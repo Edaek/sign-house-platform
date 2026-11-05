@@ -1,6 +1,7 @@
-from app.services.wa_time import wa_now
 """WhatsApp Loomy — MCP tool loop (Ollama ReAct + SIGN_HOUSE_JWT)."""
 from __future__ import annotations
+
+from app.services.wa_time import wa_now
 
 import json
 import logging
@@ -140,7 +141,7 @@ Group chat assign: wa_list_pool_images(status=unassigned, phone=sender) then wa_
 If the user included a note (备注/備註/text after the project code), pass it as remark on wa_assign_pool_images — note text only. That writes the NAS day .txt. Say the remark was saved only when siteRemarkQueued is true.
 If photos were already filed and the user adds a note later, call wa_append_site_remark with project_code and text (same nas folder as the assign).
 If the user wants to rename the day remark .txt (any basename, not only <folder>_<date>.txt), use wa_rename_site_remark_txt; on duplicate_remark_txt relay message and ask for another name; pass phone so append follows the new name today.
-View/edit/delete day txt: wa_read_site_remark_txt (list_all if multiple); wa_set_site_remark_txt to replace body (empty content deletes file — use to remove「—」placeholder); wa_delete_site_remark_txt; wa_append_site_remark only adds text.
+View/edit/delete day txt: wa_read_site_remark_txt (list_all if multiple); wa_set_site_remark_txt to replace body (empty content clears body but keeps file — use to remove「—」placeholder); wa_delete_site_remark_txt to remove file; wa_append_site_remark only adds text.
 After wa_rename_nas_site_folder or wa_sync_site_code_from_folder, if remarkTxtMergeOk is false, tell the user folder/code updated but remark txt merge failed (remarkTxtMergeMessage) — do not claim txt files were merged.
 If media_caption already contains a site/project code (e.g. 2991, PJ-xxxx), resolve via wa_list_projects / wa_get_project and assign — do not ask the user to repeat obvious caption info.
 When the user @mentions Signhouse or pings (在不在、@bot、点 bot 名): always reply briefly that you are here (e.g. 在，Signhouse 喺度。要歸相、補備註定查專案，直接講。) — do NOT SILENCE on @bot. If they ask why an earlier @ had no reply, explain wrong @ (LID like @358… or @ teammate only) vs @ bot number +852 9636 4202; use wa_get_whatsapp_status for connected/token. Mattermost @signhouseloomy: same — always acknowledge.

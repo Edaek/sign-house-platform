@@ -268,7 +268,7 @@ def read_site_remark():
 @wa_image_pool_bp.route('/site-remark/content', methods=['PUT', 'POST'])
 @jwt_required()
 def set_site_remark_content():
-    """Replace entire remark .txt (modify). Empty content deletes the file."""
+    """Replace entire remark .txt (modify). Empty content clears body but keeps file; delete_file=true removes it."""
     data = request.get_json() or {}
     params = _site_remark_common_params(data)
     if not params['project_code']:
@@ -282,6 +282,7 @@ def set_site_remark_content():
     if content is None:
         content = data.get('text')
     create = bool(data.get('createIfMissing') or data.get('create_if_missing'))
+    delete_file = bool(data.get('deleteFile') or data.get('delete_file'))
     result = set_site_remark_txt(
         params['project_code'],
         '' if content is None else str(content),
@@ -290,6 +291,7 @@ def set_site_remark_content():
         preferred_folder_name=params['preferred_folder_name'],
         preferred_parent_bucket=params['preferred_parent_bucket'],
         create_if_missing=create,
+        delete_file=delete_file,
     )
     if not result.get('ok'):
         status = 409 if result.get('error') == 'duplicate_remark_txt' else 400

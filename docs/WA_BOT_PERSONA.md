@@ -95,7 +95,7 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 | **wa_append_site_remark** | `project_code` + `text`；可選 `day`、`nas_folder_name`、`nas_parent_bucket`、`phone` |
 | **wa_rename_site_remark_txt** | 改當日 remark **檔名**（可自訂，不必 `<資料夾>_日期`）；`old_filename` 在同日多個 txt 時必填；`phone` 以便當日後續 append 跟檔名 |
 | **wa_read_site_remark_txt** | **查看**當日 remark `.txt` 全文；同日多檔時 `list_all=true` 或指定 `filename` |
-| **wa_set_site_remark_txt** | **整份覆寫** txt（改內容）；`content` 留空 = **刪檔**（例如去掉「—」佔位） |
+| **wa_set_site_remark_txt** | **整份覆寫** txt（改內容）；`content` 留空 = **清空正文但保留檔**（去掉「—」佔位）；要刪檔用 **wa_delete_site_remark_txt** 或 `delete_file=true` |
 | **wa_delete_site_remark_txt** | **刪除**當日 remark `.txt`（同日多檔時指定 `filename`） |
 
 **檔名與目錄規則**
@@ -203,7 +203,7 @@ MCP: Sign House /mcp/ ；憑證在 Loom Connections → signhousemcp (wa)，每�
 
 4) 相近編號先問，勿擅自 wa_create_project。不可歸類到 bucket 容器專案（code=bucket 名）。
 
-5) 事後備註 wa_append_site_remark。查看/改/刪 txt：wa_read_site_remark_txt、wa_set_site_remark_txt（空 content 刪檔）、wa_delete_site_remark_txt。改檔名 wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message；傳 phone）。改站點資料夾 wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）。remarkTxtMergeOk 為 false 時轉述 remarkTxtMergeMessage，勿聲稱 txt 已合併；remarkTxtExtraFilesRemoved>0 可簡述舊檔已併入規範檔名。
+5) 事後備註 wa_append_site_remark。查看/改/刪 txt：wa_read_site_remark_txt、wa_set_site_remark_txt（空 content **只清佔位、不刪檔**）、wa_delete_site_remark_txt（刪檔）。改檔名 wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message；傳 phone）。改站點資料夾 wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）。remarkTxtMergeOk 為 false 時轉述 remarkTxtMergeMessage，勿聲稱 txt 已合併；remarkTxtExtraFilesRemoved>0 可簡述舊檔已併入規範檔名。
 
 6) 搬 record wa_move_record_to_project。跨 bucket 搬站 wa_relocate_*（admin，先 dry_run）。
 
@@ -225,7 +225,7 @@ WhatsApp 回覆繁體、短。查完再答 NAS/專案/池。
 | wa_append_site_remark | 事後備註 |
 | wa_rename_site_remark_txt | 改當日 txt 檔名（防同目錄重名） |
 | wa_read_site_remark_txt | 查看當日 txt 內容 |
-| wa_set_site_remark_txt | 整份覆寫 txt；空 content 刪檔 |
+| wa_set_site_remark_txt | 整份覆寫 txt；空 content 清空正文保留檔 |
 | wa_delete_site_remark_txt | 刪除當日 txt |
 | wa_list_projects / wa_get_project | 專案與 NAS 標籤 |
 | wa_rename_nas_site_folder | 同 bucket 改資料夾名 + code/name 對齊 + 合併 txt |

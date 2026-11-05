@@ -556,10 +556,10 @@ def set_site_remark_txt(
     preferred_folder_name: Optional[str] = None,
     preferred_parent_bucket: Optional[str] = None,
     create_if_missing: bool = False,
+    delete_file: bool = False,
 ) -> dict:
-    """Replace entire remark .txt body (modify). Empty content deletes the file."""
-    body = (content or '').strip()
-    if not body:
+    """Replace entire remark .txt body. Empty content clears the file but keeps it on NAS."""
+    if delete_file:
         return delete_site_remark_txt(
             project_code,
             day_str=day_str,
@@ -567,6 +567,10 @@ def set_site_remark_txt(
             preferred_folder_name=preferred_folder_name,
             preferred_parent_bucket=preferred_parent_bucket,
         )
+
+    raw = '' if content is None else str(content)
+    body = raw.strip()
+    cleared = not body
 
     day_dir, err = _resolve_site_remark_day_dir(
         project_code,
@@ -584,7 +588,7 @@ def set_site_remark_txt(
         explicit = _normalize_remark_filename_arg(filename)
         if explicit and pick_err.get('error') == 'remark txt not found':
             base = explicit
-        elif create_if_missing and pick_err.get('error') == 'no remark txt in this day folder':
+        elif (create_if_missing or cleared) and pick_err.get('error') == 'no remark txt in this day folder':
             folder_label = site_folder_name_from_day_dir(day_dir or '')
             base = explicit or site_remark_filename(folder_name=folder_label, day_str=day)
         else:
@@ -602,11 +606,19 @@ def set_site_remark_txt(
         }
     try:
         with open(path, 'w', encoding='utf-8') as fh:
-            fh.write(body)
-            if not body.endswith('\n'):
-                fh.write('\n')
+            if body:
+                fh.write(body)
+                if not body.endswith('\n'):
+                    fh.write('\n')
         logger.info('[NAS] Replaced site remark txt → %s', path)
-        return {'ok': True, 'path': path, 'fileName': base, 'day': day, 'removedFile': False}
+        return {
+            'ok': True,
+            'path': path,
+            'fileName': base,
+            'day': day,
+            'removedFile': False,
+            'cleared': cleared,
+        }
     except OSError as exc:
         logger.error('[NAS] Set site remark txt failed: %s', exc)
         return {'ok': False, 'error': str(exc)}

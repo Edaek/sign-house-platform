@@ -48,7 +48,40 @@ class SiteRemarkTxtCrudTests(unittest.TestCase):
                 self.assertTrue(d.get('removedFile'))
                 self.assertFalse(os.path.isfile(path))
 
-    def test_empty_content_deletes(self):
+    def test_empty_content_clears_keeps_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            day = '2026-11-05'
+            day_dir = os.path.join(root, '1009', 'Photo', day)
+            os.makedirs(day_dir)
+            fname = site_remark_filename(folder_name='1009', day_str=day)
+            path = os.path.join(day_dir, fname)
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write('—\n')
+
+            svc = _NasDayDirMock(day_dir)
+            with patch('app.services.nas_watcher_service.nas_mount', svc):
+                r = set_site_remark_txt('1009', '   ', day_str=day)
+                self.assertTrue(r.get('ok'))
+                self.assertTrue(r.get('cleared'))
+                self.assertTrue(os.path.isfile(path))
+                self.assertEqual(os.path.getsize(path), 0)
+
+    def test_empty_content_recreates_missing_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            day = '2026-11-05'
+            day_dir = os.path.join(root, '1009', 'Photo', day)
+            os.makedirs(day_dir)
+            fname = site_remark_filename(folder_name='1009', day_str=day)
+            path = os.path.join(day_dir, fname)
+
+            svc = _NasDayDirMock(day_dir)
+            with patch('app.services.nas_watcher_service.nas_mount', svc):
+                r = set_site_remark_txt('1009', '', day_str=day)
+                self.assertTrue(r.get('ok'))
+                self.assertTrue(os.path.isfile(path))
+                self.assertEqual(os.path.getsize(path), 0)
+
+    def test_delete_file_flag(self):
         with tempfile.TemporaryDirectory() as root:
             day = '2026-11-05'
             day_dir = os.path.join(root, '1009', 'Photo', day)
@@ -60,7 +93,7 @@ class SiteRemarkTxtCrudTests(unittest.TestCase):
 
             svc = _NasDayDirMock(day_dir)
             with patch('app.services.nas_watcher_service.nas_mount', svc):
-                r = set_site_remark_txt('1009', '   ', day_str=day)
+                r = set_site_remark_txt('1009', '', day_str=day, delete_file=True)
                 self.assertTrue(r.get('ok'))
                 self.assertFalse(os.path.isfile(path))
 

@@ -77,12 +77,14 @@ def _session_id(ctx: Dict[str, Any]) -> str:
     return f'wa:p:{phone}'
 
 
+def explicit_loom_inbound_notify_url() -> str:
+    """Gateway → Loom runtime push URL only (never LOOM_PLATFORM_CHAT_URL)."""
+    return (os.environ.get('LOOM_WA_INBOUND_NOTIFY_URL') or '').strip()
+
+
 def loom_inbound_notify_url() -> str:
-    """Loom runtime webhook (inbound push). Falls back to LOOM_PLATFORM_CHAT_URL."""
-    return (
-        (os.environ.get('LOOM_WA_INBOUND_NOTIFY_URL') or '').strip()
-        or (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
-    )
+    """Loom runtime webhook when Gateway forwards inbound to Loom HTTP."""
+    return explicit_loom_inbound_notify_url()
 
 
 def wa_loom_runtime_notify_configured() -> bool:
@@ -105,16 +107,25 @@ def _auth_headers() -> dict:
     return headers
 
 
-def _should_relay_loom_reply_to_whatsapp(*, loom_already_sent: bool = False) -> bool:
+def _should_relay_loom_reply_to_whatsapp(
+    *,
+    loom_already_sent: bool = False,
+    runtime_inbound: bool = False,
+) -> bool:
     """
-    Gateway-only: Loom returns reply_zh but does not send → relay (default when loom_already_sent=false).
-    Wakka→Loom Turn: response may set whatsapp_sent → do not relay unless LOOM_WA_RELAY_WHATSAPP_REPLY=true.
+    Sign House sends Loom reply_zh via Wakka when relay is allowed.
+    runtime_inbound (Gateway→LOOM_WA_INBOUND_NOTIFY_URL): default relay only if notify URL set.
+    Agent platform HTTP (runtime_inbound=false): default relay unless Loom set whatsapp_sent.
     """
     raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip().lower()
     if loom_already_sent:
         return raw in ('1', 'true', 'yes', 'on', 'force')
     if raw in ('0', 'false', 'no', 'off'):
         return False
+    if raw in ('1', 'true', 'yes', 'on'):
+        return True
+    if runtime_inbound:
+        return bool(explicit_loom_inbound_notify_url())
     return True
 
 
@@ -362,6 +373,7 @@ def _process_loom_chat_response(
     ctx: Dict[str, Any],
     *,
     meta: Optional[Dict[str, Any]] = None,
+    runtime_inbound: bool = False,
 ) -> Optional[str]:
     if isinstance(body, str):
         try:
@@ -406,12 +418,18 @@ def _process_loom_chat_response(
             from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
 
             mark_pool_classify_reply(pool_ids, reply)
-        if not _should_relay_loom_reply_to_whatsapp(loom_already_sent=wa_sent):
+        if not _should_relay_loom_reply_to_whatsapp(
+            loom_already_sent=wa_sent,
+            runtime_inbound=runtime_inbound,
+        ):
             return None
         return reply
 
     if actions:
-        if not _should_relay_loom_reply_to_whatsapp(loom_already_sent=wa_sent):
+        if not _should_relay_loom_reply_to_whatsapp(
+            loom_already_sent=wa_sent,
+            runtime_inbound=runtime_inbound,
+        ):
             return None
         return '已依 Loom 指示處理歸類，請稍候確認訊息。'
     return None
@@ -443,7 +461,12 @@ def _post_loom_chat_turn(
             return None
         return None if loom_platform_fallback_local() else 'Loom 歸類服務暫不可用。'
 
-    reply = _process_loom_chat_response(body, ctx, meta=meta)
+    reply = _process_loom_chat_response(
+        body,
+        ctx,
+        meta=meta,
+        runtime_inbound=runtime_inbound,
+    )
     if reply:
         return reply
     if runtime_inbound:

@@ -89,6 +89,24 @@ def tool_catalog_for_prompt() -> str:
     return '\n'.join(lines)
 
 
+def _loom_brain_block_direct_wa_send(tool_name: str) -> str | None:
+    if tool_name not in ('wa_send_message', 'wa_send_group_message', 'wa_send_media'):
+        return None
+    import os
+
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+    if not wa_loom_runtime_brain_enabled():
+        return None
+    raw = (os.environ.get('LOOMY_WA_MCP_BLOCK_DIRECT_SEND') or 'true').strip().lower()
+    if raw in ('0', 'false', 'no', 'off'):
+        return None
+    return (
+        f'Error: brain=loom — do not use {tool_name}; put worker text in Loom Turn reply '
+        '(wa_assign notify_whatsapp is OK). Override: LOOMY_WA_MCP_BLOCK_DIRECT_SEND=false'
+    )
+
+
 def execute_tool(
     name: str,
     arguments: dict[str, Any],
@@ -96,6 +114,9 @@ def execute_tool(
 ) -> str:
     if not is_tool_allowed(name):
         return f'Error: tool {name} is not allowed on WhatsApp worker channel.'
+    blocked = _loom_brain_block_direct_wa_send(name)
+    if blocked:
+        return blocked
     args = arguments if isinstance(arguments, dict) else {}
     from mcp_wa.wa_tool_inprocess import can_run_inprocess, execute_tool_inprocess
 
@@ -333,6 +354,8 @@ def _exec_wa_set_site_remark_txt(c: SignHouseClient, a: dict) -> str:
         body['filename'] = fname
     if a.get('create_if_missing') or a.get('createIfMissing'):
         body['createIfMissing'] = True
+    if a.get('delete_file') or a.get('deleteFile'):
+        body['deleteFile'] = True
     return json_result(c.post('/wa/image-pool/site-remark/content', json_body=body))
 
 
@@ -514,8 +537,8 @@ TOOL_SPECS: List[dict] = [
     },
     {
         'name': 'wa_set_site_remark_txt',
-        'description': 'Replace entire day remark .txt; empty content deletes file (clear placeholder).',
-        'args_hint': '{project_code, content, day, filename, nas_folder_name, nas_parent_bucket, create_if_missing}',
+        'description': 'Replace entire day remark .txt; empty content clears body but keeps file. delete_file=true removes file.',
+        'args_hint': '{project_code, content, day, filename, nas_folder_name, nas_parent_bucket, create_if_missing, delete_file}',
     },
     {
         'name': 'wa_delete_site_remark_txt',

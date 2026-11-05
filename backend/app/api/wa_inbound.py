@@ -774,6 +774,67 @@ def _save_media_buffer(data, msg_type):
     return f'/uploads/wa-media/{fname}'
 
 
+@wa_inbound_bp.route('/brain/status', methods=['GET'])
+def wa_brain_status():
+    """Ops: which WA brain is active and common double-reply misconfig flags."""
+    import os
+
+    from app.services.loomy_loom_platform_bridge import (
+        explicit_loom_inbound_notify_url,
+        loom_platform_all_turns_enabled,
+        wa_loom_platform_classify_enabled,
+    )
+    from app.services.wa_classify_mode import (
+        classify_mode,
+        wa_loom_runtime_brain_enabled,
+        wa_loomy_agent_enabled,
+    )
+
+    gateway_on = os.environ.get('SIGNHOUSE_WA_GATEWAY', 'true').strip().lower() not in (
+        '0',
+        'false',
+        'no',
+        'off',
+    )
+    notify_url = bool(explicit_loom_inbound_notify_url())
+    platform_chat = bool((os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip())
+    relay_raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip()
+    hints: list[str] = []
+    if wa_loomy_agent_enabled():
+        hints.append('brain=agent: Sign House local Ollama may send WA (not Loom-only).')
+    if gateway_on and notify_url:
+        hints.append(
+            'Gateway + LOOM_WA_INBOUND_NOTIFY_URL: ensure Wakka does NOT also push the same session to Loom Turn.',
+        )
+    if gateway_on and not notify_url:
+        hints.append(
+            'Gateway without notify URL: expect loom_runtime_deferred; replies should come only from Loom Turn (+ MCP).',
+        )
+    if platform_chat and not notify_url:
+        hints.append('LOOM_PLATFORM_CHAT_URL alone does not trigger Gateway→Loom push (avoids accidental double POST).')
+    if wa_loom_runtime_brain_enabled() and wa_loom_platform_classify_enabled():
+        hints.append(
+            'LOOMY_WA_LOOM_PLATFORM_CLASSIFY is for agent-mode bridge; with brain=loom it should stay off.',
+        )
+    if loom_platform_all_turns_enabled():
+        hints.append('LOOMY_WA_LOOM_PLATFORM_ALL_TURNS routes extra HTTP turns — risk of duplicate with Loom Turn.')
+    return jsonify({
+        'brain': classify_mode(),
+        'localAgentEnabled': wa_loomy_agent_enabled(),
+        'loomRuntimeBrain': wa_loom_runtime_brain_enabled(),
+        'signhouseWaGatewayExpected': gateway_on,
+        'loomInboundNotifyUrlConfigured': notify_url,
+        'loomPlatformChatUrlConfigured': platform_chat,
+        'loomPlatformClassifyBridge': wa_loom_platform_classify_enabled(),
+        'loomPlatformAllTurns': loom_platform_all_turns_enabled(),
+        'relayWhatsappReplyEnv': relay_raw or None,
+        'mcpBlockDirectSendInLoomMode': os.environ.get(
+            'LOOMY_WA_MCP_BLOCK_DIRECT_SEND', 'true',
+        ).strip().lower() not in ('0', 'false', 'no', 'off'),
+        'duplicateReplyHints': hints,
+    })
+
+
 @wa_inbound_bp.route('/inbound', methods=['POST'])
 def handle_inbound():
     """Receive messages from the Gateway process. Authenticated by shared secret."""
@@ -817,8 +878,21 @@ def handle_inbound():
 
     try:
         if is_group and group_id:
-            return _handle_group(data, sender, from_name, group_id, sender_jid=sender_jid)
-        return _handle_private(data, sender, from_name, text, photos, has_media)
+            resp = _handle_group(data, sender, from_name, group_id, sender_jid=sender_jid)
+        else:
+            resp = _handle_private(data, sender, from_name, text, photos, has_media)
+        try:
+            body = resp.get_json(silent=True) if resp else None
+            if isinstance(body, dict):
+                logger.info(
+                    '[Inbound] msg=%s is_group=%s handled_type=%s',
+                    data.get('messageId'),
+                    is_group,
+                    body.get('type'),
+                )
+        except Exception:
+            pass
+        return resp
     except Exception as e:
         logger.exception('[Inbound] Unhandled error')
         return jsonify({'handled': True, 'type': 'error', 'error': str(e)})
