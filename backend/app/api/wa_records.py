@@ -163,28 +163,22 @@ def move_record_project(record_id):
     if isinstance(relocate_nas, str):
         relocate_nas = relocate_nas.strip().lower() not in ('0', 'false', 'no')
 
-    project = None
-    if project_id:
-        project = mongo.db.wa_projects.find_one({'_id': ObjectId(project_id)})
-    elif target_code:
-        import re
+    from app.services.image_pool_service import move_record_to_project, resolve_wa_move_target_project
 
-        project = mongo.db.wa_projects.find_one({
-            'code': {'$regex': f'^{re.escape(target_code.strip())}$', '$options': 'i'},
-            'status': 'active',
-        })
+    source_record = mongo.db.wa_records.find_one({'_id': ObjectId(record_id)})
+    nas_folder = (data.get('nasFolderName') or data.get('nas_folder_name') or '').strip()
+    nas_bucket = (data.get('nasParentBucket') or data.get('nas_parent_bucket') or '').strip()
+    project = resolve_wa_move_target_project(
+        project_id=project_id,
+        target_code=target_code,
+        nas_folder_name=nas_folder or None,
+        nas_parent_bucket=nas_bucket or None,
+        source_record=source_record,
+    )
     if not project:
         return jsonify({'error': 'Target project not found'}), 404
 
     proj = dict(project)
-    nas_folder = (data.get('nasFolderName') or '').strip()
-    nas_bucket = (data.get('nasParentBucket') or '').strip()
-    if nas_folder:
-        proj['nasFolderName'] = nas_folder
-    if nas_bucket:
-        proj['nasParentBucket'] = nas_bucket
-
-    from app.services.image_pool_service import move_record_to_project
 
     ref = (data.get('recordReference') or record_id or '').strip()
     try:

@@ -680,6 +680,18 @@ class NasMountService:
             return None
         return str(day_dir)
 
+    @staticmethod
+    def _same_file_bytes(path_a, path_b, *, max_bytes=32 * 1024 * 1024) -> bool:
+        try:
+            if os.path.getsize(path_a) != os.path.getsize(path_b):
+                return False
+            if os.path.getsize(path_a) > max_bytes:
+                return os.path.normpath(path_a) == os.path.normpath(path_b)
+            with open(path_a, 'rb') as fa, open(path_b, 'rb') as fb:
+                return fa.read() == fb.read()
+        except OSError:
+            return False
+
     def copy_file_to_project(
         self,
         local_file_path,
@@ -688,6 +700,7 @@ class NasMountService:
         day_str=None,
         preferred_folder_name=None,
         preferred_parent_bucket=None,
+        existing_nas_path=None,
     ):
         """Copy a local file into Photo/YYYY-MM-DD under the project folder."""
         if not self.is_available():
@@ -704,8 +717,19 @@ class NasMountService:
 
         filename = os.path.basename(local_file_path)
         dest = os.path.join(day_dir, filename)
+        prior = (existing_nas_path or '').strip()
 
         if os.path.exists(dest):
+            try:
+                if os.path.samefile(local_file_path, dest):
+                    return {'ok': True, 'path': dest, 'deduped': 'samefile'}
+            except OSError:
+                pass
+            if prior and os.path.normpath(prior) == os.path.normpath(dest):
+                return {'ok': True, 'path': dest, 'deduped': 'relocate_same_path'}
+            if self._same_file_bytes(local_file_path, dest):
+                logger.info('[NAS] Skip duplicate copy (identical): %s', dest)
+                return {'ok': True, 'path': dest, 'deduped': 'identical'}
             base, ext = os.path.splitext(filename)
             dest = os.path.join(day_dir, f'{base}_{int(time.time())}{ext}')
 

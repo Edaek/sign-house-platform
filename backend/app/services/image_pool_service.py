@@ -762,10 +762,38 @@ def assign_images_to_project(
         def _bg_nas():
             with _app.app_context():
                 try:
+                    from app.services.nas_watcher_service import nas_mount
+
+                    target_day_dir = None
+                    if _use_local:
+                        target_day_dir = nas_mount.ensure_photo_day_dir(
+                            _project_code,
+                            _assign_day,
+                            preferred_folder_name=_pref_folder,
+                            preferred_parent_bucket=_pref_bucket,
+                        )
                     nas_photos = []
+                    kept_nas_paths = set()
                     expected = len(_images)
                     for img in _images:
                         if _use_local:
+                            existing_nas = (img.get('nasPath') or '').strip()
+                            if (
+                                existing_nas
+                                and target_day_dir
+                                and os.path.isfile(existing_nas)
+                                and _nas_path_under_dir(existing_nas, target_day_dir)
+                            ):
+                                nas_photos.append(existing_nas)
+                                kept_nas_paths.add(os.path.normpath(existing_nas))
+                                mongo.db.pool_images.update_one(
+                                    {'_id': img['_id']},
+                                    {'$set': {
+                                        'nasPath': existing_nas,
+                                        'nasSyncStatus': 'synced',
+                                    }},
+                                )
+                                continue
                             local_file = _ensure_pool_image_file(img, _media_dir)
                             if not local_file:
                                 logger.warning(
@@ -787,12 +815,16 @@ def assign_images_to_project(
                                 day_str=_assign_day,
                                 preferred_folder_name=_pref_folder,
                                 preferred_parent_bucket=_pref_bucket,
+                                existing_nas_path=existing_nas or None,
                             )
                             if r.get('ok'):
-                                nas_photos.append(r['path'])
+                                out_path = r['path']
+                                nas_photos.append(out_path)
+                                if r.get('deduped'):
+                                    kept_nas_paths.add(os.path.normpath(out_path))
                                 mongo.db.pool_images.update_one(
                                     {'_id': img['_id']},
-                                    {'$set': {'nasPath': r['path'], 'nasSyncStatus': 'synced'}},
+                                    {'$set': {'nasPath': out_path, 'nasSyncStatus': 'synced'}},
                                 )
                             else:
                                 mongo.db.pool_images.update_one(
@@ -884,6 +916,10 @@ def assign_images_to_project(
                             p for p in _nas_delete_after
                             if p and not str(p).lower().endswith('.txt')
                         ]
+                        photo_only = [
+                            p for p in photo_only
+                            if os.path.normpath(p) not in kept_nas_paths
+                        ]
                         removed = delete_nas_paths(photo_only)
                         if removed:
                             logger.info(
@@ -932,6 +968,13 @@ def assign_images_to_project(
     _schedule_record_extraction(record_id)
 
     return len(images)
+
+
+def _nas_path_under_dir(nas_path: str, parent_dir: str) -> bool:
+    if not nas_path or not parent_dir:
+        return False
+    root = os.path.normpath(parent_dir)
+    return os.path.normpath(nas_path).startswith(root + os.sep)
 
 
 def _schedule_record_extraction(record_id):
@@ -1036,6 +1079,28 @@ def move_images_to_project(
             old_records_for_remark, nas_paths_to_remove,
         )
 
+        from app.services.nas_site_remark_service import assign_photo_day_hk
+        from app.services.nas_watcher_service import nas_mount
+
+        move_day = assign_photo_day_hk(images)
+        pref_fn = (new_project.get('nasFolderName') or '').strip() or None
+        pref_pb = (new_project.get('nasParentBucket') or '').strip() or None
+        target_day = None
+        if nas_mount.is_available():
+            target_day = nas_mount.ensure_photo_day_dir(
+                new_project['code'],
+                move_day,
+                preferred_folder_name=pref_fn,
+                preferred_parent_bucket=pref_pb,
+            )
+        if target_day:
+            filtered = []
+            for p in nas_paths_to_remove:
+                if _nas_path_under_dir(p, target_day):
+                    continue
+                filtered.append(p)
+            nas_paths_to_remove = filtered
+
     errors = []
     now = wa_now()
 
@@ -1115,6 +1180,71 @@ def move_images_to_project(
     }
 
 
+def resolve_wa_move_target_project(
+    *,
+    project_id=None,
+    target_code=None,
+    nas_folder_name=None,
+    nas_parent_bucket=None,
+    source_record=None,
+):
+    """Pick the correct wa_projects row when code collides (stub PJ-xxxx vs long NAS folder name)."""
+    from app.services.project_number_match_service import is_wa_classify_target
+    from app.services.wa_project_validation import find_project_by_nas_folder
+
+    pid = (project_id or '').strip()
+    if pid and ObjectId.is_valid(pid):
+        doc = mongo.db.wa_projects.find_one({'_id': ObjectId(pid), 'status': 'active'})
+        return dict(doc) if doc else None
+
+    fn = (nas_folder_name or '').strip()
+    pb = (nas_parent_bucket or '').strip() or None
+    if fn:
+        hit = find_project_by_nas_folder(fn, parent_bucket=pb)
+        return dict(hit) if hit else None
+
+    code = (target_code or '').strip()
+    if not code:
+        return None
+
+    hits = list(mongo.db.wa_projects.find({
+        'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'},
+        'status': 'active',
+    }))
+    hits = [dict(h) for h in hits if is_wa_classify_target(h)]
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+
+    src_proj = None
+    if source_record and source_record.get('projectId'):
+        src_proj = mongo.db.wa_projects.find_one({'_id': source_record['projectId']})
+    if src_proj:
+        sfn = (src_proj.get('nasFolderName') or '').strip()
+        spb = (src_proj.get('nasParentBucket') or '').strip()
+        for h in hits:
+            if (
+                (h.get('nasFolderName') or '').strip() == sfn
+                and (h.get('nasParentBucket') or '').strip() == spb
+            ):
+                return h
+        for h in hits:
+            if str(h.get('_id')) == str(src_proj.get('_id')):
+                return h
+
+    def _score(p):
+        fn_len = len((p.get('nasFolderName') or '').strip())
+        rec_n = mongo.db.wa_records.count_documents({
+            'projectId': p['_id'],
+            'status': {'$ne': 'voided'},
+        })
+        return (rec_n, fn_len)
+
+    hits.sort(key=_score, reverse=True)
+    return hits[0]
+
+
 def move_record_to_project(
     record_ref,
     new_project,
@@ -1139,6 +1269,14 @@ def move_record_to_project(
 
     if not new_project or not is_wa_classify_target(new_project):
         return {'moved': 0, 'errors': ['目標專案無效或不可歸類'], 'newRecordId': None}
+
+    if record.get('projectId') and str(record['projectId']) == str(new_project.get('_id')):
+        return {
+            'moved': 0,
+            'errors': ['紀錄已在目標專案，無需搬移'],
+            'newRecordId': str(record['_id']),
+            'alreadyOnTarget': True,
+        }
 
     images = list(mongo.db.pool_images.find({'recordId': record['_id']}))
     if not images:
