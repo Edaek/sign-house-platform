@@ -203,6 +203,6 @@ def log_loom_runtime_notify_on_startup() -> None:
         logger.warning(
             '[LoomNotify] Gateway on but no Loom inbound URL — text/caption replies are deferred '
             '(Pool intake OK). Set LOOM_WA_INBOUND_NOTIFY_URL (+ BEARER), or LOOM_PLATFORM_CHAT_URL '
-            'with LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK=true (default). '
+            'with LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK=true. '
             'Then disable Loom Wakka inbound on the same number to avoid double bubbles.',
         )

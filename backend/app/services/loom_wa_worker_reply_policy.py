@@ -120,6 +120,7 @@ def build_worker_whatsapp_policy(
     group_id: Optional[str] = None,
     list_pool_just_called: bool = False,
     duplicate_inbound_turn: bool = False,
+    inbound_message_id: Optional[str] = None,
 ) -> dict[str, Any]:
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
 
@@ -146,14 +147,15 @@ def build_worker_whatsapp_policy(
         allow = bool(list_at)
         reason = 'list_pool_required' if not allow else 'list_pool_done'
 
-    instruction = (
-        'Call wa_list_pool_images (or wa_inbound_reply_policy) BEFORE any worker WhatsApp. '
-        'Do NOT send interim lines like「收到」「我去 pool 睇下」— the image is already in Media Pool if Gateway ran. '
-        'When allowWorkerWhatsAppNow is true, send exactly ONE 繁中 message with the result.'
-    )
     if duplicate_inbound_turn:
         instruction = (
             'duplicateInboundTurn — parallel duplicate on the SAME inbound message only; SILENCE.'
+        )
+    elif open_pool <= 0:
+        instruction = (
+            'Run wa_* MCP first (status/pool/projects as needed). '
+            'Then send exactly ONE 繁中 WhatsApp — merge all facts into one message. '
+            'Never send a short summary and then a second longer status bubble in the same turn.'
         )
     elif allow:
         instruction = (
@@ -166,10 +168,27 @@ def build_worker_whatsapp_policy(
             'Do not send WhatsApp BEFORE wa_list_pool_images in THIS turn. '
             'After MCP (list/assign), send exactly ONE 繁中 reply — never interim「我去 pool 睇下」.'
         )
+    else:
+        instruction = (
+            'Call wa_list_pool_images (or wa_inbound_reply_policy) BEFORE any worker WhatsApp. '
+            'When allowWorkerWhatsAppNow is true, send exactly ONE 繁中 message with the result.'
+        )
+
+    mid = (inbound_message_id or '').strip()
+    missing_mid = not mid
+    if missing_mid:
+        instruction += (
+            ' Pass inbound_message_id=本輪工人 WhatsApp message id on every MCP call this turn '
+            '(prevents parallel duplicate bubbles).'
+        )
 
     return {
         'workerWhatsAppPolicy': {
             'maxMessagesPerInbound': 1,
+            'maxWhatsAppMessagesThisTurn': 1,
+            'replySequence': 'all_mcp_tools_first_then_one_whatsapp_last',
+            'forbidSecondBubbleSameTurn': True,
+            'missingInboundMessageId': missing_mid,
             'allowWorkerWhatsAppNow': allow,
             'forbidInterimBeforeMcp': True,
             'poolAlreadyInMediaPool': bool(pool_intake_at),
@@ -184,6 +203,7 @@ def build_worker_whatsapp_policy(
                 '正在查 pool',
             ],
             'instruction': instruction,
+            'inboundMessageIdRequired': True,
             'notifyUrlNotRequired': True,
             'architectureNote': (
                 'Wakka→Loom Turn + Sign House Gateway for pool only is supported; '

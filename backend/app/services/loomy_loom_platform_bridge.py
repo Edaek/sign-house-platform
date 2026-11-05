@@ -83,8 +83,8 @@ def explicit_loom_inbound_notify_url() -> str:
 
 
 def _platform_chat_notify_fallback_allowed() -> bool:
-    raw = (os.environ.get('LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK') or 'true').strip().lower()
-    return raw not in ('0', 'false', 'no', 'off')
+    raw = (os.environ.get('LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK') or 'false').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
 
 
 def loom_inbound_notify_url() -> str:
@@ -98,9 +98,10 @@ def loom_inbound_notify_url() -> str:
 
 
 def wa_loom_runtime_notify_configured() -> bool:
+    """Only explicit LOOM_WA_INBOUND_NOTIFY_URL — not platform chat fallback (avoids Loom Turn + HTTP double)."""
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
 
-    return wa_loom_runtime_brain_enabled() and bool(loom_inbound_notify_url())
+    return wa_loom_runtime_brain_enabled() and bool(explicit_loom_inbound_notify_url())
 
 
 def _auth_headers() -> dict:
@@ -130,7 +131,6 @@ def _should_relay_loom_reply_to_whatsapp(
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
 
     raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip().lower()
-    notify_only = runtime_inbound and bool(loom_inbound_notify_url())
     if loom_already_sent:
         return raw in ('1', 'true', 'yes', 'on', 'force')
     if raw in ('0', 'false', 'no', 'off'):
@@ -138,8 +138,6 @@ def _should_relay_loom_reply_to_whatsapp(
     if raw in ('1', 'true', 'yes', 'on'):
         return True
     if wa_loom_runtime_brain_enabled():
-        if notify_only:
-            return True
         return False
     if runtime_inbound:
         return bool(loom_inbound_notify_url())

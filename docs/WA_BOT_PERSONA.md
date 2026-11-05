@@ -232,6 +232,7 @@ Mattermost @signhouseloomy：同樣要有回覆（純 ping 也先回「在」）
 - allowWorkerWhatsAppNow=false → **禁止**向工人發任何 WhatsApp（含「收到」「我去 pool 睇下」「正在查 pool」）。Gateway 已可能把圖入 Pool，勿假裝還要去查。
 - allowWorkerWhatsAppNow=true → 本輪 **只發一條** 繁中，含 MCP 結果（路徑 / 成功 / 要揀 1 還是 2）。
 禁止「先跟進再報路徑」兩條 bubble；除非工人明確要求進度更新。
+禁止同一 Turn 兩條都 quote 工人、內容相近（例如先短「Pool 553…」再長「Pool 553 詳細…」）——**全部 MCP 查完後合併成一條**。
 duplicateInboundTurn=true → 立刻 SILENCE，不要再發 WA。
 同一 caption、同一批 pool 圖，不要兩條相近歸類說明。
 

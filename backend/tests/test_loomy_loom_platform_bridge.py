@@ -25,8 +25,9 @@ class LoomPlatformBridgeTests(unittest.TestCase):
 
     @patch.dict(os.environ, {
         'LOOM_PLATFORM_CHAT_URL': 'http://loom.test/chat',
+        'LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK': 'true',
     }, clear=False)
-    def test_runtime_notify_url_uses_platform_chat_fallback_by_default(self):
+    def test_runtime_notify_url_uses_platform_chat_when_fallback_on(self):
         os.environ.pop('LOOM_WA_INBOUND_NOTIFY_URL', None)
         self.assertEqual(loom_inbound_notify_url(), 'http://loom.test/chat')
 
@@ -50,20 +51,20 @@ class LoomPlatformBridgeTests(unittest.TestCase):
         self.assertFalse(_should_relay_loom_reply_to_whatsapp(runtime_inbound=True))
 
     @patch('app.services.wa_classify_mode.wa_loom_runtime_brain_enabled', return_value=True)
-    def test_loom_brain_relays_notify_http_reply_by_default(self, _mock_loom):
+    def test_loom_brain_never_relays_without_opt_in(self, _mock_loom):
         os.environ.pop('LOOM_WA_RELAY_WHATSAPP_REPLY', None)
         with patch.dict(os.environ, {'LOOM_WA_INBOUND_NOTIFY_URL': 'http://loom.test/inbound'}):
-            self.assertTrue(
+            self.assertFalse(
                 _should_relay_loom_reply_to_whatsapp(runtime_inbound=True, loom_already_sent=False),
             )
 
     @patch('app.services.wa_classify_mode.wa_loom_runtime_brain_enabled', return_value=True)
-    def test_loom_brain_notify_relay_opt_out(self, _mock_loom):
+    def test_loom_brain_relay_opt_in_only(self, _mock_loom):
         with patch.dict(os.environ, {
             'LOOM_WA_INBOUND_NOTIFY_URL': 'http://loom.test/inbound',
-            'LOOM_WA_RELAY_WHATSAPP_REPLY': 'false',
+            'LOOM_WA_RELAY_WHATSAPP_REPLY': 'true',
         }):
-            self.assertFalse(_should_relay_loom_reply_to_whatsapp(runtime_inbound=True))
+            self.assertTrue(_should_relay_loom_reply_to_whatsapp(runtime_inbound=True))
 
     def test_classify_turn_with_pool(self):
         self.assertTrue(is_pool_classify_turn({'pool_ids': ['abc'], 'user_text': ''}))

@@ -727,6 +727,7 @@ def wa_loom_worker_reply_policy():
         phone=phone,
         group_id=group_id,
         duplicate_inbound_turn=bool(claim.get('duplicateInboundTurn')),
+        inbound_message_id=inbound_mid or None,
     )
     if inbound_mid:
         payload.update(claim)
@@ -739,9 +740,11 @@ def wa_brain_status():
     import os
 
     from app.services.loomy_loom_platform_bridge import (
+        _platform_chat_notify_fallback_allowed,
         explicit_loom_inbound_notify_url,
         loom_inbound_notify_url,
         loom_platform_all_turns_enabled,
+        wa_loom_runtime_notify_configured,
         wa_loom_platform_classify_enabled,
     )
     from app.services.wa_classify_mode import (
@@ -759,10 +762,13 @@ def wa_brain_status():
         'no',
         'off',
     )
-    notify_url = bool(loom_inbound_notify_url())
     notify_explicit = bool(explicit_loom_inbound_notify_url())
+    notify_schedules = wa_loom_runtime_notify_configured()
+    notify_resolved_url = bool(loom_inbound_notify_url())
     platform_chat = bool((os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip())
+    platform_fallback = _platform_chat_notify_fallback_allowed()
     relay_raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip()
+    relay_on = relay_raw.lower() in ('1', 'true', 'yes', 'on')
     hints: list[str] = []
     if wa_loomy_agent_enabled():
         hints.append('brain=agent: Sign House local Ollama may send WA (not Loom-only).')
@@ -771,42 +777,33 @@ def wa_brain_status():
             'brain=loom: Sign House will not send or relay WhatsApp (Loom Turn + MCP only; '
             'relay only if LOOM_WA_RELAY_WHATSAPP_REPLY=true).',
         )
-    if gateway_on and notify_url:
+    if gateway_on and notify_schedules:
         hints.append(
-            'Gateway + LOOM_WA_INBOUND_NOTIFY_URL: ensure Wakka does NOT also push the same session to Loom Turn.',
+            'Gateway POSTs Loom HTTP (LOOM_WA_INBOUND_NOTIFY_URL): disable Loom Wakka inbound on the same number '
+            'or you get two Turns per message.',
+        )
+    if platform_chat and platform_fallback and not notify_explicit:
+        hints.append(
+            'LOOM_WA_INBOUND_NOTIFY_ALLOW_PLATFORM_FALLBACK + LOOM_PLATFORM_CHAT_URL can POST Gateway→Loom HTTP '
+            'while Loom Turn also runs — high double-bubble risk.',
         )
     double_reply_risk = 'low'
-    if (
-        wa_loom_runtime_brain_enabled()
-        and gateway_on
-        and not notify_url
-    ):
+    if wa_loomy_agent_enabled() or signhouse_whatsapp_outbound_allowed():
         double_reply_risk = 'high'
+    elif relay_on and notify_schedules:
+        double_reply_risk = 'high'
+    elif notify_schedules and gateway_on:
+        double_reply_risk = 'high'
+    elif platform_chat and platform_fallback and gateway_on and wa_loom_runtime_brain_enabled():
+        double_reply_risk = 'high'
+    elif wa_loom_platform_classify_enabled() or loom_platform_all_turns_enabled():
+        double_reply_risk = 'high'
+    if gateway_on and not notify_schedules and wa_loom_runtime_brain_enabled():
         hints.append(
-            'CRITICAL (Pool + Gateway): LOOM_WA_INBOUND_NOTIFY_URL unset — Sign House will NOT '
-            'POST text to Loom. If Wakka also pushes the same number to Loom Turn (NOps Wakka), '
-            'each message can produce duplicate ~Axilogy bubbles. Fix: (1) Wakka→Gateway only, '
-            '(2) set LOOM_WA_INBOUND_NOTIFY_URL + BEARER, (3) disable Loom direct Wakka inbound, '
-            '(4) LOOM_WA_RELAY_WHATSAPP_REPLY=false.',
+            'Expected Demo: Gateway pool only + Wakka→Loom Turn. Sign House does NOT forward text and does NOT '
+            'send WhatsApp in brain=loom. If workers still see two bubbles, grep Mini logs for '
+            '[Wakka] Sign House → (must be 0) and check NOps Turn outbound count (must be 1).',
         )
-    elif gateway_on and not notify_url:
-        hints.append(
-            'Gateway without LOOM_WA_INBOUND_NOTIFY_URL: Pool intake OK; text→loom_runtime_deferred. '
-            'For Loom-only replies: SIGNHOUSE_WA_GATEWAY=false + Wakka→Loom Turn only, or set notify URL '
-            'with LOOM_WA_RELAY_WHATSAPP_REPLY=false (default in brain=loom).',
-        )
-    if double_reply_risk == 'high':
-        hints.append(
-            'Also stop sign-house-v3-mcp Gateway on the same WAKKA_API_KEY; one reply per turn in Loom Persona '
-            '(no interim「收到正在做」before MCP).',
-        )
-    elif gateway_on and not notify_url:
-        hints.append(
-            'WhatsApp double bubbles (收到→搞定): stop Sign House relay + second Wakka consumer; '
-            'Loom Persona: one reply after MCP (no interim「收到正在做」).',
-        )
-    if platform_chat and not notify_url:
-        hints.append('LOOM_PLATFORM_CHAT_URL alone does not trigger Gateway→Loom push (avoids accidental double POST).')
     if wa_loom_runtime_brain_enabled() and wa_loom_platform_classify_enabled():
         hints.append(
             'LOOMY_WA_LOOM_PLATFORM_CLASSIFY is for agent-mode bridge; with brain=loom it should stay off.',
@@ -827,9 +824,11 @@ def wa_brain_status():
         'signhouseExecutesLoomHttpActions': signhouse_executes_loom_http_actions(),
         'loomMcpInProcessTools': inprocess,
         'signhouseWaGatewayExpected': gateway_on,
-        'loomInboundNotifyUrlConfigured': notify_url,
+        'loomInboundNotifyUrlConfigured': notify_schedules,
         'loomInboundNotifyExplicit': notify_explicit,
-        'textInboundForwardsToLoom': notify_url,
+        'loomInboundNotifyResolvedUrl': notify_resolved_url,
+        'loomPlatformChatFallbackAllowed': platform_fallback,
+        'textInboundForwardsToLoom': notify_schedules,
         'loomPlatformChatUrlConfigured': platform_chat,
         'loomPlatformClassifyBridge': wa_loom_platform_classify_enabled(),
         'loomPlatformAllTurns': loom_platform_all_turns_enabled(),
@@ -847,6 +846,22 @@ def wa_brain_status():
             'LOOM_WA_RELAY_WHATSAPP_REPLY=false; Loom Persona: one WA bubble after MCP',
         ],
         'duplicateReplyHints': hints,
+        'doubleReplyAudit': {
+            'signHouseCanSendWhatsapp': signhouse_whatsapp_outbound_allowed(),
+            'signHouseRelayEnabled': relay_on,
+            'gatewaySchedulesLoomHttpPost': notify_schedules,
+            'mcpWaSendBlockedInLoomMode': os.environ.get(
+                'LOOMY_WA_MCP_BLOCK_DIRECT_SEND', 'true',
+            ).strip().lower() not in ('0', 'false', 'no', 'off'),
+            'assignNotifyWhatsappDisabledInLoom': wa_loom_runtime_brain_enabled(),
+            'ifTwoBubblesSameTimestamp': [
+                'Mini backend log: must NOT contain [Wakka] Sign House → (loom blocks all outbound)',
+                'Mini backend log: [LoomNotify] Sent WA reply only if LOOM_WA_INBOUND_NOTIFY_URL is set',
+                'NOps Turn: 1 inbound → must be 1 WhatsApp outbound; if 2, Loom channel sent twice (streaming/MCP)',
+                'Loom Persona: inbound_message_id on wa_inbound_reply_policy / wa_list_pool_images each turn',
+                'Same-turn short+long status = merge to ONE message after all MCP tools',
+            ],
+        },
     })
 
 
