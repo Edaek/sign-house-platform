@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 from datetime import datetime
+from app.services.wa_time import wa_now
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -33,11 +34,18 @@ def _send_wa(phone: str, group_id: Optional[str], text: str, *, quoted_msg_id: O
 
 
 def _run_notify_sync(ctx: Dict[str, Any]) -> None:
-    from app.services.loomy_loom_platform_bridge import try_loom_inbound_turn
+    from app.services.loomy_loom_platform_bridge import (
+        loom_turn_whatsapp_already_sent,
+        try_loom_inbound_turn,
+    )
 
     phone = (ctx.get('phone') or '').strip()
     group_id = (ctx.get('group_id') or '').strip() or None
-    reply = try_loom_inbound_turn(ctx)
+    meta: Dict[str, Any] = {}
+    reply = try_loom_inbound_turn(ctx, meta=meta)
+    if loom_turn_whatsapp_already_sent(meta) and not reply:
+        logger.info('[LoomNotify] Loom already sent WhatsApp — skip relay for %s', _task_key(phone=phone, group_id=group_id))
+        return
     if reply:
         _send_wa(
             phone,
@@ -100,7 +108,7 @@ def schedule_loom_runtime_inbound(
                 'sender_name': sender_name,
                 'quoted_msg_id': quoted_msg_id or '',
                 'has_quoted': has_quoted,
-                'at': datetime.utcnow(),
+                'at': wa_now(),
             }
             _pending[key] = entry
         if user_text.strip():

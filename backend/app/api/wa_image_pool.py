@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from bson import ObjectId
 from datetime import datetime
+from app.services.wa_time import wa_now
 from app import mongo
 from app.models import serialize_doc
 from app.utils.permissions import require_role
@@ -225,6 +226,102 @@ def rename_site_remark():
     return jsonify(result)
 
 
+def _site_remark_common_params(data: dict) -> dict:
+    return {
+        'project_code': (data.get('projectCode') or data.get('project_code') or '').strip(),
+        'day_str': (data.get('day') or '').strip() or None,
+        'preferred_folder_name': (data.get('nasFolderName') or '').strip() or None,
+        'preferred_parent_bucket': (data.get('nasParentBucket') or '').strip() or None,
+        'filename': (data.get('filename') or data.get('remarkFilename') or data.get('fileName') or '').strip() or None,
+    }
+
+
+@wa_image_pool_bp.route('/site-remark/read', methods=['GET', 'POST'])
+@jwt_required()
+def read_site_remark():
+    """Read NAS day remark .txt (view). POST/GET with projectCode, optional day, filename, listAll."""
+    if request.method == 'GET':
+        data = request.args.to_dict()
+    else:
+        data = request.get_json() or {}
+    params = _site_remark_common_params(data)
+    if not params['project_code']:
+        return jsonify({'error': 'projectCode required'}), 400
+
+    from app.services.nas_site_remark_service import read_site_remark_txt
+
+    list_all = bool(data.get('listAll') or data.get('list_all'))
+    result = read_site_remark_txt(
+        params['project_code'],
+        day_str=params['day_str'],
+        filename=params['filename'],
+        preferred_folder_name=params['preferred_folder_name'],
+        preferred_parent_bucket=params['preferred_parent_bucket'],
+        list_all=list_all,
+    )
+    if not result.get('ok'):
+        status = 404 if 'not found' in (result.get('error') or '') else 400
+        return jsonify(result), status
+    return jsonify(result)
+
+
+@wa_image_pool_bp.route('/site-remark/content', methods=['PUT', 'POST'])
+@jwt_required()
+def set_site_remark_content():
+    """Replace entire remark .txt (modify). Empty content deletes the file."""
+    data = request.get_json() or {}
+    params = _site_remark_common_params(data)
+    if not params['project_code']:
+        return jsonify({'error': 'projectCode required'}), 400
+    if 'content' not in data and 'text' not in data:
+        return jsonify({'error': 'content required'}), 400
+
+    from app.services.nas_site_remark_service import set_site_remark_txt
+
+    content = data.get('content')
+    if content is None:
+        content = data.get('text')
+    create = bool(data.get('createIfMissing') or data.get('create_if_missing'))
+    result = set_site_remark_txt(
+        params['project_code'],
+        '' if content is None else str(content),
+        day_str=params['day_str'],
+        filename=params['filename'],
+        preferred_folder_name=params['preferred_folder_name'],
+        preferred_parent_bucket=params['preferred_parent_bucket'],
+        create_if_missing=create,
+    )
+    if not result.get('ok'):
+        status = 409 if result.get('error') == 'duplicate_remark_txt' else 400
+        return jsonify(result), status
+    return jsonify(result)
+
+
+@wa_image_pool_bp.route('/site-remark/delete', methods=['POST', 'DELETE'])
+@jwt_required()
+def delete_site_remark():
+    """Delete a day remark .txt file."""
+    data = request.get_json() if request.method != 'GET' else request.args.to_dict()
+    if not data and request.method == 'DELETE':
+        data = request.get_json() or {}
+    params = _site_remark_common_params(data or {})
+    if not params['project_code']:
+        return jsonify({'error': 'projectCode required'}), 400
+
+    from app.services.nas_site_remark_service import delete_site_remark_txt
+
+    result = delete_site_remark_txt(
+        params['project_code'],
+        day_str=params['day_str'],
+        filename=params['filename'],
+        preferred_folder_name=params['preferred_folder_name'],
+        preferred_parent_bucket=params['preferred_parent_bucket'],
+    )
+    if not result.get('ok'):
+        return jsonify(result), 400
+    return jsonify(result)
+
+
 @wa_image_pool_bp.route('/move', methods=['POST'])
 @jwt_required()
 @require_role('admin', 'manager')
@@ -319,7 +416,7 @@ def retry_download():
                 
                 mongo.db.pool_images.update_one(
                     {'_id': ObjectId(img_id)},
-                    {'$set': {'imagePath': f'/uploads/wa-media/{fname}', 'downloadFailed': False, 'updatedAt': datetime.utcnow()}}
+                    {'$set': {'imagePath': f'/uploads/wa-media/{fname}', 'downloadFailed': False, 'updatedAt': wa_now()}}
                 )
                 succeeded += 1
         except Exception:

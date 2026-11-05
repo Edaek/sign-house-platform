@@ -1,15 +1,17 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from datetime import datetime, timedelta
+
 from app import mongo
+from app.services.wa_time import hk_calendar_day_bounds_utc_naive, parse_hk_date_range_to_utc, wa_now
 
 wa_dashboard_bp = Blueprint('wa_dashboard', __name__)
 
 @wa_dashboard_bp.route('/dashboard/stats', methods=['GET'])
 @jwt_required()
 def dashboard_stats():
-    now = datetime.utcnow()
-    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    now = wa_now()
+    today, _tomorrow = hk_calendar_day_bounds_utc_naive()
     overdue_cutoff = now - timedelta(hours=24)
     count = lambda match: mongo.db.wa_records.count_documents(match)
 
@@ -67,11 +69,12 @@ def search_records():
         except Exception:
             pass
     if from_date or to_date:
+        start, end = parse_hk_date_range_to_utc(from_date or '', to_date or '')
         date_q = {}
-        if from_date:
-            date_q['$gte'] = datetime.fromisoformat(from_date)
-        if to_date:
-            date_q['$lte'] = datetime.fromisoformat(to_date)
+        if start is not None:
+            date_q['$gte'] = start
+        if end is not None:
+            date_q['$lt'] = end
         if date_q:
             query['createdAt'] = date_q
 

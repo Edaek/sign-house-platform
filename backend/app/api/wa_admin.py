@@ -3,6 +3,7 @@ from flask_jwt_extended import jwt_required
 from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 from datetime import datetime
+from app.services.wa_time import wa_now
 from app import mongo
 from app.models import serialize_doc
 from app.utils.permissions import require_role
@@ -22,7 +23,7 @@ def list_keywords():
 @require_role('admin')
 def create_keyword():
     data = request.get_json()
-    now = datetime.utcnow()
+    now = wa_now()
     doc = {
         'term': data['term'].lower().strip(),
         'type': data['type'],
@@ -62,7 +63,7 @@ def list_templates():
 @require_role('admin')
 def create_template():
     data = request.get_json()
-    now = datetime.utcnow()
+    now = wa_now()
     doc = {
         'typeName': data['typeName'],
         'fields': data.get('fields', []),
@@ -113,7 +114,7 @@ def create_project():
         return jsonify({'error': name_err}), 409
     nas_folder_name = (data.get('nasFolderName') or name or code).strip()
 
-    now = datetime.utcnow()
+    now = wa_now()
     doc = {
         'code': code,
         'name': name,

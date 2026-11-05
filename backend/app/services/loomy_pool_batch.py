@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from app.services.wa_time import wa_now
 from typing import List, Optional, Tuple
 
 from bson import ObjectId
@@ -174,7 +175,7 @@ def dismiss_pool_ids(pool_ids: List[str]) -> int:
             continue
     if not oids:
         return 0
-    now = datetime.utcnow()
+    now = wa_now()
     result = mongo.db.pool_images.update_many(
         {'_id': {'$in': oids}},
         {'$set': {'dismissed': True, 'dismissedAt': now, 'updatedAt': now}},
@@ -199,7 +200,7 @@ def mark_loomy_reminder_bot_ids(pool_ids: List[str], send_resp: Optional[dict]) 
             continue
     if not oids:
         return
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.pool_images.update_many(
         {'_id': {'$in': oids}},
         {
@@ -226,7 +227,7 @@ def dismiss_latest_unassigned_batch(*, phone: str, group_id: Optional[str] = Non
             continue
     if not oids:
         return 0
-    now = datetime.utcnow()
+    now = wa_now()
     result = mongo.db.pool_images.update_many(
         {'_id': {'$in': oids}},
         {'$set': {'dismissed': True, 'dismissedAt': now, 'updatedAt': now}},

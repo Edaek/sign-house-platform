@@ -5,7 +5,8 @@ import logging
 import os
 import threading
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from app.services.wa_time import wa_now
+from typing import Any, Dict, List, Optional, Tuple
 
 from app import mongo
 from app.services.pool_receipt_notify_service import phone_match_query
@@ -70,20 +71,25 @@ def _run_agent_sync(ctx: Dict[str, Any]) -> None:
         ctx['pool_ids'] = pool_ids
 
     if not ctx.get('loom_classify_attempted'):
-        from app.services.loomy_loom_platform_bridge import try_loom_platform_classify
+        from app.services.loomy_loom_platform_bridge import (
+            loom_turn_whatsapp_already_sent,
+            try_loom_platform_classify,
+        )
 
         ctx_for_loom = {
             **ctx,
             'quoted_msg_id': ctx.get('quoted_msg_id') or '',
             'has_quoted': bool(ctx.get('has_quoted')),
         }
-        loom = try_loom_platform_classify(ctx_for_loom)
-        if loom:
-            if pool_ids:
-                from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
+        loom_meta: Dict[str, Any] = {}
+        loom = try_loom_platform_classify(ctx_for_loom, meta=loom_meta)
+        if loom or loom_turn_whatsapp_already_sent(loom_meta):
+            if loom:
+                if pool_ids:
+                    from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
 
-                mark_pool_classify_reply(pool_ids, loom)
-            _send_wa(phone, group_id, loom)
+                    mark_pool_classify_reply(pool_ids, loom)
+                _send_wa(phone, group_id, loom)
             return
 
     if user_text:
@@ -150,6 +156,12 @@ def _run_agent_sync(ctx: Dict[str, Any]) -> None:
         if det:
             _send_wa(phone, group_id, det)
             return
+
+    from app.services.loomy_loom_platform_bridge import local_ollama_mcp_agent_enabled
+
+    if not local_ollama_mcp_agent_enabled():
+        logger.info('[LoomyWA] Local Ollama MCP disabled — Loom Turn only (LOOMY_WA_DISABLE_LOCAL_OLLAMA)')
+        return
 
     run_mcp_agent(ctx, send_wa=_send_wa)
 
@@ -294,7 +306,7 @@ def schedule_loomy_wa_agent(
                 'caption': '',
                 'pool_ids': [],
                 'sender_name': sender_name,
-                'at': datetime.utcnow(),
+                'at': wa_now(),
             }
             _pending[key] = entry
         if user_text.strip():
@@ -336,12 +348,12 @@ def try_loomy_inbound_text_reply(
     group_id: Optional[str] = None,
     pool_ids: Optional[List[str]] = None,
     data: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
-    """Synchronous Loomy text handling (batch pick, direct assign) — returns WA body if handled."""
+) -> Tuple[Optional[str], bool]:
+    """Sync text handling. Returns (whatsapp body if Sign House should send, turn_complete)."""
     from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
 
     if wa_loom_runtime_brain_enabled():
-        return None
+        return None, False
 
     from app.services.loomy_wa_smart_classify import (
         get_active_batch,
@@ -356,7 +368,7 @@ def try_loomy_inbound_text_reply(
 
     batch_reply = try_loomy_batch_numeric_pick(phone, text, group_id=group_id)
     if batch_reply:
-        return batch_reply
+        return batch_reply, True
 
     from app.services.loomy_loom_platform_bridge import should_use_loom_platform, try_loom_platform_classify
 
@@ -369,20 +381,25 @@ def try_loomy_inbound_text_reply(
         'has_quoted': has_quoted,
     }
     if should_use_loom_platform(loom_ctx):
-        loom_reply = try_loom_platform_classify(loom_ctx)
+        loom_meta: Dict[str, Any] = {}
+        loom_reply = try_loom_platform_classify(loom_ctx, meta=loom_meta)
         if loom_reply:
-            return loom_reply
+            return loom_reply, True
+        from app.services.loomy_loom_platform_bridge import loom_turn_whatsapp_already_sent
+
+        if loom_turn_whatsapp_already_sent(loom_meta):
+            return None, True
 
     implicit = try_implicit_batch_pick(phone, text, group_id=group_id)
     if implicit:
-        return implicit
+        return implicit, True
 
     active = get_active_batch(phone=phone, group_id=group_id)
     pids = list(active['pool_ids']) if active and active.get('pool_ids') else list(pool_ids or [])
     if not pids:
         pids = _open_pool_ids(phone, group_id=group_id)
 
-    return try_loomy_smart_text({
+    smart = try_loomy_smart_text({
         'phone': phone,
         'group_id': group_id,
         'user_text': text,
@@ -390,6 +407,7 @@ def try_loomy_inbound_text_reply(
         'quoted_msg_id': quoted,
         'has_quoted': has_quoted,
     })
+    return smart, bool(smart)
 
 
 def try_loomy_numeric_pick(

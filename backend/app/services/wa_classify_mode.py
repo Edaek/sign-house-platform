@@ -13,6 +13,9 @@ MODE_LOOM = 'loom'
 # Back-compat alias — local in-chat Ollama agent (Sign House)
 MODE_LOOMY = 'loomy'
 
+# Primary demo/prod knob (overrides WA_INBOUND_CLASSIFY_MODE when set): loom | agent | loomy
+ENV_WA_BRAIN = 'SIGNHOUSE_WA_BRAIN'
+
 
 def _cfg_val(config: Optional[Mapping[str, Any]], key: str, env_key: str, default: str) -> str:
     if config and key in config:
@@ -22,20 +25,98 @@ def _cfg_val(config: Optional[Mapping[str, Any]], key: str, env_key: str, defaul
     return str(raw or default).strip().lower()
 
 
-def classify_mode(config: Optional[Mapping[str, Any]] = None) -> str:
-    m = _cfg_val(config, 'WA_INBOUND_CLASSIFY_MODE', 'WA_INBOUND_CLASSIFY_MODE', MODE_LOOM)
+def _normalize_mode_token(m: str) -> Optional[str]:
+    m = (m or '').strip().lower()
     if m in ('auto', 'legacy', ''):
-        logger.warning(
-            'WA_INBOUND_CLASSIFY_MODE=%r is deprecated; use loom or agent',
-            m or 'auto',
-        )
         return MODE_LOOM
     if m == MODE_LOOM:
         return MODE_LOOM
     if m in (MODE_AGENT, MODE_LOOMY):
         return MODE_AGENT
+    return None
+
+
+def _raw_classify_mode(config: Optional[Mapping[str, Any]] = None) -> str:
+    if config is not None:
+        brain_raw = config.get(ENV_WA_BRAIN)
+        if brain_raw is None:
+            brain_raw = config.get('signhouse_wa_brain')
+        brain = str(brain_raw or '').strip().lower()
+        if brain:
+            normalized = _normalize_mode_token(brain)
+            if normalized:
+                legacy_raw = config.get('WA_INBOUND_CLASSIFY_MODE')
+                if legacy_raw:
+                    leg = _normalize_mode_token(str(legacy_raw))
+                    if leg and leg != normalized:
+                        logger.warning(
+                            '%s=%r overrides WA_INBOUND_CLASSIFY_MODE=%r → effective %r',
+                            ENV_WA_BRAIN,
+                            brain,
+                            legacy_raw,
+                            normalized,
+                        )
+                return normalized
+            logger.warning('Unknown %s=%r — falling back to WA_INBOUND_CLASSIFY_MODE', ENV_WA_BRAIN, brain)
+        m = str(config.get('WA_INBOUND_CLASSIFY_MODE') or MODE_LOOM).strip().lower()
+        normalized = _normalize_mode_token(m)
+        if normalized:
+            return normalized
+        logger.warning('Unknown WA_INBOUND_CLASSIFY_MODE=%r — defaulting to loom', m)
+        return MODE_LOOM
+
+    brain = _cfg_val(None, ENV_WA_BRAIN, ENV_WA_BRAIN, '')
+    if brain:
+        normalized = _normalize_mode_token(brain)
+        if normalized:
+            legacy = (os.environ.get('WA_INBOUND_CLASSIFY_MODE') or '').strip().lower()
+            if legacy:
+                leg = _normalize_mode_token(legacy)
+                if leg and leg != normalized:
+                    logger.warning(
+                        '%s=%r overrides WA_INBOUND_CLASSIFY_MODE=%r → effective %r',
+                        ENV_WA_BRAIN,
+                        brain,
+                        legacy,
+                        normalized,
+                    )
+            return normalized
+        logger.warning('Unknown %s=%r — falling back to WA_INBOUND_CLASSIFY_MODE', ENV_WA_BRAIN, brain)
+
+    m = _cfg_val(None, 'WA_INBOUND_CLASSIFY_MODE', 'WA_INBOUND_CLASSIFY_MODE', MODE_LOOM)
+    normalized = _normalize_mode_token(m)
+    if normalized:
+        if m in ('auto', 'legacy'):
+            logger.warning(
+                'WA_INBOUND_CLASSIFY_MODE=%r is deprecated; use %s=loom or agent',
+                m,
+                ENV_WA_BRAIN,
+            )
+        return normalized
     logger.warning('Unknown WA_INBOUND_CLASSIFY_MODE=%r — defaulting to loom', m)
     return MODE_LOOM
+
+
+def classify_mode(config: Optional[Mapping[str, Any]] = None) -> str:
+    return _raw_classify_mode(config)
+
+
+def log_wa_brain_on_startup() -> None:
+    mode = classify_mode()
+    brain = (os.environ.get(ENV_WA_BRAIN) or '').strip()
+    legacy = (os.environ.get('WA_INBOUND_CLASSIFY_MODE') or '').strip()
+    if mode == MODE_LOOM:
+        hint = 'Loom Turn + /mcp/ (Sign House 不跑本机 Ollama 回复)'
+    else:
+        hint = 'Sign House Ollama Loomy agent (本机 MCP 工具环)'
+    logger.info(
+        '[WA] brain=%s (%s) SIGNHOUSE_WA_BRAIN=%r WA_INBOUND_CLASSIFY_MODE=%r — %s',
+        mode,
+        'loom' if mode == MODE_LOOM else 'agent',
+        brain or '(unset)',
+        legacy or '(unset)',
+        hint,
+    )
 
 
 def wa_loomy_agent_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:

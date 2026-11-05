@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from app.services.wa_time import wa_now
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
 CandidateRow = Union[Tuple[Any, int], Any]
@@ -54,7 +55,7 @@ def store_loomy_wa_pick_options(
                 'options': opts,
                 'pool_ids': list(pool_ids),
                 'batch_key': bk,
-                'at': datetime.utcnow(),
+                'at': wa_now(),
             },
         },
         upsert=True,

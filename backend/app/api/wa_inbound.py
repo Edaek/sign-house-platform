@@ -6,6 +6,7 @@ import hashlib
 import logging
 import threading
 from datetime import datetime
+from app.services.wa_time import wa_now
 
 from flask import Blueprint, jsonify, request, current_app
 from bson import ObjectId
@@ -171,7 +172,7 @@ def _set_burst_project(group_id, sender, project, *, extended=False):
     fields = {
         'code': project['code'],
         'projectId': project['_id'],
-        'at': datetime.utcnow(),
+        'at': wa_now(),
     }
     update = {'$set': fields}
     if extended:
@@ -196,7 +197,7 @@ def _get_burst_project(group_id, sender, max_age_s=None):
     ttl = max_age_s
     if ttl is None:
         ttl = _burst_ttl_seconds(extended=bool(doc.get('extended')))
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > ttl:
         return None
     return mongo.db.wa_projects.find_one({'_id': doc['projectId'], 'status': 'active'})
@@ -226,7 +227,7 @@ def _set_classify_intent(group_id, sender, text):
         return
     mongo.db.wa_system.update_one(
         {'_id': _classify_intent_key(group_id, sender)},
-        {'$set': {'text': trimmed, 'at': datetime.utcnow()}},
+        {'$set': {'text': trimmed, 'at': wa_now()}},
         upsert=True,
     )
     if not group_id:
@@ -238,7 +239,7 @@ def _pop_classify_intent(group_id, sender):
     doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
     if not doc or not doc.get('text'):
         return None
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > _CLASSIFY_INTENT_TTL:
         return None
     return str(doc['text']).strip()
@@ -248,7 +249,7 @@ def _peek_classify_intent(group_id, sender):
     doc = mongo.db.wa_system.find_one({'_id': _classify_intent_key(group_id, sender)})
     if not doc or not doc.get('text'):
         return None
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > _CLASSIFY_INTENT_TTL:
         return None
     return str(doc['text']).strip()
@@ -304,7 +305,7 @@ def _set_fuzzy_choice(group_id, sender, candidates):
     ]
     mongo.db.wa_system.update_one(
         {'_id': _fuzzy_choice_key(group_id, sender)},
-        {'$set': {'choices': choices, 'at': datetime.utcnow()}},
+        {'$set': {'choices': choices, 'at': wa_now()}},
         upsert=True,
     )
 
@@ -315,7 +316,7 @@ def _pop_fuzzy_choice(group_id, sender, selection):
     doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
     if not doc or not doc.get('choices'):
         return None
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > _FUZZY_CHOICE_TTL:
         return None
     idx = selection - 1
@@ -448,20 +449,26 @@ def _loomy_after_pool_intake(
     if wa_loomy_agent_enabled():
         if cap and pool_ids:
             try:
-                from app.services.loomy_loom_platform_bridge import try_loom_platform_classify
+                from app.services.loomy_loom_platform_bridge import (
+                    loom_turn_whatsapp_already_sent,
+                    try_loom_platform_classify,
+                )
 
+                loom_meta: dict = {}
                 loom_reply = try_loom_platform_classify({
                     'phone': sender_phone,
                     'group_id': group_id,
                     'caption': cap,
                     'pool_ids': pool_ids,
                     'sender_name': sender_name,
-                })
+                }, meta=loom_meta)
                 if loom_reply:
                     if group_id:
                         send_group_message(group_id, loom_reply, quoted_msg_id=quote_msg_id)
                     else:
                         send_message(sender_phone, loom_reply, quoted_msg_id=quote_msg_id)
+                    classify_handled = True
+                elif loom_turn_whatsapp_already_sent(loom_meta):
                     classify_handled = True
             except Exception:
                 logger.exception('[Inbound] Loom platform classify failed')
@@ -512,7 +519,11 @@ def _loomy_after_pool_intake(
                 logger.exception('[Inbound] Loomy processing ack failed')
 
         if not classify_handled:
+            from app.services.loomy_loom_platform_bridge import local_ollama_mcp_agent_enabled
             from app.services.loomy_wa_agent_service import schedule_loomy_wa_agent
+
+            if not local_ollama_mcp_agent_enabled():
+                return
 
             schedule_loomy_wa_agent(
                 phone=sender_phone,
@@ -733,7 +744,7 @@ def _classify_remark_from_data(data):
 def _recent_unassigned_pool_ids(sender, *, seconds=120):
     """Pool items from the same sender sent shortly before a caption (multi-PDF burst)."""
     from datetime import timedelta
-    since = datetime.utcnow() - timedelta(seconds=seconds)
+    since = wa_now() - timedelta(seconds=seconds)
     docs = list(mongo.db.pool_images.find({
         'phone': sender,
         'projectId': {'$exists': False},
@@ -933,11 +944,19 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 )
 
                 ctx = _latest_unassigned_pool_context(sender)
-                fast = try_loomy_inbound_text_reply(
+                loom_ctx = {
+                    'phone': sender,
+                    'user_text': trimmed_text,
+                    'pool_ids': ctx.get('pool_ids'),
+                }
+                from app.services.loomy_loom_platform_bridge import should_use_loom_platform
+
+                fast, done = try_loomy_inbound_text_reply(
                     sender, trimmed_text, pool_ids=ctx.get('pool_ids'), data=data,
                 )
-                if fast:
-                    _safe_send(sender, fast, quoted_msg_id=data.get('quotedMsgId'))
+                if done:
+                    if fast:
+                        _safe_send(sender, fast, quoted_msg_id=data.get('quotedMsgId'))
                     return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
 
                 if try_loomy_numeric_pick(sender, trimmed_text):
@@ -951,7 +970,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 'senderPhone': sender, 'status': 'followup',
             }).sort('updatedAt', -1))
             if len(active) > 1:
-                now = datetime.utcnow()
+                now = wa_now()
                 for stale in active[1:]:
                     mongo.db.wa_records.update_one(
                         {'_id': stale['_id']},
@@ -960,7 +979,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                     )
             active_record = active[0] if active else None
             if active_record and trimmed_text.lower() == 'skip':
-                now = datetime.utcnow()
+                now = wa_now()
                 mongo.db.wa_records.update_one(
                     {'_id': active_record['_id']},
                     {'$set': {'status': 'awaiting_review'},
@@ -1038,13 +1057,14 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                     try_loomy_numeric_pick,
                 )
 
-                fast = try_loomy_inbound_text_reply(
+                fast, done = try_loomy_inbound_text_reply(
                     sender, trimmed, group_id=group_id, pool_ids=pids, data=data,
                 )
-                if fast:
-                    from app.services.wa_send_service import send_group_message
+                if done:
+                    if fast:
+                        from app.services.wa_send_service import send_group_message
 
-                    send_group_message(group_id, fast, quoted_msg_id=data.get('quotedMsgId'))
+                        send_group_message(group_id, fast, quoted_msg_id=data.get('quotedMsgId'))
                     return jsonify({'handled': True, 'type': 'loomy_wa_smart_text'})
 
                 if try_loomy_numeric_pick(sender, trimmed, group_id=group_id):
@@ -1375,7 +1395,7 @@ def _set_move_intent(group_id, sender, data):
         {'$set': {
             'hasQuotedMsg': data.get('hasQuotedMsg', False),
             'quotedMsgId': data.get('quotedMsgId'),
-            'at': datetime.utcnow(),
+            'at': wa_now(),
         }},
         upsert=True,
     )
@@ -1387,7 +1407,7 @@ def _pop_move_intent(group_id, sender):
     doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
     if not doc or not doc.get('at'):
         return None
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > _FUZZY_CHOICE_TTL:
         return None
     return doc

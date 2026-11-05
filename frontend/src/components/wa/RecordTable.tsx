@@ -5,6 +5,7 @@ import RecordDetailDrawer from './RecordDetailDrawer'
 import { FileText, Image, Paperclip } from 'lucide-react'
 import type { WaRecord, ConfidenceLevel } from '../../store/waStore'
 import { recordRemarkDisplay, recordRemarkText } from '../../lib/waRecordRemark'
+import { formatDateHK } from '../../lib/waDateTime'
 
 function completionPercent(record: WaRecord): number {
   if (record.extractedFields.length === 0) return 0
@@ -134,7 +135,7 @@ export default function WaRecordTable({ records }: RecordTableProps) {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-xs text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                      {new Date(record.createdAt).toLocaleDateString()}
+                      {formatDateHK(record.createdAt)}
                     </td>
                   </tr>
                 )

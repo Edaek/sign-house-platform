@@ -298,7 +298,9 @@ def create_app(config_name=None):
 
         log_jwt_guard_on_startup()
         from app.services.loomy_loom_inbound_notify import log_loom_runtime_notify_on_startup
+        from app.services.wa_classify_mode import log_wa_brain_on_startup
 
+        log_wa_brain_on_startup()
         log_loom_runtime_notify_on_startup()
 
     return app

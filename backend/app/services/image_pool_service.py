@@ -6,6 +6,7 @@ import re
 import threading
 import time
 from datetime import datetime
+from app.services.wa_time import wa_now
 from pathlib import Path
 
 from bson import ObjectId
@@ -416,7 +417,7 @@ def save_to_pool(
             )
             return {'auto_assigned': False, 'pool_id': str(existing['_id']), 'duplicate': True}
 
-    now = datetime.utcnow()
+    now = wa_now()
     media_type, file_name = infer_pool_media_meta(image_path, wa_type=wa_type, mime_type=mime_type)
     doc = {
         'phone': phone,
@@ -547,7 +548,7 @@ def _ensure_pool_image_file(img, media_dir):
         {'$set': {
             'imagePath': web_path,
             'downloadFailed': False,
-            'updatedAt': datetime.utcnow(),
+            'updatedAt': wa_now(),
         }},
     )
     img['imagePath'] = web_path
@@ -608,7 +609,7 @@ def assign_images_to_project(
     if remark:
         mongo.db.pool_images.update_many(
             {'_id': {'$in': object_ids}},
-            {'$set': {'caption': remark, 'updatedAt': datetime.utcnow()}},
+            {'$set': {'caption': remark, 'updatedAt': wa_now()}},
         )
         for img in images:
             img['caption'] = remark
@@ -624,7 +625,7 @@ def assign_images_to_project(
         rec_type, rec_media = 'photo', 'mixed'
 
     ref_number = generate_reference_number()
-    now = datetime.utcnow()
+    now = wa_now()
 
     record_doc = {
         'projectId': project['_id'],
@@ -805,7 +806,7 @@ def assign_images_to_project(
                         'nasSyncStatus': sync_status,
                         'nasSyncExpected': expected,
                         'nasSyncActual': len(nas_photos),
-                        'nasSyncUpdatedAt': datetime.utcnow(),
+                        'nasSyncUpdatedAt': wa_now(),
                     }
                     if sync_status == 'failed' and expected:
                         update['nasSyncError'] = 'NAS copy/upload failed for all files'
@@ -891,7 +892,7 @@ def assign_images_to_project(
                         {'$set': {
                             'nasSyncStatus': 'failed',
                             'nasSyncError': 'background task error',
-                            'nasSyncUpdatedAt': datetime.utcnow(),
+                            'nasSyncUpdatedAt': wa_now(),
                         }},
                     )
 
@@ -1005,7 +1006,7 @@ def move_images_to_project(
         )
 
     errors = []
-    now = datetime.utcnow()
+    now = wa_now()
 
     for img in images:
         old_record_id = img.get('recordId')

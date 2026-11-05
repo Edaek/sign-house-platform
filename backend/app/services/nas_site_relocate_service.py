@@ -5,6 +5,7 @@ import logging
 import re
 import shutil
 from datetime import datetime
+from app.services.wa_time import wa_now
 from pathlib import Path
 
 from bson import ObjectId
@@ -105,7 +106,7 @@ def _update_records_nas_paths(project_ids: list[ObjectId], old_root: Path, new_r
                 patch['nasSourcePath'] = nsp
                 changed = True
         if changed:
-            patch['updatedAt'] = datetime.utcnow()
+            patch['updatedAt'] = wa_now()
             mongo.db.wa_records.update_one({'_id': rec['_id']}, {'$set': patch})
             updated += 1
     return updated
@@ -123,7 +124,7 @@ def _update_pool_images_nas_paths(project_ids: list[ObjectId], old_root: Path, n
         if new_path != path:
             mongo.db.pool_images.update_one(
                 {'_id': img['_id']},
-                {'$set': {'nasPath': new_path, 'updatedAt': datetime.utcnow()}},
+                {'$set': {'nasPath': new_path, 'updatedAt': wa_now()}},
             )
             n += 1
     return n
@@ -214,7 +215,7 @@ def relocate_site_folder_between_buckets(
 
     remark_merge = consolidate_photo_day_remark_txts(str(dest_dir), src_dir.name)
 
-    now = datetime.utcnow()
+    now = wa_now()
     project_ids: list[ObjectId] = []
     for proj in projects:
         project_ids.append(proj['_id'])
@@ -336,7 +337,7 @@ def realign_project_record_paths(
                 patch['nasSourcePath'] = nsp
                 changed = True
         if changed:
-            patch['updatedAt'] = datetime.utcnow()
+            patch['updatedAt'] = wa_now()
             mongo.db.wa_records.update_one({'_id': rec['_id']}, {'$set': patch})
             records_updated += 1
 
@@ -349,7 +350,7 @@ def realign_project_record_paths(
         if new_path != path:
             mongo.db.pool_images.update_one(
                 {'_id': img['_id']},
-                {'$set': {'nasPath': new_path, 'updatedAt': datetime.utcnow()}},
+                {'$set': {'nasPath': new_path, 'updatedAt': wa_now()}},
             )
             pool_updated += 1
 
@@ -367,7 +368,7 @@ def realign_wa_projects_with_nas(*, dry_run: bool = False) -> dict:
 
     updated: list[dict] = []
     skipped = 0
-    now = datetime.utcnow()
+    now = wa_now()
 
     for proj in mongo.db.wa_projects.find({'status': {'$ne': 'archived'}}):
         parent_raw = (proj.get('nasParentBucket') or '').strip()

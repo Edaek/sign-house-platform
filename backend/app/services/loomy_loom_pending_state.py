@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from app.services.wa_time import wa_now
 from typing import Any, Dict, List, Optional
 
 
@@ -39,7 +40,7 @@ def set_pending_assignment(
         return
     if mongo.db is None:
         return
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.wa_system.update_one(
         {'_id': _state_key(phone=phone, group_id=group_id)},
         {

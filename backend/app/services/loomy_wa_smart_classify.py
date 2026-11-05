@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from app.services.wa_time import wa_now
 from typing import Any, Dict, List, Optional, Tuple
 
 _SEPARATE_RE = re.compile(
@@ -87,7 +88,7 @@ def set_active_batch(
                 'pool_ids': list(pool_ids),
                 'caption': (caption or '').strip(),
                 'batch_key': batch_key,
-                'at': datetime.utcnow(),
+                'at': wa_now(),
             },
         },
         upsert=True,
@@ -114,7 +115,7 @@ def store_batch_pick(*, phone: str, group_id: Optional[str], batches: List[Dict[
         })
     mongo.db.wa_system.update_one(
         {'_id': _batch_pick_id(phone=phone, group_id=group_id)},
-        {'$set': {'batches': opts, 'at': datetime.utcnow()}},
+        {'$set': {'batches': opts, 'at': wa_now()}},
         upsert=True,
     )
 

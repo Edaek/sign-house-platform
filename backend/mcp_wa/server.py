@@ -310,6 +310,88 @@ def wa_rename_site_remark_txt(
 
 
 @mcp.tool()
+def wa_read_site_remark_txt(
+    project_code: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    day: str = '',
+    filename: str = '',
+    list_all: bool = False,
+) -> str:
+    """Read NAS day remark .txt content (Photo/YYYY-MM-DD/*.txt). Use list_all when multiple .txt exist."""
+    try:
+        body: dict[str, Any] = {'projectCode': project_code.strip()}
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if day.strip():
+            body['day'] = day.strip()
+        if filename.strip():
+            body['filename'] = filename.strip()
+        if list_all:
+            body['listAll'] = True
+        return json_result(_client().post('/wa/image-pool/site-remark/read', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_set_site_remark_txt(
+    project_code: str,
+    content: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    day: str = '',
+    filename: str = '',
+    create_if_missing: bool = False,
+) -> str:
+    """Replace entire day remark .txt (modify). Empty content deletes the file (e.g. remove placeholder)."""
+    try:
+        body: dict[str, Any] = {
+            'projectCode': project_code.strip(),
+            'content': content,
+        }
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if day.strip():
+            body['day'] = day.strip()
+        if filename.strip():
+            body['filename'] = filename.strip()
+        if create_if_missing:
+            body['createIfMissing'] = True
+        return json_result(_client().post('/wa/image-pool/site-remark/content', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_delete_site_remark_txt(
+    project_code: str,
+    nas_folder_name: str = '',
+    nas_parent_bucket: str = '',
+    day: str = '',
+    filename: str = '',
+) -> str:
+    """Delete a day remark .txt on NAS."""
+    try:
+        body: dict[str, Any] = {'projectCode': project_code.strip()}
+        if nas_folder_name.strip():
+            body['nasFolderName'] = nas_folder_name.strip()
+        if nas_parent_bucket.strip():
+            body['nasParentBucket'] = nas_parent_bucket.strip()
+        if day.strip():
+            body['day'] = day.strip()
+        if filename.strip():
+            body['filename'] = filename.strip()
+        return json_result(_client().post('/wa/image-pool/site-remark/delete', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_retry_pool_download(image_ids: list[str]) -> str:
     """Retry Wakka download for pool images."""
     try:

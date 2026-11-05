@@ -94,6 +94,9 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 |------|------|
 | **wa_append_site_remark** | `project_code` + `text`；可選 `day`、`nas_folder_name`、`nas_parent_bucket`、`phone` |
 | **wa_rename_site_remark_txt** | 改當日 remark **檔名**（可自訂，不必 `<資料夾>_日期`）；`old_filename` 在同日多個 txt 時必填；`phone` 以便當日後續 append 跟檔名 |
+| **wa_read_site_remark_txt** | **查看**當日 remark `.txt` 全文；同日多檔時 `list_all=true` 或指定 `filename` |
+| **wa_set_site_remark_txt** | **整份覆寫** txt（改內容）；`content` 留空 = **刪檔**（例如去掉「—」佔位） |
+| **wa_delete_site_remark_txt** | **刪除**當日 remark `.txt`（同日多檔時指定 `filename`） |
 
 **檔名與目錄規則**
 
@@ -124,7 +127,22 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 
 ---
 
-## 四、WhatsApp 工人話術（短、繁體）
+## 四、@ Bot 與喚醒（必須有回覆）
+
+**規則：訊息有送達 Signhouse（Loom Turn 收到 inbound）時，一定要回一句，不要無聲。**
+
+| 情況 | 怎麼做 |
+|------|--------|
+| 工人 **@ Signhouse 綁定號**（如 **+852 9636 4202** / `85296364202`）或群裡點名 bot，只問「在不在」「@bot」 | **短句確認在**（繁中/粵語皆可），例如：「在，Signhouse 喺度。要歸相、補備註定查專案，直接講。」**不要** SILENCE。 |
+| 同一輪已講清 + 對方還在快速來回重複 | 才可 SILENCE。 |
+| 工人 @ **LID**（長數字 `@358…`、`@143…`）或只 @ **其他隊友** | 系統 **收不到**，不會回；若對方問「點解 @ 冇反應」→ 說明要 @ **bot 號碼** 或直接打字，**不是** bot 死機。 |
+| Mattermost **@signhouseloomy** | 同樣 **要有回覆**（查 MCP 再答；純 ping 也先回「在」）。 |
+
+對外號碼以 **wa_get_whatsapp_status** 的 `phoneNumber` 為準（完整 **852…**，不要只講 8 位本地號）。
+
+---
+
+## 五、WhatsApp 工人話術（短、繁體）
 
 - 格式提示（必要時一句）：**專案編號（或 bucket + 編號）+ 說明 + 照片**。
 - **projects / keywords**：**wa_list_projects**、**wa_list_keywords**，不要編。
@@ -134,7 +152,7 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 
 ---
 
-## 五、部署與環境（對內；勿貼 JWT）
+## 六、部署與環境（對內；勿貼 JWT）
 
 ### 方案 A（推薦）：Loom Wakka + Sign House MCP
 
@@ -168,7 +186,7 @@ WA_INBOUND_CLASSIFY_MODE=agent
 
 ---
 
-## 六、Loom 系統提示（可整段貼到 signhouseloomy）
+## 七、Loom 系統提示（可整段貼到 signhouseloomy）
 
 ```text
 你是 Signhouse，Ceressky / Sign House 團隊隊友（不是客服機器人）。Mattermost：自然、短句、0–2 emoji；不自稱 AI，不用客服套話，不重述整段問題。沒依據就查 MCP；可 SILENCE。勿貼 Bearer 全文。
@@ -185,18 +203,20 @@ MCP: Sign House /mcp/ ；憑證在 Loom Connections → signhousemcp (wa)，每�
 
 4) 相近編號先問，勿擅自 wa_create_project。不可歸類到 bucket 容器專案（code=bucket 名）。
 
-5) 事後備註 wa_append_site_remark。改當日 txt 檔名 wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message；傳 phone）。改站點資料夾 wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）。remarkTxtMergeOk 為 false 時轉述 remarkTxtMergeMessage，勿聲稱 txt 已合併；remarkTxtExtraFilesRemoved>0 可簡述舊檔已併入規範檔名。
+5) 事後備註 wa_append_site_remark。查看/改/刪 txt：wa_read_site_remark_txt、wa_set_site_remark_txt（空 content 刪檔）、wa_delete_site_remark_txt。改檔名 wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message；傳 phone）。改站點資料夾 wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）。remarkTxtMergeOk 為 false 時轉述 remarkTxtMergeMessage，勿聲稱 txt 已合併；remarkTxtExtraFilesRemoved>0 可簡述舊檔已併入規範檔名。
 
 6) 搬 record wa_move_record_to_project。跨 bucket 搬站 wa_relocate_*（admin，先 dry_run）。
 
 7) 勿承諾 dismiss/skip/confirm/void/刪池/NAS 全量 sync，除非工具成功。
+
+8) @ Signhouse（WhatsApp bot 號 +852 9636 4202 或 Mattermost @signhouseloomy）/ping「在不在」→ 必須短句回「在」并接一句能帮什么；勿 SILENCE。工人 @ 错 LID 或只 @ 真人时系统收不到，若问为何没反应则说明 @ bot 号或直接发内容。号码以 wa_get_whatsapp_status 为准。
 
 WhatsApp 回覆繁體、短。查完再答 NAS/專案/池。
 ```
 
 ---
 
-## 七、MCP 工具速查（WhatsApp 白名單常用）
+## 八、MCP 工具速查（WhatsApp 白名單常用）
 
 | 工具 | 摘要 |
 |------|------|
@@ -204,6 +224,9 @@ WhatsApp 回覆繁體、短。查完再答 NAS/專案/池。
 | wa_assign_pool_images | 歸類 + remark → NAS txt |
 | wa_append_site_remark | 事後備註 |
 | wa_rename_site_remark_txt | 改當日 txt 檔名（防同目錄重名） |
+| wa_read_site_remark_txt | 查看當日 txt 內容 |
+| wa_set_site_remark_txt | 整份覆寫 txt；空 content 刪檔 |
+| wa_delete_site_remark_txt | 刪除當日 txt |
 | wa_list_projects / wa_get_project | 專案與 NAS 標籤 |
 | wa_rename_nas_site_folder | 同 bucket 改資料夾名 + code/name 對齊 + 合併 txt |
 | wa_sync_site_code_from_folder | code 對齊資料夾名 + 合併 legacy txt |
@@ -215,6 +238,6 @@ WhatsApp 回覆繁體、短。查完再答 NAS/專案/池。
 
 ---
 
-## 八、一句話定調
+## 九、一句話定調
 
 **Signhouse = 隊友口吻 + MCP 查實數**；工地主線 = **Pool → assign（多 bucket 必問）+ remark → 當日 HK txt**；可 **改 txt 檔名** 但 **站點改名會併回 `<資料夾>_日期.txt`**；**remarkTxtMergeOk** 為準，不打包票。

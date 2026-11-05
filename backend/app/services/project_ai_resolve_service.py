@@ -1,3 +1,4 @@
+from app.services.wa_time import wa_now
 """AI-assisted project classification — list, suggest, confirm before assign."""
 import logging
 import os
@@ -415,7 +416,7 @@ def set_ai_confirm(
             'batchId': batch_id,
             'poolImageIds': pool_image_ids or [],
             'quoteMsgId': quote_msg_id,
-            'at': datetime.utcnow(),
+            'at': wa_now(),
         }},
         upsert=True,
     )
@@ -431,7 +432,7 @@ def pop_ai_confirm_project(group_id, sender):
     doc = mongo.db.wa_system.find_one_and_delete({'_id': key})
     if not doc:
         return None, None, {}
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > AI_CONFIRM_TTL_S:
         return None, None, {}
     pid = doc.get('projectId')
@@ -462,7 +463,7 @@ def peek_ai_confirm(group_id, sender):
     doc = mongo.db.wa_system.find_one({'_id': ai_confirm_key(group_id, sender)})
     if not doc:
         return None
-    age = (datetime.utcnow() - doc['at']).total_seconds()
+    age = (wa_now() - doc['at']).total_seconds()
     if age > AI_CONFIRM_TTL_S:
         clear_ai_confirm(group_id, sender)
         return None

@@ -39,6 +39,9 @@ DEFAULT_ALLOW = frozenset({
     'wa_assign_pool_images',
     'wa_append_site_remark',
     'wa_rename_site_remark_txt',
+    'wa_read_site_remark_txt',
+    'wa_set_site_remark_txt',
+    'wa_delete_site_remark_txt',
     'wa_move_record_to_project',
     'wa_rename_nas_site_folder',
     'wa_sync_site_code_from_folder',
@@ -284,6 +287,75 @@ def _exec_wa_rename_site_remark_txt(c: SignHouseClient, a: dict) -> str:
     return json_result(c.post('/wa/image-pool/site-remark/rename', json_body=body))
 
 
+def _exec_wa_read_site_remark_txt(c: SignHouseClient, a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    body: dict[str, Any] = {'projectCode': code}
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    day = (a.get('day') or '').strip()
+    fname = (a.get('filename') or a.get('fileName') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    if day:
+        body['day'] = day
+    if fname:
+        body['filename'] = fname
+    if a.get('list_all') or a.get('listAll'):
+        body['listAll'] = True
+    return json_result(c.post('/wa/image-pool/site-remark/read', json_body=body))
+
+
+def _exec_wa_set_site_remark_txt(c: SignHouseClient, a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    if 'content' not in a and 'text' not in a:
+        return 'Error: content required'
+    content = a.get('content')
+    if content is None:
+        content = a.get('text')
+    body: dict[str, Any] = {'projectCode': code, 'content': content}
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    day = (a.get('day') or '').strip()
+    fname = (a.get('filename') or a.get('fileName') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    if day:
+        body['day'] = day
+    if fname:
+        body['filename'] = fname
+    if a.get('create_if_missing') or a.get('createIfMissing'):
+        body['createIfMissing'] = True
+    return json_result(c.post('/wa/image-pool/site-remark/content', json_body=body))
+
+
+def _exec_wa_delete_site_remark_txt(c: SignHouseClient, a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    body: dict[str, Any] = {'projectCode': code}
+    fn = (a.get('nas_folder_name') or a.get('nasFolderName') or '').strip()
+    pb = (a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip()
+    day = (a.get('day') or '').strip()
+    fname = (a.get('filename') or a.get('fileName') or '').strip()
+    if fn:
+        body['nasFolderName'] = fn
+    if pb:
+        body['nasParentBucket'] = pb
+    if day:
+        body['day'] = day
+    if fname:
+        body['filename'] = fname
+    return json_result(c.post('/wa/image-pool/site-remark/delete', json_body=body))
+
+
 def _exec_wa_whoami(c: SignHouseClient, _a: dict) -> str:
     return json_result(c.get('/auth/me'))
 
@@ -388,6 +460,9 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_assign_pool_images': _exec_wa_assign_pool_images,
     'wa_append_site_remark': _exec_wa_append_site_remark,
     'wa_rename_site_remark_txt': _exec_wa_rename_site_remark_txt,
+    'wa_read_site_remark_txt': _exec_wa_read_site_remark_txt,
+    'wa_set_site_remark_txt': _exec_wa_set_site_remark_txt,
+    'wa_delete_site_remark_txt': _exec_wa_delete_site_remark_txt,
     'wa_move_record_to_project': _exec_wa_move_record_to_project,
     'wa_rename_nas_site_folder': _exec_wa_rename_nas_site_folder,
     'wa_sync_site_code_from_folder': _exec_wa_sync_site_code_from_folder,
@@ -431,6 +506,21 @@ TOOL_SPECS: List[dict] = [
         'name': 'wa_rename_site_remark_txt',
         'description': 'Rename day remark .txt (custom name ok); rejects duplicate basename in same Photo/day folder.',
         'args_hint': '{project_code, new_filename, old_filename, nas_folder_name, nas_parent_bucket, phone, day}',
+    },
+    {
+        'name': 'wa_read_site_remark_txt',
+        'description': 'Read NAS day remark .txt content; list_all if multiple files in Photo/day.',
+        'args_hint': '{project_code, day, filename, nas_folder_name, nas_parent_bucket, list_all}',
+    },
+    {
+        'name': 'wa_set_site_remark_txt',
+        'description': 'Replace entire day remark .txt; empty content deletes file (clear placeholder).',
+        'args_hint': '{project_code, content, day, filename, nas_folder_name, nas_parent_bucket, create_if_missing}',
+    },
+    {
+        'name': 'wa_delete_site_remark_txt',
+        'description': 'Delete a day remark .txt file on NAS.',
+        'args_hint': '{project_code, day, filename, nas_folder_name, nas_parent_bucket}',
     },
     {
         'name': 'wa_move_record_to_project',

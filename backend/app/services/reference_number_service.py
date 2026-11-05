@@ -4,6 +4,7 @@ import os
 import re
 import time
 from datetime import datetime
+from app.services.wa_time import wa_now
 
 from pymongo import ReturnDocument
 
@@ -36,7 +37,7 @@ def _seed_daily_counter(prefix: str, counter_id: str) -> None:
 
 def generate_reference_number():
     """Atomically allocate SUB-MMDD-NNN (unique per day)."""
-    now = datetime.utcnow()
+    now = wa_now()
     prefix = f'SUB-{now.month:02d}{now.day:02d}'
     counter_id = f'ref_seq_{prefix}'
     _seed_daily_counter(prefix, counter_id)

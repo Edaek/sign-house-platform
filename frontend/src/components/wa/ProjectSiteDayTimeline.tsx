@@ -15,6 +15,7 @@ import type { WaRecord } from '../../store/waStore'
 import WaStatusBadge from './StatusBadge'
 import RecordDetailDrawer from './RecordDetailDrawer'
 import { recordRemarkDisplay } from '../../lib/waRecordRemark'
+import { formatNasModifiedHK } from '../../lib/waDateTime'
 import {
   buildSiteDayGroups,
   basenamePath,
@@ -132,7 +133,7 @@ function NasTxtEditor({
           />
           <div className="flex items-center justify-between gap-2">
             <p className="text-[10px] text-slate-500">
-              {dirty ? 'Unsaved' : serverModified ? `NAS ${serverModified.slice(0, 19).replace('T', ' ')} UTC` : ''}
+              {dirty ? 'Unsaved' : formatNasModifiedHK(serverModified)}
             </p>
             <button
               type="button"

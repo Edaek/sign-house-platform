@@ -37,6 +37,19 @@ class WaClassifyModeTests(unittest.TestCase):
         self.assertTrue(wa_inbound_loomy_dispatch_enabled(cfg))
         self.assertFalse(worker_auto_classify_enabled(cfg))
 
+    def test_signhouse_wa_brain_overrides_legacy(self):
+        cfg = {
+            'SIGNHOUSE_WA_BRAIN': 'loom',
+            'WA_INBOUND_CLASSIFY_MODE': 'agent',
+        }
+        self.assertEqual(classify_mode(cfg), MODE_LOOM)
+        self.assertFalse(wa_loomy_agent_enabled(cfg))
+
+    def test_signhouse_wa_brain_agent(self):
+        cfg = {'SIGNHOUSE_WA_BRAIN': 'agent'}
+        self.assertEqual(classify_mode(cfg), MODE_AGENT)
+        self.assertTrue(wa_loomy_agent_enabled(cfg))
+
     def test_mattermost_notify_opt_in(self):
         cfg = {
             'WA_INBOUND_CLASSIFY_MODE': 'agent',

@@ -9,6 +9,8 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
+from app.services.wa_time import format_api_datetime, utc_naive_from_timestamp
 from zoneinfo import ZoneInfo
 
 from app.services.project_number_match_service import (
@@ -1016,7 +1018,7 @@ class NasMountService:
                 files.append({
                     'name': f.name,
                     'size': st.st_size,
-                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                    'modified': format_api_datetime(utc_naive_from_timestamp(st.st_mtime)),
                     'relativePath': f.name,
                     'absolutePath': str(f),
                 })
@@ -1064,7 +1066,7 @@ class NasMountService:
             'code': canonical,
             'folderName': folder.name,
             'fileCount': file_count,
-            'latestModified': datetime.utcfromtimestamp(latest_mtime).isoformat() if latest_mtime else None,
+            'latestModified': format_api_datetime(utc_naive_from_timestamp(latest_mtime)) if latest_mtime else None,
         }
 
     def folder_stats(
@@ -1336,7 +1338,7 @@ class NasMountService:
                 out.append({
                     'name': f.name,
                     'size': st.st_size,
-                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                    'modified': format_api_datetime(utc_naive_from_timestamp(st.st_mtime)),
                     'relativePath': str(f.relative_to(folder)),
                 })
             except OSError:
@@ -1394,7 +1396,7 @@ class NasMountService:
                     'ok': True,
                     'content': content,
                     'relativePath': relative_path,
-                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                    'modified': format_api_datetime(utc_naive_from_timestamp(st.st_mtime)),
                 }
             except OSError as e:
                 return {'ok': False, 'error': str(e)}
@@ -1436,7 +1438,7 @@ class NasMountService:
                 return {
                     'ok': True,
                     'relativePath': relative_path,
-                    'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                    'modified': format_api_datetime(utc_naive_from_timestamp(st.st_mtime)),
                 }
             except OSError as e:
                 return {'ok': False, 'error': str(e)}
@@ -1475,7 +1477,7 @@ class NasMountService:
             files.append({
                 'name': f.name,
                 'size': st.st_size,
-                'modified': datetime.utcfromtimestamp(st.st_mtime).isoformat(),
+                'modified': format_api_datetime(utc_naive_from_timestamp(st.st_mtime)),
                 'relativePath': str(f.relative_to(folder)),
                 'absolutePath': str(f),
             })

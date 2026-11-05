@@ -59,7 +59,9 @@ def serialize_doc(doc):
         elif isinstance(value, ObjectId):
             result[key] = str(value)
         elif isinstance(value, datetime):
-            result[key] = value.isoformat()
+            from app.services.wa_time import format_api_datetime
+
+            result[key] = format_api_datetime(value)
         elif isinstance(value, list):
             result[key] = [serialize_doc(item) if isinstance(item, dict) else 
                           str(item) if isinstance(item, ObjectId) else item 
@@ -491,9 +493,21 @@ def create_wa_record_doc(project_id, reference_number, sender_phone, sender_name
         'merged_from': None,
         'split_from': None,
         'void_reason': None,
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
+
+
+def _wa_now():
+    from app.services.wa_time import wa_now
+
+    return wa_now()
+
+
+def _fmt_api_dt(dt):
+    from app.services.wa_time import format_api_datetime
+
+    return format_api_datetime(dt)
 
 
 def wa_record_to_dict(doc):
@@ -507,14 +521,14 @@ def wa_record_to_dict(doc):
             'value': f.get('value', ''),
             'confidence': f.get('confidence', 'gray'),
             'edited_by': str(f['edited_by']) if f.get('edited_by') else None,
-            'edited_at': f['edited_at'].isoformat() if f.get('edited_at') else None,
+            'edited_at': _fmt_api_dt(f['edited_at']) if f.get('edited_at') else None,
         }
 
     def _serialize_follow_up(fu):
         return {
             'question': fu.get('question', ''),
             'answer': fu.get('answer'),
-            'timestamp': fu['timestamp'].isoformat() if fu.get('timestamp') else None,
+            'timestamp': _fmt_api_dt(fu['timestamp']) if fu.get('timestamp') else None,
             'round': fu.get('round', 0),
         }
 
@@ -524,7 +538,7 @@ def wa_record_to_dict(doc):
             'to': sh.get('to', ''),
             'changed_by': str(sh['changed_by']) if sh.get('changed_by') else None,
             'reason': sh.get('reason', ''),
-            'timestamp': sh['timestamp'].isoformat() if sh.get('timestamp') else None,
+            'timestamp': _fmt_api_dt(sh['timestamp']) if sh.get('timestamp') else None,
         }
 
     def _serialize_edit_history(eh):
@@ -533,7 +547,7 @@ def wa_record_to_dict(doc):
             'old_value': eh.get('old_value', ''),
             'new_value': eh.get('new_value', ''),
             'edited_by': str(eh['edited_by']) if eh.get('edited_by') else None,
-            'timestamp': eh['timestamp'].isoformat() if eh.get('timestamp') else None,
+            'timestamp': _fmt_api_dt(eh['timestamp']) if eh.get('timestamp') else None,
         }
 
     return {
@@ -555,14 +569,14 @@ def wa_record_to_dict(doc):
         'extracted_fields': [_serialize_extracted_field(f) for f in doc.get('extracted_fields', [])],
         'follow_up_thread': [_serialize_follow_up(fu) for fu in doc.get('follow_up_thread', [])],
         'follow_up_round': doc.get('follow_up_round', 0),
-        'last_follow_up_at': doc['last_follow_up_at'].isoformat() if doc.get('last_follow_up_at') else None,
+        'last_follow_up_at': _fmt_api_dt(doc['last_follow_up_at']) if doc.get('last_follow_up_at') else None,
         'status_history': [_serialize_status_history(sh) for sh in doc.get('status_history', [])],
         'edit_history': [_serialize_edit_history(eh) for eh in doc.get('edit_history', [])],
         'merged_from': str(doc['merged_from']) if doc.get('merged_from') else None,
         'split_from': str(doc['split_from']) if doc.get('split_from') else None,
         'void_reason': doc.get('void_reason'),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -579,8 +593,8 @@ def create_wa_project_doc(code, name, owner_id, description=None, location=None,
         'status': status,
         'members': [ObjectId(m) for m in (members or [])],
         'overrides': overrides or {},
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -600,8 +614,8 @@ def wa_project_to_dict(doc):
         'status': doc.get('status', 'active'),
         'members': [str(m) for m in doc.get('members', [])],
         'overrides': doc.get('overrides', {}),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -626,8 +640,8 @@ def create_pool_image_doc(phone, message_id, sender_name=None, image_path=None,
         'assigned_by': assigned_by,
         'assigned_at': assigned_at,
         'record_id': ObjectId(record_id) if record_id else None,
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -650,10 +664,10 @@ def pool_image_to_dict(doc):
         'project_code': doc.get('project_code'),
         'project_name': doc.get('project_name'),
         'assigned_by': doc.get('assigned_by'),
-        'assigned_at': doc['assigned_at'].isoformat() if doc.get('assigned_at') else None,
+        'assigned_at': _fmt_api_dt(doc['assigned_at']) if doc.get('assigned_at') else None,
         'record_id': str(doc['record_id']) if doc.get('record_id') else None,
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -677,8 +691,8 @@ def create_group_pending_image_doc(group_id, sender_phone, message_id, batch_id,
         'last_reminded_at': None,
         'bot_reminder_msg_id': None,
         'bot_reminder_msg_ids': [],
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -700,11 +714,11 @@ def group_pending_image_to_dict(doc):
         'project_id': str(doc['project_id']) if doc.get('project_id') else None,
         'project_code': doc.get('project_code'),
         'reminder_count': doc.get('reminder_count', 0),
-        'last_reminded_at': doc['last_reminded_at'].isoformat() if doc.get('last_reminded_at') else None,
+        'last_reminded_at': _fmt_api_dt(doc['last_reminded_at']) if doc.get('last_reminded_at') else None,
         'bot_reminder_msg_id': doc.get('bot_reminder_msg_id'),
         'bot_reminder_msg_ids': doc.get('bot_reminder_msg_ids', []),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -716,8 +730,8 @@ def create_wa_keyword_doc(term, keyword_type, synonyms=None, project_id=None, is
         'synonyms': [s.lower() for s in (synonyms or [])],
         'project_id': ObjectId(project_id) if project_id else None,
         'is_active': is_active,
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -733,8 +747,8 @@ def wa_keyword_to_dict(doc):
         'synonyms': doc.get('synonyms', []),
         'project_id': str(doc['project_id']) if doc.get('project_id') else None,
         'is_active': doc.get('is_active', True),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -745,8 +759,8 @@ def create_wa_template_doc(type_name, fields=None, project_id=None, is_active=Tr
         'type_name': type_name,
         'fields': fields or [],
         'is_active': is_active,
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -771,8 +785,8 @@ def wa_template_to_dict(doc):
         'type_name': doc.get('type_name', ''),
         'fields': [_serialize_field(f) for f in doc.get('fields', [])],
         'is_active': doc.get('is_active', True),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -794,8 +808,8 @@ def create_wa_organization_doc(name, logo=None, contact_email=None, defaults=Non
         'logo': logo,
         'contact_email': contact_email,
         'defaults': default_settings,
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
+        'created_at': _wa_now(),
+        'updated_at': _wa_now(),
     }
 
 
@@ -810,8 +824,8 @@ def wa_organization_to_dict(doc):
         'logo': doc.get('logo'),
         'contact_email': doc.get('contact_email'),
         'defaults': doc.get('defaults', {}),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
-        'updated_at': doc['updated_at'].isoformat() if doc.get('updated_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
+        'updated_at': _fmt_api_dt(doc['updated_at']) if doc.get('updated_at') else None,
     }
 
 
@@ -824,7 +838,7 @@ def create_wa_pending_photo_doc(sender_phone, photo_path, message_id=None):
         'sender_phone': sender_phone,
         'photo_path': photo_path,
         'message_id': message_id,
-        'created_at': datetime.utcnow(),
+        'created_at': _wa_now(),
     }
 
 
@@ -838,5 +852,5 @@ def wa_pending_photo_to_dict(doc):
         'sender_phone': doc.get('sender_phone', ''),
         'photo_path': doc.get('photo_path', ''),
         'message_id': doc.get('message_id'),
-        'created_at': doc['created_at'].isoformat() if doc.get('created_at') else None,
+        'created_at': _fmt_api_dt(doc['created_at']) if doc.get('created_at') else None,
     }

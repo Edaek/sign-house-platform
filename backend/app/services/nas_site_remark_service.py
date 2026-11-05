@@ -5,6 +5,7 @@ import logging
 import os
 import re
 from datetime import datetime, timezone
+from app.services.wa_time import hk_day_start_utc_naive, wa_now
 from typing import Any, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -410,6 +411,242 @@ def rename_site_remark_txt(
         return {'ok': False, 'error': str(exc)}
 
 
+_REMARK_TXT_READ_MAX_CHARS = 32_000
+
+
+def _normalize_remark_filename_arg(name: Optional[str]) -> Optional[str]:
+    raw = (name or '').strip()
+    if not raw:
+        return None
+    base = os.path.basename(raw.replace('\\', '/'))
+    if not base.lower().endswith('.txt'):
+        base = f'{base}.txt'
+    return base
+
+
+def _pick_remark_txt_basename(day_dir: str, filename: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
+    """Pick one .txt in Photo/day; returns (basename, error_dict)."""
+    explicit = _normalize_remark_filename_arg(filename)
+    if explicit:
+        path = os.path.join(day_dir, explicit)
+        if not os.path.isfile(path):
+            return None, {'ok': False, 'error': 'remark txt not found', 'fileName': explicit, 'path': path}
+        return explicit, None
+    try:
+        txts = list_remark_txt_basenames(day_dir)
+    except OSError as exc:
+        return None, {'ok': False, 'error': str(exc)}
+    if not txts:
+        return None, {'ok': False, 'error': 'no remark txt in this day folder', 'dayDir': day_dir}
+    if len(txts) > 1:
+        return None, {
+            'ok': False,
+            'error': 'multiple remark txt files; pass filename',
+            'existingFiles': txts,
+            'dayDir': day_dir,
+        }
+    return txts[0], None
+
+
+def _resolve_site_remark_day_dir(
+    project_code: str,
+    day_str: Optional[str],
+    *,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
+) -> tuple[Optional[str], Optional[dict]]:
+    from app.services.nas_watcher_service import nas_mount
+
+    if not nas_mount.is_available():
+        return None, {'ok': False, 'error': 'NAS mount not available'}
+    day = day_str or hk_today_str()
+    pref = (preferred_folder_name or '').strip() or None
+    bucket = (preferred_parent_bucket or '').strip() or None
+    day_dir = nas_mount.resolve_photo_day_dir(
+        project_code,
+        day,
+        preferred_folder_name=pref,
+        preferred_parent_bucket=bucket,
+    )
+    if not day_dir:
+        return None, {'ok': False, 'error': 'Photo day folder not found on NAS (no remark txt for that date?)'}
+    return day_dir, None
+
+
+def read_site_remark_txt(
+    project_code: str,
+    *,
+    day_str: Optional[str] = None,
+    filename: Optional[str] = None,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
+    list_all: bool = False,
+) -> dict:
+    """Read day remark .txt content from NAS (view)."""
+    day_dir, err = _resolve_site_remark_day_dir(
+        project_code,
+        day_str,
+        preferred_folder_name=preferred_folder_name,
+        preferred_parent_bucket=preferred_parent_bucket,
+    )
+    if err:
+        return err
+    day = day_str or hk_today_str()
+
+    if list_all or _normalize_remark_filename_arg(filename) is None:
+        try:
+            names = list_remark_txt_basenames(day_dir or '')
+        except OSError as exc:
+            return {'ok': False, 'error': str(exc)}
+        if not names:
+            return {'ok': True, 'day': day, 'dayDir': day_dir, 'files': [], 'content': ''}
+        files = []
+        for base in names:
+            path = os.path.join(day_dir or '', base)
+            text = read_remark_txt_file(path)
+            truncated = False
+            if len(text) > _REMARK_TXT_READ_MAX_CHARS:
+                text = text[:_REMARK_TXT_READ_MAX_CHARS]
+                truncated = True
+            files.append({
+                'fileName': base,
+                'path': path,
+                'content': text,
+                'truncated': truncated,
+            })
+        if len(files) == 1 and not list_all:
+            one = files[0]
+            return {
+                'ok': True,
+                'day': day,
+                'dayDir': day_dir,
+                'fileName': one['fileName'],
+                'path': one['path'],
+                'content': one['content'],
+                'truncated': one['truncated'],
+            }
+        return {'ok': True, 'day': day, 'dayDir': day_dir, 'files': files}
+
+    base, pick_err = _pick_remark_txt_basename(day_dir or '', filename)
+    if pick_err:
+        return pick_err
+    path = os.path.join(day_dir or '', base or '')
+    text = read_remark_txt_file(path)
+    truncated = False
+    if len(text) > _REMARK_TXT_READ_MAX_CHARS:
+        text = text[:_REMARK_TXT_READ_MAX_CHARS]
+        truncated = True
+    return {
+        'ok': True,
+        'day': day,
+        'dayDir': day_dir,
+        'fileName': base,
+        'path': path,
+        'content': text,
+        'truncated': truncated,
+    }
+
+
+def set_site_remark_txt(
+    project_code: str,
+    content: str,
+    *,
+    day_str: Optional[str] = None,
+    filename: Optional[str] = None,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
+    create_if_missing: bool = False,
+) -> dict:
+    """Replace entire remark .txt body (modify). Empty content deletes the file."""
+    body = (content or '').strip()
+    if not body:
+        return delete_site_remark_txt(
+            project_code,
+            day_str=day_str,
+            filename=filename,
+            preferred_folder_name=preferred_folder_name,
+            preferred_parent_bucket=preferred_parent_bucket,
+        )
+
+    day_dir, err = _resolve_site_remark_day_dir(
+        project_code,
+        day_str,
+        preferred_folder_name=preferred_folder_name,
+        preferred_parent_bucket=preferred_parent_bucket,
+    )
+    if err:
+        return err
+    day = day_str or hk_today_str()
+    base, pick_err = _pick_remark_txt_basename(day_dir or '', filename)
+    if pick_err:
+        if pick_err.get('error') == 'multiple remark txt files; pass filename':
+            return pick_err
+        explicit = _normalize_remark_filename_arg(filename)
+        if explicit and pick_err.get('error') == 'remark txt not found':
+            base = explicit
+        elif create_if_missing and pick_err.get('error') == 'no remark txt in this day folder':
+            folder_label = site_folder_name_from_day_dir(day_dir or '')
+            base = explicit or site_remark_filename(folder_name=folder_label, day_str=day)
+        else:
+            return pick_err
+    if not base:
+        return {'ok': False, 'error': 'could not resolve remark txt file name'}
+
+    path = os.path.join(day_dir or '', base)
+    if remark_txt_name_taken(day_dir or '', base) and not os.path.isfile(path):
+        return {
+            'ok': False,
+            'error': 'duplicate_remark_txt',
+            'message': f'同目录已有同名文件「{base}」，请换名称。',
+            'existingFiles': list_remark_txt_basenames(day_dir or ''),
+        }
+    try:
+        with open(path, 'w', encoding='utf-8') as fh:
+            fh.write(body)
+            if not body.endswith('\n'):
+                fh.write('\n')
+        logger.info('[NAS] Replaced site remark txt → %s', path)
+        return {'ok': True, 'path': path, 'fileName': base, 'day': day, 'removedFile': False}
+    except OSError as exc:
+        logger.error('[NAS] Set site remark txt failed: %s', exc)
+        return {'ok': False, 'error': str(exc)}
+
+
+def delete_site_remark_txt(
+    project_code: str,
+    *,
+    day_str: Optional[str] = None,
+    filename: Optional[str] = None,
+    preferred_folder_name: Optional[str] = None,
+    preferred_parent_bucket: Optional[str] = None,
+) -> dict:
+    """Delete a day remark .txt file."""
+    day_dir, err = _resolve_site_remark_day_dir(
+        project_code,
+        day_str,
+        preferred_folder_name=preferred_folder_name,
+        preferred_parent_bucket=preferred_parent_bucket,
+    )
+    if err:
+        return err
+    day = day_str or hk_today_str()
+    base, pick_err = _pick_remark_txt_basename(day_dir or '', filename)
+    if pick_err:
+        if pick_err.get('error') == 'no remark txt in this day folder':
+            return {'ok': True, 'skipped': True, 'day': day, 'removedFile': False}
+        return pick_err
+    path = os.path.join(day_dir or '', base or '')
+    if not os.path.isfile(path):
+        return {'ok': True, 'skipped': True, 'path': path, 'removedFile': False}
+    try:
+        os.remove(path)
+        logger.info('[NAS] Deleted site remark txt → %s', path)
+        return {'ok': True, 'path': path, 'fileName': base, 'day': day, 'removedFile': True}
+    except OSError as exc:
+        logger.error('[NAS] Delete site remark txt failed: %s', exc)
+        return {'ok': False, 'error': str(exc)}
+
+
 def _remark_context_key(group_id: Optional[str], sender: str) -> str:
     digits = ''.join(c for c in (sender or '') if c.isdigit()) or sender
     if group_id:
@@ -432,7 +669,7 @@ def set_site_remark_context(
     payload = {
         'projectCode': project_code,
         'day': day,
-        'at': datetime.utcnow(),
+        'at': wa_now(),
         'groupId': group_id,
         'sender': sender,
     }
@@ -596,7 +833,7 @@ def _merge_remark_into_latest_record(
     group_id: Optional[str] = None,
 ) -> None:
     """Keep web UI remark in sync when user adds notes after photos."""
-    since = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    since = hk_day_start_utc_naive()
     query = {
         'senderPhone': sender,
         'createdAt': {'$gte': since},
@@ -613,5 +850,5 @@ def _merge_remark_into_latest_record(
     merged = f'{prev}\n\n{text}'.strip() if prev else text
     mongo.db.wa_records.update_one(
         {'_id': rec['_id']},
-        {'$set': {'rawMessage': merged, 'updatedAt': datetime.utcnow()}},
+        {'$set': {'rawMessage': merged, 'updatedAt': wa_now()}},
     )

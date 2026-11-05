@@ -3,6 +3,7 @@ import { useWaStore } from '../../store/waStore'
 import WaMetricCard from '../../components/wa/MetricCard'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import { Inbox, Clock, Eye, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { parseAppDateTime } from '../../lib/waDateTime'
 
 function formatRelativeTime(date: Date): string {
   const now = new Date()
@@ -66,7 +67,7 @@ export default function WaDashboardPage() {
                   </p>
                 </div>
                 <time className="text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                  {formatRelativeTime(new Date(record.createdAt))}
+                  {formatRelativeTime(parseAppDateTime(record.createdAt))}
                 </time>
               </div>
             ))

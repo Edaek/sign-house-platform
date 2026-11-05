@@ -5,6 +5,7 @@ import os
 import re
 import threading
 from datetime import datetime, timedelta
+from app.services.wa_time import wa_now
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ def _classify_reply_sent_key_group(
 def mark_private_classify_reply_sent(phone: str, batch_id: Optional[str] = None) -> None:
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.wa_system.update_one(
         {'_id': _classify_reply_sent_key(phone, batch_id)},
         {'$set': {'at': now, 'phone': phone, 'batchId': batch_id}},
@@ -73,7 +74,7 @@ def mark_group_classify_reply_sent(
 ) -> None:
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.wa_system.update_one(
         {'_id': _classify_reply_sent_key_group(group_id, group_sender, batch_id)},
         {
@@ -97,7 +98,7 @@ def mark_private_classify_in_progress(phone: str, batch_id: Optional[str] = None
     """Block generic pool receipt while NAS/heuristics build the folder list."""
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.wa_system.update_one(
         {'_id': _classify_in_progress_key(phone)},
         {'$set': {'at': now, 'phone': phone, 'batchId': batch_id}},
@@ -117,7 +118,7 @@ def private_classify_in_progress(phone: str, within_s: float = 120.0) -> bool:
     doc = mongo.db.wa_system.find_one({'_id': _classify_in_progress_key(phone)})
     if not doc or not doc.get('at'):
         return False
-    return (datetime.utcnow() - doc['at']).total_seconds() <= within_s
+    return (wa_now() - doc['at']).total_seconds() <= within_s
 
 
 def should_skip_receipt_after_classify_reply(
@@ -130,7 +131,7 @@ def should_skip_receipt_after_classify_reply(
 ) -> bool:
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     keys = []
     if phone:
         keys.append(_classify_reply_sent_key(phone, batch_id))
@@ -237,7 +238,7 @@ def mark_pool_images_reminded(
 ) -> None:
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     update = {'$set': {'lastRemindedAt': now}, '$inc': {'reminderCount': 1}}
     if send_resp and isinstance(send_resp, dict):
         msg_id = send_resp.get('messageId') or send_resp.get('id') or ''
@@ -361,7 +362,7 @@ def schedule_pool_receipt_prompt(
 
         from app import mongo
 
-        now = datetime.utcnow()
+        now = wa_now()
         flush_at = now + timedelta(seconds=DEBOUNCE_S)
         mongo.db.wa_system.update_one(
             {'_id': _pending_doc_id(key)},
@@ -406,7 +407,7 @@ def _resolve_count(entry: dict) -> int:
     try:
         from app import mongo
 
-        now = datetime.utcnow()
+        now = wa_now()
         since = now - timedelta(minutes=10)
         if entry.get('group_id') and entry.get('group_sender'):
             return mongo.db.group_pending_images.count_documents({
@@ -427,7 +428,7 @@ def _try_acquire_send_lock(key: str) -> bool:
     from app import mongo
     from pymongo import ReturnDocument
 
-    now = datetime.utcnow()
+    now = wa_now()
     lock_id = f'pool_receipt_sent:{key}'
     cooldown_until = now + timedelta(seconds=SEND_COOLDOWN_S)
     prev = mongo.db.wa_system.find_one_and_update(
@@ -451,7 +452,7 @@ def _try_acquire_send_lock(key: str) -> bool:
 def _duplicate_send(key: str, count: int) -> bool:
     from app import mongo
 
-    now = datetime.utcnow()
+    now = wa_now()
     doc_id = f'pool_receipt_last:{key}'
     last = mongo.db.wa_system.find_one({'_id': doc_id})
     if not last:
@@ -470,7 +471,7 @@ def _record_send(key: str, count: int) -> None:
 
     mongo.db.wa_system.update_one(
         {'_id': f'pool_receipt_last:{key}'},
-        {'$set': {'count': count, 'at': datetime.utcnow()}},
+        {'$set': {'count': count, 'at': wa_now()}},
         upsert=True,
     )
 

@@ -5,6 +5,7 @@ import WaStatusBadge from './StatusBadge'
 import WaConfidenceBadge from './ConfidenceBadge'
 import { useWaStore, type WaRecord, type ConfidenceLevel } from '../../store/waStore'
 import { recordRemarkDisplay } from '../../lib/waRecordRemark'
+import { formatDateTimeHK } from '../../lib/waDateTime'
 import toast from 'react-hot-toast'
 import {
   CheckCircle2,
@@ -149,7 +150,7 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                 <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mt-1">
                   <span className="flex items-center gap-1"><User className="h-3 w-3" />{record.senderName || record.senderPhone}</span>
                   <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{record.senderPhone}</span>
-                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(record.createdAt).toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{formatDateTimeHK(record.createdAt)}</span>
                 </div>
               </div>
 
@@ -289,7 +290,7 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                         <div key={i} className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Round {entry.round}</span>
-                            <span className="text-[10px] text-slate-500 dark:text-slate-400">{new Date(entry.timestamp).toLocaleString()}</span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400">{formatDateTimeHK(entry.timestamp)}</span>
                           </div>
                           <p className="text-sm"><span className="font-medium text-sign-600 dark:text-sign-400">Q:</span> {entry.question}</p>
                           {entry.answer && <p className="text-sm"><span className="font-medium text-slate-600 dark:text-slate-400">A:</span> {entry.answer}</p>}
@@ -306,7 +307,7 @@ export default function RecordDetailDrawer({ record, open, onClose }: RecordDeta
                     <div className="space-y-1">
                       {record.statusHistory.map((entry, i) => (
                         <div key={i} className="flex items-center gap-2 text-xs py-1">
-                          <time className="text-slate-500 dark:text-slate-400 w-[140px] shrink-0">{new Date(entry.timestamp).toLocaleString()}</time>
+                          <time className="text-slate-500 dark:text-slate-400 w-[140px] shrink-0">{formatDateTimeHK(entry.timestamp)}</time>
                           <div className="flex items-center gap-1">
                             <WaStatusBadge status={entry.from} size="sm" />
                             <span className="text-slate-400">→</span>

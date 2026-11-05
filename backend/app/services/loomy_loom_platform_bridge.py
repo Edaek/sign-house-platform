@@ -105,6 +105,44 @@ def _auth_headers() -> dict:
     return headers
 
 
+def _should_relay_loom_reply_to_whatsapp(*, loom_already_sent: bool = False) -> bool:
+    """
+    Gateway-only: Loom returns reply_zh but does not send → relay (default when loom_already_sent=false).
+    Wakka→Loom Turn: response may set whatsapp_sent → do not relay unless LOOM_WA_RELAY_WHATSAPP_REPLY=true.
+    """
+    raw = (os.environ.get('LOOM_WA_RELAY_WHATSAPP_REPLY') or '').strip().lower()
+    if loom_already_sent:
+        return raw in ('1', 'true', 'yes', 'on', 'force')
+    if raw in ('0', 'false', 'no', 'off'):
+        return False
+    return True
+
+
+def _extract_whatsapp_sent(body: dict) -> bool:
+    """Loom may send WhatsApp itself; Sign House must not relay reply_zh again."""
+    for key in ('whatsapp_sent', 'whatsappSent', 'wa_reply_sent', 'waReplySent', 'reply_delivered'):
+        val = body.get(key)
+        if val is True or (isinstance(val, str) and val.strip().lower() in ('1', 'true', 'yes')):
+            return True
+    data = body.get('data')
+    if isinstance(data, dict):
+        for key in ('whatsapp_sent', 'whatsappSent', 'wa_reply_sent', 'reply_delivered'):
+            val = data.get(key)
+            if val is True or (isinstance(val, str) and val.strip().lower() in ('1', 'true', 'yes')):
+                return True
+    return False
+
+
+def local_ollama_mcp_agent_enabled() -> bool:
+    """Local Sign House Ollama ReAct loop (agent mode). Off when only Loom Turn should speak."""
+    raw = (os.environ.get('LOOMY_WA_DISABLE_LOCAL_OLLAMA') or '').strip().lower()
+    if raw in ('1', 'true', 'yes', 'on'):
+        return False
+    from app.services.wa_classify_mode import wa_loomy_agent_enabled
+
+    return wa_loomy_agent_enabled()
+
+
 def _extract_reply(body: Any) -> str:
     if body is None:
         return ''
@@ -319,14 +357,25 @@ def _loom_chat_timeout_s() -> float:
     return float(os.environ.get('LOOM_PLATFORM_CHAT_TIMEOUT_S', '90'))
 
 
-def _process_loom_chat_response(body: Any, ctx: Dict[str, Any]) -> Optional[str]:
+def _process_loom_chat_response(
+    body: Any,
+    ctx: Dict[str, Any],
+    *,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     if isinstance(body, str):
         try:
             body = json.loads(body)
         except json.JSONDecodeError:
-            return body.strip() or None
+            text = body.strip() or None
+            if meta is not None:
+                meta['whatsapp_sent'] = False
+            return text
 
     body_dict = body if isinstance(body, dict) else {}
+    wa_sent = _extract_whatsapp_sent(body_dict)
+    if meta is not None:
+        meta['whatsapp_sent'] = wa_sent
     actions = _extract_actions(body_dict)
     assigned = False
     if actions:
@@ -337,7 +386,7 @@ def _process_loom_chat_response(body: Any, ctx: Dict[str, Any]) -> Optional[str]
     _run_loom_actions(actions, ctx)
     _apply_loom_response_state(body_dict, ctx, assigned=assigned)
 
-    reply = _extract_reply(body)
+    reply = _extract_reply(body_dict)
     if reply:
         pool_ids = _pool_ids_for_request(ctx)
         if pool_ids and not assigned:
@@ -357,14 +406,23 @@ def _process_loom_chat_response(body: Any, ctx: Dict[str, Any]) -> Optional[str]
             from app.services.loomy_wa_classify_guard import mark_pool_classify_reply
 
             mark_pool_classify_reply(pool_ids, reply)
+        if not _should_relay_loom_reply_to_whatsapp(loom_already_sent=wa_sent):
+            return None
         return reply
 
     if actions:
+        if not _should_relay_loom_reply_to_whatsapp(loom_already_sent=wa_sent):
+            return None
         return '已依 Loom 指示處理歸類，請稍候確認訊息。'
     return None
 
 
-def _post_loom_chat_turn(ctx: Dict[str, Any], *, runtime_inbound: bool) -> Optional[str]:
+def _post_loom_chat_turn(
+    ctx: Dict[str, Any],
+    *,
+    runtime_inbound: bool,
+    meta: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     url = loom_inbound_notify_url() if runtime_inbound else (os.environ.get('LOOM_PLATFORM_CHAT_URL') or '').strip()
     if not url:
         return None
@@ -385,7 +443,7 @@ def _post_loom_chat_turn(ctx: Dict[str, Any], *, runtime_inbound: bool) -> Optio
             return None
         return None if loom_platform_fallback_local() else 'Loom 歸類服務暫不可用。'
 
-    reply = _process_loom_chat_response(body, ctx)
+    reply = _process_loom_chat_response(body, ctx, meta=meta)
     if reply:
         return reply
     if runtime_inbound:
@@ -393,7 +451,7 @@ def _post_loom_chat_turn(ctx: Dict[str, Any], *, runtime_inbound: bool) -> Optio
     return None if loom_platform_fallback_local() else 'Loom 未返回可發送的回覆。'
 
 
-def try_loom_inbound_turn(ctx: Dict[str, Any]) -> Optional[str]:
+def try_loom_inbound_turn(ctx: Dict[str, Any], *, meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Push WA inbound to Loom runtime (loom mode); return reply text for WhatsApp if any."""
     if not wa_loom_runtime_notify_configured():
         return None
@@ -402,14 +460,18 @@ def try_loom_inbound_turn(ctx: Dict[str, Any]) -> Optional[str]:
         or ctx.get('pool_ids')
     ):
         return None
-    return _post_loom_chat_turn(ctx, runtime_inbound=True)
+    return _post_loom_chat_turn(ctx, runtime_inbound=True, meta=meta)
 
 
-def try_loom_platform_classify(ctx: Dict[str, Any]) -> Optional[str]:
+def try_loom_platform_classify(ctx: Dict[str, Any], *, meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     POST to Loom platform chat API (agent mode + LOOMY_WA_LOOM_PLATFORM_CLASSIFY).
     Returns WhatsApp reply text, or None to fall back to local classify.
     """
     if not should_use_loom_platform(ctx):
         return None
-    return _post_loom_chat_turn(ctx, runtime_inbound=False)
+    return _post_loom_chat_turn(ctx, runtime_inbound=False, meta=meta)
+
+
+def loom_turn_whatsapp_already_sent(meta: Optional[Dict[str, Any]]) -> bool:
+    return bool(meta and meta.get('whatsapp_sent'))

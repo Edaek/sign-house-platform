@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from bson import ObjectId
 from datetime import datetime
+from app.services.wa_time import wa_now
 from app import mongo
 from app.models import serialize_doc
 from app.utils.permissions import require_role
@@ -35,7 +36,7 @@ def update_record_field(record_id):
     if not record:
         return jsonify({'error': 'Record not found'}), 404
     
-    now = datetime.utcnow()
+    now = wa_now()
     fields = record.get('extractedFields', [])
     old_value = ''
     for f in fields:
@@ -97,7 +98,7 @@ def update_record_field(record_id):
 @jwt_required()
 def confirm_record(record_id):
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    now = wa_now()
     record = mongo.db.wa_records.find_one({'_id': ObjectId(record_id)})
     if not record:
         return jsonify({'error': 'Record not found'}), 404
@@ -126,7 +127,7 @@ def void_record(record_id):
         return jsonify({'error': 'Reason must be at least 5 characters'}), 400
     
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    now = wa_now()
     record = mongo.db.wa_records.find_one({'_id': ObjectId(record_id)})
     if not record:
         return jsonify({'error': 'Record not found'}), 404
@@ -214,7 +215,7 @@ def request_info(record_id):
     if not record:
         return jsonify({'error': 'Record not found'}), 404
     
-    now = datetime.utcnow()
+    now = wa_now()
     round_num = record.get('followUpRound', 0) + 1
     
     try:

@@ -14,6 +14,7 @@ import {
   siteNumberFromProject,
   waProjectsListPath,
 } from '../../lib/waProjects'
+import { formatDateHK } from '../../lib/waDateTime'
 
 function nasFolderApiParams(searchParams: URLSearchParams): Record<string, string> {
   const out: Record<string, string> = {}
@@ -119,7 +120,7 @@ function NasLooseFileList({ files }: { files: NasFileEntry[] }) {
         <li key={f.relativePath || f.name} className="px-3 py-2 flex justify-between gap-2 text-slate-700 dark:text-slate-300">
           <span className="truncate font-mono text-xs">{f.relativePath || f.name}</span>
           {f.modified && (
-            <span className="text-[10px] text-slate-400 shrink-0">{f.modified.slice(0, 10)}</span>
+            <span className="text-[10px] text-slate-400 shrink-0">{formatDateHK(f.modified)}</span>
           )}
         </li>
       ))}

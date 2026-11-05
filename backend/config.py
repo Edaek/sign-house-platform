@@ -7,6 +7,21 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / '.env', override=True)
 
 
+def _wa_inbound_classify_mode_from_env() -> str:
+    """Mirror wa_classify_mode.classify_mode() without importing app (avoids circular import)."""
+    brain = (os.environ.get('SIGNHOUSE_WA_BRAIN') or '').strip().lower()
+    if brain in ('loom',):
+        return 'loom'
+    if brain in ('agent', 'loomy'):
+        return 'agent'
+    m = (os.environ.get('WA_INBOUND_CLASSIFY_MODE') or 'loom').strip().lower()
+    if m in ('auto', 'legacy', '', 'loom'):
+        return 'loom'
+    if m in ('agent', 'loomy'):
+        return 'agent'
+    return 'loom'
+
+
 def _normalize_cors_origin(origin: str) -> str:
     """Browsers send Origin as scheme+host only; strip accidental path suffixes in env."""
     origin = origin.strip()
@@ -137,8 +152,8 @@ class Config:
     # Burst project hint after user sends classify text before photos arrive
     WA_BURST_PROJECT_TTL_S = int(os.environ.get('WA_BURST_PROJECT_TTL_S', '120'))
 
-    # loom = Loom MCP brain | agent = local Ollama Loomy (auto/legacy mode removed)
-    WA_INBOUND_CLASSIFY_MODE = os.environ.get('WA_INBOUND_CLASSIFY_MODE', 'loom').strip().lower()
+    # loom | agent — SIGNHOUSE_WA_BRAIN (preferred) or WA_INBOUND_CLASSIFY_MODE
+    WA_INBOUND_CLASSIFY_MODE = _wa_inbound_classify_mode_from_env()
     MATTERMOST_POOL_WEBHOOK_URL = os.environ.get('MATTERMOST_POOL_WEBHOOK_URL', '').strip()
     LOOMY_POOL_NOTIFY_ENABLED = os.environ.get('LOOMY_POOL_NOTIFY_ENABLED', '').strip().lower()
     LOOMY_WA_POOL_ACK = os.environ.get('LOOMY_WA_POOL_ACK', '').strip()

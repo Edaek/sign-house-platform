@@ -23,6 +23,9 @@ INPROCESS_TOOL_NAMES = frozenset({
     'wa_assign_pool_images',
     'wa_append_site_remark',
     'wa_rename_site_remark_txt',
+    'wa_read_site_remark_txt',
+    'wa_set_site_remark_txt',
+    'wa_delete_site_remark_txt',
     'wa_list_keywords',
     'wa_get_record',
 })
@@ -273,6 +276,62 @@ def _exec_rename_site_remark_txt(a: dict) -> str:
     return json_result(result)
 
 
+def _exec_read_site_remark_txt(a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    from app.services.nas_site_remark_service import read_site_remark_txt
+
+    result = read_site_remark_txt(
+        code,
+        day_str=(a.get('day') or '').strip() or None,
+        filename=(a.get('filename') or a.get('fileName') or '').strip() or None,
+        preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+        preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+        list_all=bool(a.get('list_all') or a.get('listAll')),
+    )
+    return json_result(result)
+
+
+def _exec_set_site_remark_txt(a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    if 'content' not in a and 'text' not in a:
+        return 'Error: content required'
+    from app.services.nas_site_remark_service import set_site_remark_txt
+
+    content = a.get('content')
+    if content is None:
+        content = a.get('text')
+    result = set_site_remark_txt(
+        code,
+        '' if content is None else str(content),
+        day_str=(a.get('day') or '').strip() or None,
+        filename=(a.get('filename') or a.get('fileName') or '').strip() or None,
+        preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+        preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+        create_if_missing=bool(a.get('create_if_missing') or a.get('createIfMissing')),
+    )
+    return json_result(result)
+
+
+def _exec_delete_site_remark_txt(a: dict) -> str:
+    code = (a.get('project_code') or a.get('projectCode') or '').strip()
+    if not code:
+        return 'Error: project_code required'
+    from app.services.nas_site_remark_service import delete_site_remark_txt
+
+    result = delete_site_remark_txt(
+        code,
+        day_str=(a.get('day') or '').strip() or None,
+        filename=(a.get('filename') or a.get('fileName') or '').strip() or None,
+        preferred_folder_name=(a.get('nas_folder_name') or a.get('nasFolderName') or '').strip() or None,
+        preferred_parent_bucket=(a.get('nas_parent_bucket') or a.get('nasParentBucket') or '').strip() or None,
+    )
+    return json_result(result)
+
+
 def _exec_list_keywords(_a: dict) -> str:
     from app.models import serialize_doc
 
@@ -301,6 +360,9 @@ _HANDLERS = {
     'wa_assign_pool_images': _exec_assign_pool,
     'wa_append_site_remark': _exec_append_site_remark,
     'wa_rename_site_remark_txt': _exec_rename_site_remark_txt,
+    'wa_read_site_remark_txt': _exec_read_site_remark_txt,
+    'wa_set_site_remark_txt': _exec_set_site_remark_txt,
+    'wa_delete_site_remark_txt': _exec_delete_site_remark_txt,
     'wa_list_keywords': _exec_list_keywords,
     'wa_get_record': _exec_get_record,
 }

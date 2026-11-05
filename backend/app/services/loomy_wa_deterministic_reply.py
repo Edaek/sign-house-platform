@@ -3,14 +3,10 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
 from typing import Any, Dict, Optional
-from zoneinfo import ZoneInfo
 
 from app.services.loomy_wa_nas_summary import format_wa_nas_summary_zh
-from app.services.nas_site_remark_service import HK
-
-_WEEKDAY_ZH = '一二三四五六日'
+from app.services.wa_time import hk_datetime_display, wa_now
 
 _DATE_PATTERNS = (
     re.compile(r'今天|今日|几月几号|幾月幾號|什么日期|什麼日期|日期|星期几|星期幾|周几|週幾', re.I),
@@ -45,12 +41,6 @@ def loomy_deterministic_enabled() -> bool:
     return raw not in ('0', 'false', 'no', 'off')
 
 
-def hk_datetime_display() -> str:
-    dt = datetime.now(HK)
-    wd = _WEEKDAY_ZH[dt.weekday()]
-    return f'{dt.date().isoformat()}（星期{wd}）'
-
-
 def _normalized_user_text(ctx: Dict[str, Any]) -> str:
     return ((ctx.get('user_text') or ctx.get('caption') or '')).strip()
 
@@ -81,7 +71,7 @@ def dismiss_open_pool(phone: str, group_id: Optional[str]) -> int:
     from app import mongo
 
     q = _open_pool_query(phone, group_id)
-    now = datetime.utcnow()
+    now = wa_now()
     result = mongo.db.pool_images.update_many(
         q,
         {'$set': {'dismissed': True, 'dismissedAt': now, 'updatedAt': now}},

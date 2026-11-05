@@ -275,7 +275,6 @@ def list_projects():
     
     projects = list(mongo.db.wa_projects.find(query).sort('updatedAt', -1))
 
-    from datetime import datetime
     from app.services.nas_sync_service import (
         _build_index_from_folders,
         enrich_project_dict,
@@ -283,7 +282,9 @@ def list_projects():
     )
     from app.services.nas_watcher_service import nas_mount
 
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    from app.services.wa_time import hk_day_start_utc_naive
+
+    today = hk_day_start_utc_naive()
 
     nas_index = nas_folder_index(blocking_scan=False)
     if not nas_index:

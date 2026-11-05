@@ -1,6 +1,7 @@
 """Follow-up service — sends AI-generated questions for missing required fields."""
 import logging
 from datetime import datetime
+from app.services.wa_time import wa_now
 
 import requests
 from bson import ObjectId
@@ -82,7 +83,7 @@ def send_follow_up(record_id):
         return False
 
     cfg = _get_config()
-    now = datetime.utcnow()
+    now = wa_now()
 
     if record.get('followUpRound', 0) >= cfg['max_rounds']:
         mongo.db.wa_records.update_one(

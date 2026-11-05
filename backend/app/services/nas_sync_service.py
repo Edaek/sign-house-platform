@@ -7,6 +7,7 @@ import threading
 import time
 import hashlib
 from datetime import datetime
+from app.services.wa_time import format_api_datetime, wa_now
 from pathlib import Path
 
 from bson import ObjectId
@@ -95,7 +96,7 @@ def _list_nas_folders_timed(timeout_s: float = 12.0):
 
 
 def _build_index_from_folders(folders, synced_at=None):
-    synced_at = synced_at or datetime.utcnow().isoformat()
+    synced_at = synced_at or format_api_datetime(wa_now())
     index = {}
     for folder in folders:
         site_code = (folder.get('code') or '').strip()
@@ -246,7 +247,7 @@ def enrich_project_dict(project_doc, nas_index=None, *, fast_single=False, for_l
         else:
             project_doc['nasFileCount'] = nas.get('fileCount', 0)
         project_doc['nasLastModified'] = nas.get('latestModified')
-        project_doc['nasSyncedAt'] = datetime.utcnow().isoformat() if nas else None
+        project_doc['nasSyncedAt'] = format_api_datetime(wa_now()) if nas else None
         stored = (project_doc.get('nasFolderName') or '').strip()
         if not stored and nas.get('folderName'):
             project_doc['nasFolderName'] = nas.get('folderName')
@@ -570,7 +571,7 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
     from app.services.wa_project_validation import find_project_by_code
 
     parent_bucket = nas_path_from_web_bucket(code)
-    now = datetime.utcnow()
+    now = wa_now()
     children = sorted(
         nas_mount._list_bucket_child_folders_sync(code),
         key=lambda c: len((c.get('folderName') or '')),
@@ -668,7 +669,7 @@ def link_nas_bucket_folder_to_project(bucket_code, folder_name, owner_id):
         }
 
     folder_label = (child.get('folderName') or site_code).strip()
-    now = datetime.utcnow()
+    now = wa_now()
     parent_variants = nas_parent_bucket_match_values(bucket)
 
     existing = find_project_by_code(site_code, parent_bucket=parent_bucket)
@@ -744,7 +745,7 @@ def sync_projects_from_nas(owner_id):
     if not nas_mount.is_available():
         return {'ok': False, 'error': 'NAS mount not available'}
 
-    now = datetime.utcnow()
+    now = wa_now()
     root_names = nas_mount.list_watch_root_dir_names()
     buckets_created = _ensure_nas_bucket_projects(owner_id, root_names, now)
 
@@ -1277,7 +1278,7 @@ def _migrate_bucket_parent_code(old_bucket: str, new_bucket: str, *, exclude_pro
     new_b = (new_bucket or '').strip()
     if not old_b or not new_b or old_b.upper() == new_b.upper():
         return
-    now = datetime.utcnow()
+    now = wa_now()
     mongo.db.wa_projects.update_many(
         {
             'nasParentBucket': {'$regex': f'^{re.escape(old_b)}$', '$options': 'i'},
@@ -1302,7 +1303,7 @@ def _refresh_site_nas_folders_under_bucket(bucket_code: str):
     bucket_dir = nas_mount._resolve_bucket_dir(bucket_code)
     if bucket_dir is None or not bucket_dir.is_dir():
         return
-    now = datetime.utcnow()
+    now = wa_now()
     cursor = mongo.db.wa_projects.find(
         {
             'nasParentBucket': {'$regex': f'^{re.escape(bucket_code)}$', '$options': 'i'},
@@ -1471,7 +1472,7 @@ def update_web_project(project, data, *, sync_nas=True):
         else:
             target_dir_name = new_code
 
-    mongo_updates = {'updatedAt': datetime.utcnow()}
+    mongo_updates = {'updatedAt': wa_now()}
     if data.get('location') is not None:
         mongo_updates['location'] = (data.get('location') or '').strip()
     if data.get('stage') is not None:
@@ -1564,11 +1565,11 @@ def update_web_project(project, data, *, sync_nas=True):
         mongo_updates['code'] = new_code
         mongo.db.wa_records.update_many(
             {'projectId': project['_id']},
-            {'$set': {'projectCode': new_code, 'updatedAt': datetime.utcnow()}},
+            {'$set': {'projectCode': new_code, 'updatedAt': wa_now()}},
         )
         mongo.db.pool_images.update_many(
             {'projectId': project['_id']},
-            {'$set': {'projectCode': new_code, 'updatedAt': datetime.utcnow()}},
+            {'$set': {'projectCode': new_code, 'updatedAt': wa_now()}},
         )
 
     if data.get('name') is not None:
@@ -1905,7 +1906,7 @@ def sync_projects_to_nas():
             if project.get('nasFolder') != str(expected):
                 mongo.db.wa_projects.update_one(
                     {'_id': project['_id']},
-                    {'$set': {'nasFolder': str(expected), 'updatedAt': datetime.utcnow()}},
+                    {'$set': {'nasFolder': str(expected), 'updatedAt': wa_now()}},
                 )
             continue
         result = nas_mount.create_folder(
@@ -1915,7 +1916,7 @@ def sync_projects_to_nas():
             folders_created.append(code)
             updates = {
                 'nasFolder': result['path'],
-                'updatedAt': datetime.utcnow(),
+                'updatedAt': wa_now(),
             }
             if parent:
                 updates['nasParentBucket'] = parent
@@ -2139,7 +2140,7 @@ def run_bidirectional_nas_sync(owner_id=None, *, import_files=False):
             'recordsImported': records_imported,
             'recordsRemoved': deletions.get('recordsRemoved', 0),
             'recordsRemovedRefs': deletions.get('recordRefs', []),
-            'at': datetime.utcnow().isoformat(),
+            'at': format_api_datetime(wa_now()),
         }
         mongo.db.wa_system.update_one({'_id': 'nas_sync'}, {'$set': result}, upsert=True)
         return result
@@ -2172,7 +2173,7 @@ def import_nas_files_for_project(project_id, media_dir=None):
     files = nas_mount.list_folder_files(project['code'])
     created = 0
     skipped = 0
-    now = datetime.utcnow()
+    now = wa_now()
 
     for meta in files:
         name = meta['name']
