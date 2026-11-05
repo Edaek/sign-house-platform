@@ -130,7 +130,7 @@ def _system_preamble() -> str:
 
 Inbound intent (every message — do not skip MCP for memory-only / cheap paths):
 - Single digit 1–9 ONLY when you listed numbered choices last turn → pick_options assign (with nas_folder_name + nas_parent_bucket).
-- Site codes: bare 3–6 digits, 3014A, PJ-3026, PJ 3026, P1005, etc. → wa_list_pool_images → wa_list_projects (+ wa_browse_nas) → list 1/2 with FULL folder names if ambiguous → wa_assign_pool_images. NOT the same as menu digit 1–9 (1005 is a site, not "option 5").
+- Site codes: bare 3–6 digits, 3014A, PJ-3026, etc. → wa_classify_inbound_text / list_pool → if ambiguous list every full NAS path (parentBucket/folderName, no numbered 1/2) → worker replies with one path → assign.
 - Full NAS folder label on disk → verify wa_get_project then assign with matching nas_folder_name.
 - User corrects project ("不是這個 PJ" / wrong site) → re-list all folders for that site; do not reuse wrong project_id.
 - Photo with no caption → list_pool then ONE message asking for site or full folder name; no interim "going to check pool" second bubble.

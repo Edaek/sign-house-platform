@@ -416,9 +416,9 @@ def try_loomy_numeric_pick(
     *,
     group_id: Optional[str] = None,
 ) -> bool:
-    """If user replies 1-9 after agent ask, map to last agent options stored in wa_system."""
+    """If user replies with a NAS path (or legacy 1-9) after disambiguation list, assign."""
     t = (text or '').strip()
-    if not t.isdigit() or not (1 <= int(t) <= 9):
+    if not t:
         return False
 
     from app.services.loomy_wa_smart_classify import find_batch_pick
@@ -426,16 +426,22 @@ def try_loomy_numeric_pick(
     if find_batch_pick(phone=phone, group_id=group_id):
         return False
 
-    from app.services.loomy_wa_pick_store import find_loomy_wa_pick_doc
+    from app.services.loomy_wa_pick_store import (
+        find_loomy_wa_pick_doc,
+        match_loomy_wa_pick_option,
+    )
 
     doc = find_loomy_wa_pick_doc(phone=phone, group_id=group_id)
     if not doc or not doc.get('options'):
         return False
-    idx = int(t) - 1
     opts = doc['options']
-    if idx < 0 or idx >= len(opts):
+    choice = match_loomy_wa_pick_option(opts, t)
+    if not choice and t.isdigit() and 1 <= int(t) <= 9:
+        idx = int(t) - 1
+        if 0 <= idx < len(opts):
+            choice = opts[idx]
+    if not choice:
         return False
-    choice = opts[idx]
     pool_ids = list(doc.get('pool_ids') or [])
     pid = (choice.get('project_id') or '').strip()
     if pid and pool_ids:

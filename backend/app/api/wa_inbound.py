@@ -717,6 +717,7 @@ def wa_loom_worker_reply_policy():
         or request.args.get('inboundMessageId')
         or ''
     ).strip()
+    user_text = (request.args.get('user_text') or request.args.get('userText') or '').strip()
     if not phone:
         return jsonify({'error': 'phone required'}), 400
     from app.services.loom_turn_claim_service import claim_loom_inbound_turn
@@ -729,9 +730,68 @@ def wa_loom_worker_reply_policy():
         duplicate_inbound_turn=bool(claim.get('duplicateInboundTurn')),
         inbound_message_id=inbound_mid or None,
     )
+    if user_text:
+        from app.services.loomy_wa_classify_turn_service import preview_classify_turn
+
+        preview = preview_classify_turn(user_text, phone=phone, group_id=group_id)
+        if preview.get('intent') not in (None, 'none', 'other'):
+            payload['classifyTurn'] = preview
+            pol = payload.get('workerWhatsAppPolicy') or {}
+            pol['mustCallClassifyTool'] = preview.get('mustCallTool')
+            pol['instruction'] = (
+                (pol.get('instruction') or '')
+                + ' '
+                + (preview.get('instruction') or '')
+            ).strip()
+            payload['workerWhatsAppPolicy'] = pol
     if inbound_mid:
         payload.update(claim)
     return jsonify(payload)
+
+
+@wa_inbound_bp.route('/loom/classify-inbound-text', methods=['POST'])
+@jwt_required()
+def wa_loom_classify_inbound_text():
+    """Deterministic site number / menu pick 1–9 for Loom (avoids Cheap_skip)."""
+    data = request.get_json(silent=True) or {}
+    phone = (data.get('phone') or request.args.get('phone') or '').strip()
+    group_id = (data.get('group_id') or data.get('groupId') or '').strip() or None
+    user_text = (data.get('user_text') or data.get('userText') or '').strip()
+    pool_ids = data.get('pool_ids') or data.get('poolIds') or []
+    if isinstance(pool_ids, str):
+        pool_ids = [pool_ids]
+    if not phone or not user_text:
+        return jsonify({'error': 'phone and user_text required'}), 400
+    from app.services.loomy_wa_classify_turn_service import handle_classify_inbound_text
+
+    return jsonify(handle_classify_inbound_text(
+        phone=phone,
+        group_id=group_id,
+        user_text=user_text,
+        pool_ids=list(pool_ids) if pool_ids else None,
+    ))
+
+
+@wa_inbound_bp.route('/loom/store-classify-choices', methods=['POST'])
+@jwt_required()
+def wa_loom_store_classify_choices():
+    data = request.get_json(silent=True) or {}
+    phone = (data.get('phone') or '').strip()
+    group_id = (data.get('group_id') or data.get('groupId') or '').strip() or None
+    choices = data.get('choices') or []
+    pool_ids = data.get('pool_ids') or data.get('poolIds') or []
+    if isinstance(pool_ids, str):
+        pool_ids = [pool_ids]
+    if not phone or not choices or not pool_ids:
+        return jsonify({'error': 'phone, choices, and pool_ids required'}), 400
+    from app.services.loomy_wa_classify_turn_service import store_classify_choices
+
+    return jsonify(store_classify_choices(
+        phone=phone,
+        group_id=group_id,
+        choices=choices,
+        pool_ids=list(pool_ids),
+    ))
 
 
 @wa_inbound_bp.route('/brain/status', methods=['GET'])

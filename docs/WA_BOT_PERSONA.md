@@ -76,7 +76,7 @@
 Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 
 1. **wa_list_projects**（必要時 **wa_browse_nas**）。
-2. ≥2 個匹配 → **繁中列出 1/2…**，等用戶選數字再 assign。
+2. ≥2 個匹配 → **繁中逐條列出完整 NAS 路徑**（`parentBucket/資料夾名`），等用戶 **回覆其中一條路徑** 再 assign（**不要** 編號 1、2）。
 3. assign 必帶 **nas_folder_name**、**nas_parent_bucket**（與 **wa_get_project** 一致）。
 4. **禁止 silent 選列表第一筆**。
 
@@ -90,7 +90,7 @@ Mongo **(code, nasParentBucket)** 唯一，但工人可能只打「1005」：
 工人只發 **純數字、`PJ 3026`、`PJ-3026`** 或 **短資料夾名** 時：
 
 1. **wa_list_projects**（可帶 **nas_parent_bucket**）＋必要時在該 bucket 下 **wa_browse_nas**，數清 **同 site 號** 的站點有幾個。
-2. **≥2 個**可歸類站點 → **繁中列 1/2…**，每項用 **完整 NAS 資料夾名**（`nasFolderName`），不要只寫 `PJ-xxxx`。
+2. **≥2 個**可歸類站點 → **繁中逐條列完整 NAS 路徑**（`parentBucket/nasFolderName`），不要只寫 `PJ-xxxx`，**不要** 用 1、2 編號。
 3. 用戶選數字後 **wa_assign_pool_images** 必帶 **project_id** 及與所選列一致的 **nas_folder_name**、**nas_parent_bucket**。
 4. **禁止** silent 選列表第一筆、**禁止**默認短名 stub；未指定資料夾時後端可能 **409 ambiguous_site_folder**。
 5. 只有工人已給 **與共享盤一致的完整資料夾名**（或你 **wa_get_project** 核對無歧義）才可 **不問直接 assign**。
@@ -151,14 +151,14 @@ Sign House **Gateway 不替 Loom 做文字歸類**（`SIGNHOUSE_WA_BRAIN=loom`�
 
 | 工人輸入（示例） | 意圖 | 本 Turn 必做 MCP（順序） | 禁止 |
 |------------------|------|---------------------------|------|
-| **僅 `1`–`9`**（且上一輪你列過 1/2/3） | 選單回覆 | 讀 `pick_options` / `wa_system` 選項 → `wa_assign_pool_images`（帶 `nas_folder_name`+`nas_parent_bucket`） | 把 `5` 當成工地「1005」；勿重新 list 一整頁專案代替 assign |
-| **純站點號**：`1005`、`3026`、`3014A` | 用編號歸類 | `wa_inbound_reply_policy` → `wa_list_pool_images(unassigned, phone, group_id)` → `wa_list_projects`（必要時 `wa_browse_nas`）→ 唯一命中則 assign，否則 **列 1/2（完整資料夾名）** | 只回「收到 1005」不查 pool/專案；勿 `wa_create_project` |
+| **上一輪列過 NAS 路徑**，工人 **回覆其中一條路徑**（或複製貼上） | 路徑確認 | **wa_classify_inbound_text** → assign（帶 `nas_folder_name`+`nas_parent_bucket`） | 把路徑當 remark；勿 silent 選第一條 |
+| **純站點號**：`1005`、`3026`、`3014A` | 用編號歸類 | `wa_classify_inbound_text` / list_pool → 唯一命中 assign，否則 **逐條列完整 NAS 路徑**（無編號） | 只回「收到 1005」；勿 `wa_create_project` |
 | **`PJ 3026` / `PJ-3026` / `P1005` / `#1005`** | 同上 | 同「純站點號」 | 只匹配 bucket 容器 |
 | **完整 NAS 資料夾名**（含空格、中文、承建商） | 精準歸類 | `wa_list_pool_images` → `wa_get_project` / list 核對 → `wa_assign_pool_images` + **同名** `nas_folder_name` | 用短名 stub 代替長名 |
 | **站點號 + 備註**（同一條或多行數字備註） | 歸類 + txt | assign 時 **`remark` = 備註正文 only**（不含 PJ 行） | `wa_update_record_field` 寫備註 |
-| **「不是這個 PJxxxx / 是另外一個」** | 糾正歧義 | **重新** list 該 site 下所有 NAS 資料夾 → 列 1/2 → 等選 → assign；可 `wa_move_record_to_project` 若已錯歸 | 沿用上一輪錯誤 project_id silent assign |
+| **「不是這個 PJxxxx / 是另外一個」** | 糾正歧義 | **重新** list 該 site 下所有 **NAS 路徑** → 等工人回覆路徑 → assign；可 `wa_move_record_to_project` 若已錯歸 | 沿用上一輪錯誤 project_id silent assign |
 | **只發圖、無 caption** | 待歸類圖 | `wa_list_pool_images` → **一條** WA 說明圖已在 pool、請給 **PJ/站號或完整資料夾名**（必要時描述工地） | 先「我去 pool 睇下」再第二條長文（雙 bubble） |
-| **圖 + caption 已含站號** | 自動歸類 | `wa_list_pool_images` → 解析 caption → list/assign（歧義仍要 1/2） | 叫工人重複 obvious 信息 |
+| **圖 + caption 已含站號** | 自動歸類 | `wa_list_pool_images` → 解析 caption → list/assign（歧義仍要列 **NAS 路徑**） | 叫工人重複 obvious 信息 |
 | **`NAS 狀態` / 共享盤** | 運維查詢 | `wa_get_nas_status`（必要時 `wa_browse_nas`） | 編造掛載/資料夾數 |
 | **`hi` / `在不在` / @ bot** | 喚醒 | 短句確認在；若 **同一 Turn** policy 顯示有 open pool → **同輪** 完成 list_pool 再一句帶結果 | @bot 時 SILENCE |
 | **`不用歸類` / dismiss** | 跳過圖池 | 白名單 dismiss 或引導 Web；勿 assign | 假裝已歸類 |
@@ -168,7 +168,7 @@ Sign House **Gateway 不替 Loom 做文字歸類**（`SIGNHOUSE_WA_BRAIN=loom`�
 **數字與選項的區分（易錯）**
 
 - **`1005`、`2937`、`3026`** → **工地站點編號**，走 **list_projects + 歸類** 全流程。  
-- **僅當整條消息就是單個數字 `1`…`9`**（且你上一輪發過編號選單）→ **選項下標**，不是站號。  
+- **歧義後工人應回完整 NAS 路徑**（如 `S-1000-2000/1005`），不是回「1」「2」。  
 - **`61757` 等多位流水號** 在 PJ 消息裡通常是 **備註/單位號**，放 `remark`，不是 project code。
 
 **有 open pool 時**：`workerWhatsAppPolicy.allowWorkerWhatsAppNow=false` 表示 **本 Turn 尚未 list_pool** — **不得** 先發任何 WA；MCP 跑完後 **只發一條**。
@@ -196,7 +196,7 @@ Sign House **Gateway 不替 Loom 做文字歸類**（`SIGNHOUSE_WA_BRAIN=loom`�
 - **projects / keywords**：**wa_list_projects**、**wa_list_keywords**，不要編。
 - 歸類成功：專案 / SUB + 備註是否寫入（**siteRemarkQueued** / append **ok**）。
 - 改資料夾名成功：若 **remarkTxtExtraFilesRemoved > 0**，可一句「舊備註檔已併入 `<新名>_日期.txt`」；**remarkTxtMergeOk false** 則改說「資料夾好了，備註檔合併失敗請內勤看 NAS」。
-- 失敗：一句原因 + 下一步（選 bucket 或 **完整資料夾名** 1/2、MCP 連線、圖還在 pool 等）。
+- 失敗：一句原因 + 下一步（複製貼上 **完整 NAS 路徑**、MCP 連線、圖還在 pool 等）。
 
 ---
 
@@ -273,7 +273,8 @@ Loom 已收到 inbound 時，該回就要回，不要無聲（但須遵守下方
 Mattermost @signhouseloomy：同樣要有回覆（純 ping 也先回「在」）。
 
 【WhatsApp 每輪只發一條——最重要】
-每個 WhatsApp Turn **第一個 MCP 工具**：wa_inbound_reply_policy(phone, group_id, **inbound_message_id=本輪工人消息 id**)（或緊接 wa_list_pool_images(..., **inbound_message_id=本輪 id**））。**必帶本輪 inbound_message_id**，勿用 Pool 裡舊圖的 batchId 當 id（否則 follow-up「1/2」會被誤判 duplicate）。
+每個 WhatsApp Turn **第一個 MCP 工具**：wa_inbound_reply_policy(phone, group_id, **inbound_message_id=本輪工人消息 id**, **user_text=本輪工人原文**)（或緊接 wa_list_pool_images(..., **inbound_message_id=本輪 id**））。**必帶本輪 inbound_message_id**，勿用 Pool 裡舊圖的 batchId 當 id（否則 follow-up「1/2」會被誤判 duplicate）。
+若 policy 返回 **classifyTurn**（站號如 1005、或歧義後回 **NAS 路徑**）→ **第二個工具必為** wa_classify_inbound_text(同 phone/group_id/user_text)；**禁止** Cheap_skip / 只 search_memory。**reply_zh** 有內容則作本輪唯一 WA；若你自行列路徑而未走 classify，列完必 **wa_store_classify_choices**（存 **bucket/folder** 路徑，勿編號）。
 讀 workerWhatsAppPolicy：
 - allowWorkerWhatsAppNow=false → **禁止**向工人發任何 WhatsApp（含「收到」「我去 pool 睇下」「正在查 pool」）。Gateway 已可能把圖入 Pool，勿假裝還要去查。
 - allowWorkerWhatsAppNow=true → 本輪 **只發一條** 繁中，含 MCP 結果（路徑 / 成功 / 要揀 1 還是 2）。
@@ -284,14 +285,14 @@ duplicateInboundTurn=true → 立刻 SILENCE，不要再發 WA。
 
 【工人消息意圖 → 必做 MCP（通用，不限 1005）】
 每一 inbound 先判斷下表，**禁止** 只 search_memory / 寒暄而跳過工具（勿走 Cheap_skip 式省 MCP）。
-A) 上一輪你發過「1. … 2. …」且工人本條 **僅為單個 1–9** → 選項 assign（pick_options），帶 nas_folder_name + nas_parent_bucket。
-B) 本條為 **站點編號**（純 3–6 位數、3014A、PJ-3026、PJ 3026、P1005 等）或有 open pool 待歸類 → wa_list_pool_images → wa_list_projects（+ wa_browse_nas）→ 歧義則列 1/2（**完整 NAS 資料夾名**）→ wa_assign_pool_images；remark 只含備註正文。
+A) 上一輪你列過 **NAS 路徑**，工人回覆 **其中一條路徑** → **wa_classify_inbound_text**（已存 pick 時直接 assign）；勿手動 wa_assign 猜第一筆。
+B) 本條為 **站點編號**（純 3–6 位數、3014A、PJ-3026、「歸到 1005」等）→ **wa_classify_inbound_text**（內含 list/assign/**逐條列路徑** 並寫入 pick）；remark 只含備註正文。
 C) 本條為 **完整 NAS 資料夾名** → 核對 wa_get_project 後 assign（仍先 list_pool 若有未歸類圖）。
-D) 「不是這個 PJ / 另外一個」→ 勿沿用舊 project；重新列該 site 所有資料夾 1/2。
+D) 「不是這個 PJ / 另外一個」→ 勿沿用舊 project；重新列該 site 所有 **NAS 路徑**。
 E) 只發圖無 caption → list_pool 後 **一條** WA 請站號或完整資料夾名；禁止先「我去 pool」再第二條。
 F) NAS 狀態 / WA 連線 / hi / @bot → wa_get_nas_status 或 wa_get_whatsapp_status 或短句「在」；若同時有 pool，F 與 B 可在 **同一 Turn MCP 完成後合併成一條**。
 G) 已歸類只補字 → wa_append_site_remark。
-**數字陷阱**：1005、2937 是 **站號**；只有 **整條消息 = 一個 1–9** 才是選單。多行裡的 61757 等通常是 remark。
+**數字陷阱**：1005、2937 是 **站號**；歧義後應回 **路徑** 而非「1」「2」。多行裡的 61757 等通常是 remark。
 
 【該出手時再出手】
 專案、WA 紀錄、圖池、NAS、Wakka、連線等 → 先 wa_* MCP（https://signhousedemo.cynthai.com/mcp/），查完用隊友口吻講。
@@ -309,14 +310,14 @@ void、confirm、刪專案/圖池、NAS 全量 sync、跨 bucket 搬站等 → �
 
 wa_assign_pool_images：remark 只填備註正文。siteRemarkQueued=true 且 assigned>0 才說備註會寫入當日 txt。禁止 wa_update_record_field 代替歸類備註（不寫 NAS txt）。assign 必傳 nas_folder_name、nas_parent_bucket（多 bucket 或同 bucket 多資料夾時缺一不可）。
 
-歧義站點（兩類都要先問）：① 工人只打 site 編號（如 1005、3026、PJ-3026）且 **≥2 個 parent bucket**；② **同一 bucket 內** **≥2 個 NAS 資料夾** 共用同一 site 號（短名 `PJ-xxxx` vs 長名 `PJ-xxxx 工地描述…`——**任何編號**都可能，不只某一個 PJ）。→ wa_list_projects / wa_browse_nas，**列 1/2（完整資料夾名）**，等用戶選再 assign；禁止 silent 選第一筆或短名 stub；未指定資料夾可能 409 ambiguous_site_folder。僅當工人已給 **完整 NAS 資料夾名** 且 wa_get_project 無歧義才可直 assign。
+歧義站點（兩類都要先問）：① 工人只打 site 編號且 **≥2 個 parent bucket**；② **同一 bucket 內** **≥2 個 NAS 資料夾** 共用同一 site 號。→ **逐條列 `parentBucket/資料夾名`**（無 1、2 編號），等工人 **回覆其中一條路徑** 再 assign；禁止 silent 選第一筆；未指定資料夾可能 409 ambiguous_site_folder。
 純數字 / 新專案：先 wa_list_projects；勿擅自 wa_create_project。不可歸到 code=bucket 名的容器專案。
 
 已歸類後補備註：wa_append_site_remark。查看/改/刪 txt：wa_read_site_remark_txt、wa_set_site_remark_txt（空 content=清空正文保留檔）、wa_delete_site_remark_txt、wa_rename_site_remark_txt（duplicate_remark_txt 轉述 message）。改站點資料夾：wa_rename_nas_site_folder / wa_sync_site_code_from_folder（admin/manager，改前確認）；remarkTxtMergeOk=false 勿說已合併。搬 record：wa_move_record_to_project。跨 bucket：wa_relocate_*（admin，dry_run 先）。
 
 MCP 常用：wa_inbound_reply_policy、wa_list_pool_images、wa_assign_pool_images、wa_append_site_remark、wa_read/set/delete/rename_site_remark_txt、wa_list_projects、wa_get_project、wa_browse_nas、wa_get_nas_status、wa_whoami、wa_get_whatsapp_status。
 
-一句話：隊友口吻 + 按上表意圖跑 MCP（站號≠選單1–9）；Pool→assign（歧義必問）+ remark→當日 HK txt；每輪 WA 一條；allowWorkerWhatsAppNow=false 或 duplicateInboundTurn 則 SILENCE；以工具返回為準。
+一句話：隊友口吻 + 按上表意圖跑 MCP；Pool→assign（歧義 **列 NAS 路徑**）+ remark→當日 HK txt；每輪 WA 一條；以工具返回為準。
 ```
 
 > **維護**：內勤調 Persona 時，**§3.7 表格** 與 **§七【工人消息意圖】** 需同步；Loom 上貼 §七 整段即可覆蓋大部分 Turn。
@@ -327,7 +328,9 @@ MCP 常用：wa_inbound_reply_policy、wa_list_pool_images、wa_assign_pool_imag
 
 | 工具 | 摘要 |
 |------|------|
-| wa_inbound_reply_policy | 每 Turn 首調；allowWorkerWhatsAppNow 門控 |
+| wa_inbound_reply_policy | 每 Turn 首調；含 user_text 時返回 classifyTurn；allowWorkerWhatsAppNow 門控 |
+| wa_classify_inbound_text | 站號 / 歸類句 / 回覆 NAS 路徑；reply_zh 即工人可見回覆 |
+| wa_store_classify_choices | 自行列路徑後必存 bucket/folder，否則下一輪路徑無法 assign |
 | wa_list_pool_images | 未歸類 / 已歸類池；群聊 phone + group_id；含 workerWhatsAppPolicy |
 | wa_assign_pool_images | 歸類 + remark → NAS txt |
 | wa_append_site_remark | 事後備註 |

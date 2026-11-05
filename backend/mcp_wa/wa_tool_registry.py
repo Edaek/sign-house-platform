@@ -32,6 +32,8 @@ DEFAULT_DENY = frozenset({
 DEFAULT_ALLOW = frozenset({
     'wa_whoami',
     'wa_inbound_reply_policy',
+    'wa_classify_inbound_text',
+    'wa_store_classify_choices',
     'wa_get_nas_status',
     'wa_get_pool_stats',
     'wa_list_pool_images',
@@ -409,7 +411,42 @@ def _exec_wa_inbound_reply_policy(c: SignHouseClient, a: dict) -> str:
     mid = (a.get('inbound_message_id') or a.get('inboundMessageId') or '').strip()
     if mid:
         params['inbound_message_id'] = mid
+    ut = (a.get('user_text') or a.get('userText') or '').strip()
+    if ut:
+        params['user_text'] = ut
     return json_result(c.get('/wa/loom/worker-reply-policy', params=params))
+
+
+def _exec_wa_classify_inbound_text(c: SignHouseClient, a: dict) -> str:
+    phone = (a.get('phone') or '').strip()
+    text = (a.get('user_text') or a.get('userText') or '').strip()
+    if not phone or not text:
+        return 'Error: phone and user_text required'
+    body: dict[str, Any] = {'phone': phone, 'user_text': text}
+    gid = (a.get('group_id') or a.get('groupId') or '').strip()
+    if gid:
+        body['group_id'] = gid
+    ids = a.get('pool_ids') or a.get('poolIds') or []
+    if isinstance(ids, str):
+        ids = [ids]
+    if ids:
+        body['pool_ids'] = ids
+    return json_result(c.post('/wa/loom/classify-inbound-text', json_body=body))
+
+
+def _exec_wa_store_classify_choices(c: SignHouseClient, a: dict) -> str:
+    phone = (a.get('phone') or '').strip()
+    choices = a.get('choices') or []
+    ids = a.get('pool_ids') or a.get('poolIds') or []
+    if isinstance(ids, str):
+        ids = [ids]
+    if not phone or not choices or not ids:
+        return 'Error: phone, choices, and pool_ids required'
+    body: dict[str, Any] = {'phone': phone, 'choices': choices, 'pool_ids': ids}
+    gid = (a.get('group_id') or a.get('groupId') or '').strip()
+    if gid:
+        body['group_id'] = gid
+    return json_result(c.post('/wa/loom/store-classify-choices', json_body=body))
 
 
 def _exec_wa_get_whatsapp_status(c: SignHouseClient, _a: dict) -> str:
@@ -520,6 +557,8 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_sync_site_code_from_folder': _exec_wa_sync_site_code_from_folder,
     'wa_whoami': _exec_wa_whoami,
     'wa_inbound_reply_policy': _exec_wa_inbound_reply_policy,
+    'wa_classify_inbound_text': _exec_wa_classify_inbound_text,
+    'wa_store_classify_choices': _exec_wa_store_classify_choices,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
     'wa_browse_nas': _exec_wa_browse_nas,
@@ -599,7 +638,22 @@ TOOL_SPECS: List[dict] = [
             'false until wa_list_pool_images; forbids interim「收到/我去 pool」before MCP. '
             'No LOOM_WA_INBOUND_NOTIFY_URL required when Wakka→Loom.'
         ),
-        'args_hint': '{phone, group_id?, inbound_message_id?}',
+        'args_hint': '{phone, group_id?, inbound_message_id?, user_text?}',
+    },
+    {
+        'name': 'wa_classify_inbound_text',
+        'description': (
+            'Deterministic classify: site numbers, assign phrases, or worker reply with a full '
+            'NAS path (bucket/folder) after disambiguation list. Returns reply_zh — use as the one WA message.'
+        ),
+        'args_hint': '{phone, user_text, group_id?, pool_ids?}',
+    },
+    {
+        'name': 'wa_store_classify_choices',
+        'description': (
+            'After you list NAS paths in WhatsApp, store bucket/folder rows so path reply assigns correctly.'
+        ),
+        'args_hint': '{phone, pool_ids, choices:[{project_id, label, nas_folder_name, nas_parent_bucket}]}',
     },
     {'name': 'wa_list_keywords', 'description': 'Type keywords', 'args_hint': '{}'},
     {'name': 'wa_search_records', 'description': 'Search records', 'args_hint': '{q, phone, project}'},

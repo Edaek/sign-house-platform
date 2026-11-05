@@ -390,8 +390,30 @@ def wa_classify_display_label(proj, *, max_len=_WA_LABEL_MAX):
     return label
 
 
+def wa_classify_nas_path_line(proj, *, max_len=_WA_LABEL_MAX):
+    """Full NAS path for WhatsApp disambiguation: parentBucket/folderName."""
+    if not proj:
+        return ''
+    from app.services.nas_sync_service import enrich_wa_project_display
+
+    enrich_wa_project_display(proj)
+    bucket = (proj.get('nasParentBucket') or '').strip()
+    folder = (proj.get('nasFolderName') or proj.get('code') or '').strip()
+    if bucket and folder:
+        line = f'{bucket}/{folder}'
+    else:
+        line = folder or bucket
+    if max_len and len(line) > max_len:
+        return line[: max_len - 1].rstrip() + '…'
+    return line
+
+
+def wa_classify_nas_path_lines(projects, *, max_len=_WA_LABEL_MAX):
+    return [wa_classify_nas_path_line(p, max_len=max_len) for p in projects if p]
+
+
 def wa_classify_list_labels(projects, *, max_len=_WA_LABEL_MAX):
-    """Numbered-list labels; append [bucket] when the same folder name appears twice."""
+    """List labels; append [bucket] when the same folder name appears twice."""
     from collections import Counter
 
     from app.services.nas_sync_service import enrich_wa_projects_display

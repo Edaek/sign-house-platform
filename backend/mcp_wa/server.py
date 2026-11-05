@@ -184,6 +184,7 @@ def wa_inbound_reply_policy(
     phone: str,
     group_id: str = '',
     inbound_message_id: str = '',
+    user_text: str = '',
 ) -> str:
     """First tool each WA turn: workerWhatsAppPolicy (no interim WA before list_pool)."""
     try:
@@ -192,7 +193,50 @@ def wa_inbound_reply_policy(
             params['group_id'] = group_id.strip()
         if (inbound_message_id or '').strip():
             params['inbound_message_id'] = inbound_message_id.strip()
+        if (user_text or '').strip():
+            params['user_text'] = user_text.strip()
         return json_result(_client().get('/wa/loom/worker-reply-policy', params=params))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_classify_inbound_text(
+    phone: str,
+    user_text: str,
+    group_id: str = '',
+    pool_ids: str = '',
+) -> str:
+    """Deterministic site number / menu 1–9 classify; use reply_zh as the one WA message."""
+    try:
+        body: dict = {'phone': phone.strip(), 'user_text': user_text.strip()}
+        if (group_id or '').strip():
+            body['group_id'] = group_id.strip()
+        ids = [x.strip() for x in (pool_ids or '').split(',') if x.strip()]
+        if ids:
+            body['pool_ids'] = ids
+        return json_result(_client().post('/wa/loom/classify-inbound-text', json_body=body))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
+def wa_store_classify_choices(
+    phone: str,
+    pool_ids: str,
+    choices_json: str,
+    group_id: str = '',
+) -> str:
+    """After listing 1/2 in WA, store options so worker reply 2 assigns correctly."""
+    try:
+        import json as _json
+
+        choices = _json.loads(choices_json or '[]')
+        ids = [x.strip() for x in (pool_ids or '').split(',') if x.strip()]
+        body: dict = {'phone': phone.strip(), 'pool_ids': ids, 'choices': choices}
+        if (group_id or '').strip():
+            body['group_id'] = group_id.strip()
+        return json_result(_client().post('/wa/loom/store-classify-choices', json_body=body))
     except SignHouseApiError as exc:
         return str(exc)
 

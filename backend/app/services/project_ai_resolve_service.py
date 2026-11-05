@@ -46,11 +46,13 @@ class ClassifyResolve:
 
 
 def _format_candidate_lines(candidates):
+    from app.services.project_number_match_service import wa_classify_nas_path_lines
+
     projs = []
     for item in candidates:
         projs.append(item[0] if isinstance(item, tuple) else item)
-    labels = wa_classify_list_labels(projs, max_len=500)
-    return '\n'.join(f'{i}. {lab}' for i, lab in enumerate(labels, 1))
+    paths = wa_classify_nas_path_lines(projs, max_len=500)
+    return '\n'.join(paths)
 
 
 def _similar_numeric_site_projects(site_n: int, *, max_delta: int = 5, limit: int = 5):
@@ -83,8 +85,9 @@ def _similar_numeric_site_projects(site_n: int, *, max_delta: int = 5, limit: in
 def _build_classify_list_message(match_key, candidates):
     listing = _format_candidate_lines(candidates)
     return (
-        f'「{match_key}」可能對應：\n{listing}\n\n'
-        f'回覆數字選擇後立即歸類照片。'
+        f'「{match_key}」可能對應以下 NAS 路徑（共 {len(candidates)} 個）：\n'
+        f'{listing}\n\n'
+        f'請直接回覆其中一條完整路徑（可複製貼上），我即刻歸類。'
     )
 
 
@@ -370,7 +373,7 @@ def resolve_classify_input(text, *, active_only=True):
             msg = (
                 f'找不到「{match_key}」這個專案。\n'
                 f'相近編號是否指：\n{listing}\n\n'
-                f'回覆數字選擇；若確實要新開「{match_key}」請再說一次並確認。'
+                f'請回覆其中一條完整 NAS 路徑；若確實要新開「{match_key}」請再說一次並確認。'
             )
             return ClassifyResolve(
                 action='list',
