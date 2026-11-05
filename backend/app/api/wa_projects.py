@@ -37,6 +37,37 @@ def _nas_view_project_doc(project, req=None):
     return doc
 
 
+def _records_project_id(project, req=None):
+    """WA records are stored per scoped site project (code + nasParentBucket), not only URL :id."""
+    src = req or request
+    pb = (src.args.get('nasParentBucket') or '').strip()
+    if not pb:
+        return project['_id']
+
+    from app.services.project_number_match_service import (
+        is_range_folder_code,
+        parse_nas_site_folder_code,
+    )
+    from app.services.wa_project_validation import find_project_by_code
+
+    fn = (src.args.get('nasFolderName') or '').strip()
+    project_code = (project.get('code') or '').strip()
+    if fn:
+        site_code = parse_nas_site_folder_code(fn) or fn
+    elif is_range_folder_code(project_code):
+        return project['_id']
+    else:
+        site_code = project_code
+
+    if not site_code:
+        return project['_id']
+
+    scoped = find_project_by_code(site_code, parent_bucket=pb)
+    if scoped:
+        return scoped['_id']
+    return project['_id']
+
+
 def _mongo_bucket_child_rows(bucket: str) -> list:
     """App projects belonging to a range bucket (fast Mongo — no SMB)."""
     key = (bucket or '').strip().lower()
@@ -417,9 +448,10 @@ def get_project(project_id):
     pid = project['_id']
     code = (project.get('code') or '').strip()
 
+    records_pid = _records_project_id(project)
     if minimal:
         d['totalRecords'] = mongo.db.wa_records.count_documents({
-            'projectId': pid,
+            'projectId': records_pid,
             'status': _RECORD_COUNTABLE,
         })
         d['nasImportedCount'] = 0
@@ -431,11 +463,11 @@ def get_project(project_id):
                 nas_index = _build_index_from_folders(cached)
         enrich_project_dict(d, nas_index or {}, for_list=True)
         d['totalRecords'] = mongo.db.wa_records.count_documents({
-            'projectId': pid,
+            'projectId': records_pid,
             'status': _RECORD_COUNTABLE,
         })
         d['nasImportedCount'] = mongo.db.wa_records.count_documents({
-            'projectId': pid,
+            'projectId': records_pid,
             'nasSourcePath': {'$exists': True, '$nin': [None, '']},
             'status': _RECORD_COUNTABLE,
         })
@@ -600,7 +632,8 @@ def get_project_records(project_id):
     if not project:
         return jsonify({'error': 'Project not found'}), 404
 
-    query = {'projectId': pid}
+    records_pid = _records_project_id(project)
+    query = {'projectId': records_pid}
     status = request.args.get('status')
     rec_type = request.args.get('type')
     phone = request.args.get('phone')

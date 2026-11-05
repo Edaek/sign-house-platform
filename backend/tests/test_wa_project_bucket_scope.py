@@ -2,6 +2,9 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from bson import ObjectId
+
+from app.api.wa_projects import _records_project_id
 from app.services.wa_project_validation import (
     assert_code_available,
     find_project_by_code,
@@ -49,6 +52,21 @@ class WaProjectBucketScopeTests(unittest.TestCase):
         err = assert_code_available('1005', parent_bucket='S-1000-2000')
         self.assertIn('already exists', err or '')
         self.assertIn('S-1000-2000', err or '')
+
+    @patch('app.services.wa_project_validation.find_project_by_code')
+    def test_records_project_id_scoped_by_nas_parent_bucket(self, mock_find):
+        s_id = ObjectId()
+        t_id = ObjectId()
+        url_project = {'_id': s_id, 'code': '1009', 'nasParentBucket': 'S-1000-2000'}
+        mock_find.return_value = {'_id': t_id, 'code': '1009', 'nasParentBucket': 'T-1000-2002'}
+
+        req = MagicMock()
+        req.args = {
+            'nasFolderName': '1009',
+            'nasParentBucket': 'T-1000-2002',
+        }
+        self.assertEqual(_records_project_id(url_project, req), t_id)
+        mock_find.assert_called_once_with('1009', parent_bucket='T-1000-2002')
 
 
 if __name__ == '__main__':

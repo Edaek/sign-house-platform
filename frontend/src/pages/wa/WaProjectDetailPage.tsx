@@ -133,6 +133,10 @@ export default function WaProjectDetailPage() {
   const [searchParams] = useSearchParams()
   const nasFolderParams = useMemo(() => nasFolderApiParams(searchParams), [searchParams])
   const folderQueryKey = `${searchParams.get('nasFolderName') || ''}|${searchParams.get('nasParentBucket') || ''}`
+  const recordsFetchParams = useMemo(
+    () => ({ limit: '50', ...nasFolderParams }),
+    [nasFolderParams],
+  )
   const { projects, records, fetchProjectRecords, nasStatus, fetchNasStatus, renameNasSiteFolder } =
     useWaStore()
   const canRenameNas = useAuthStore((s) => s.isAdmin() || s.isManager())
@@ -255,8 +259,8 @@ export default function WaProjectDetailPage() {
   const refreshSiteTimeline = useCallback(() => {
     if (!id || !project?.code) return
     void loadProjectSiteNasData(id, project.code)
-    void fetchProjectRecords(id, { limit: '50' })
-  }, [id, project?.code, loadProjectSiteNasData, fetchProjectRecords])
+    void fetchProjectRecords(id, recordsFetchParams)
+  }, [id, project?.code, loadProjectSiteNasData, fetchProjectRecords, recordsFetchParams])
 
   useEffect(() => {
     void fetchNasStatus()
@@ -310,14 +314,14 @@ export default function WaProjectDetailPage() {
         setProjectLoading(false)
       })
 
-    void fetchProjectRecords(id, { limit: '50' }).finally(() => {
+    void fetchProjectRecords(id, recordsFetchParams).finally(() => {
       if (!cancelled) setRecordsLoading(false)
     })
 
     return () => {
       cancelled = true
     }
-  }, [id, folderQueryKey, loadProjectMinimal, fetchProjectRecords, loadProjectSiteNasData])
+  }, [id, folderQueryKey, loadProjectMinimal, fetchProjectRecords, loadProjectSiteNasData, recordsFetchParams])
 
   useEffect(() => {
     if (!id || !project?.code || !nasStatus?.connected) return
@@ -388,10 +392,17 @@ export default function WaProjectDetailPage() {
     const sec = nasStatus.autoSyncIntervalSec ?? 60
     const ms = Math.max(30, sec) * 1000
     const timer = window.setInterval(() => {
-      fetchProjectRecords(id)
+      fetchProjectRecords(id, recordsFetchParams)
     }, ms)
     return () => window.clearInterval(timer)
-  }, [id, nasStatus?.connected, nasStatus?.autoSyncIntervalSec, fetchProjectRecords, project?.code])
+  }, [
+    id,
+    nasStatus?.connected,
+    nasStatus?.autoSyncIntervalSec,
+    fetchProjectRecords,
+    project?.code,
+    recordsFetchParams,
+  ])
 
   const displaySubfolders = useMemo(() => {
     if (nasBrowseSubfolders.length > 0) return nasBrowseSubfolders
