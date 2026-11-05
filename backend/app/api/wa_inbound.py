@@ -726,12 +726,32 @@ def wa_brain_status():
         hints.append(
             'Gateway + LOOM_WA_INBOUND_NOTIFY_URL: ensure Wakka does NOT also push the same session to Loom Turn.',
         )
-    if gateway_on and not notify_url:
+    double_reply_risk = 'low'
+    if (
+        wa_loom_runtime_brain_enabled()
+        and gateway_on
+        and not notify_url
+    ):
+        double_reply_risk = 'high'
+        hints.append(
+            'CRITICAL (Pool + Gateway): LOOM_WA_INBOUND_NOTIFY_URL unset — Sign House will NOT '
+            'POST text to Loom. If Wakka also pushes the same number to Loom Turn (NOps Wakka), '
+            'each message can produce duplicate ~Axilogy bubbles. Fix: (1) Wakka→Gateway only, '
+            '(2) set LOOM_WA_INBOUND_NOTIFY_URL + BEARER, (3) disable Loom direct Wakka inbound, '
+            '(4) LOOM_WA_RELAY_WHATSAPP_REPLY=false.',
+        )
+    elif gateway_on and not notify_url:
         hints.append(
             'Gateway without LOOM_WA_INBOUND_NOTIFY_URL: Pool intake OK; text→loom_runtime_deferred. '
             'For Loom-only replies: SIGNHOUSE_WA_GATEWAY=false + Wakka→Loom Turn only, or set notify URL '
             'with LOOM_WA_RELAY_WHATSAPP_REPLY=false (default in brain=loom).',
         )
+    if double_reply_risk == 'high':
+        hints.append(
+            'Also stop sign-house-v3-mcp Gateway on the same WAKKA_API_KEY; one reply per turn in Loom Persona '
+            '(no interim「收到正在做」before MCP).',
+        )
+    elif gateway_on and not notify_url:
         hints.append(
             'WhatsApp double bubbles (收到→搞定): stop Sign House relay + second Wakka consumer; '
             'Loom Persona: one reply after MCP (no interim「收到正在做」).',
@@ -767,6 +787,14 @@ def wa_brain_status():
             'LOOMY_WA_MCP_BLOCK_DIRECT_SEND', 'true',
         ).strip().lower() not in ('0', 'false', 'no', 'off'),
         'signhouseWhatsappOutboundAllowed': signhouse_whatsapp_outbound_allowed(),
+        'doubleReplyRisk': double_reply_risk,
+        'wakkaConsumerChecklist': [
+            'Wakka webhook/subscription → Sign House Gateway only (run.py --all)',
+            'NOps: disable Loom Wakka inbound for the same WhatsApp number',
+            'Set LOOM_WA_INBOUND_NOTIFY_URL (+ BEARER) when SIGNHOUSE_WA_GATEWAY=true',
+            'Do not run sign-house-v3-mcp run.py --all on the same WAKKA_API_KEY',
+            'LOOM_WA_RELAY_WHATSAPP_REPLY=false; Loom Persona: one WA bubble after MCP',
+        ],
         'duplicateReplyHints': hints,
     })
 

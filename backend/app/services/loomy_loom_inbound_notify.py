@@ -165,5 +165,7 @@ def log_loom_runtime_notify_on_startup() -> None:
             )
         logger.warning(
             '[LoomNotify] Gateway on but LOOM_WA_INBOUND_NOTIFY_URL unset — '
-            'inbound type=loom_runtime_deferred; use Wakka→Loom Turn + /mcp/ (no Sign House relay).',
+            'text→loom_runtime_deferred (Pool OK). If Wakka ALSO feeds Loom Turn directly, '
+            'workers get double WhatsApp replies — use Wakka→Gateway only + notify URL, '
+            'and disable Loom Wakka inbound in NOps.',
         )

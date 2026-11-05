@@ -167,7 +167,9 @@ SIGNHOUSE_WA_GATEWAY=false
 - Loom **Connections → wa**：org JWT；工人不需 JWT。
 - Backend 機器須 **掛載 NAS**，否則 browse / txt 空。
 
-### 方案 B：Gateway + 通知 Loom
+### 方案 B：Gateway + 通知 Loom（Demo Pool + 单条 Loomy 回复）
+
+**前置（否则双 bubble）**：Wakka **仅**推 Sign House Gateway；**NOps 必须关闭** 同号 Loom Wakka 入站；填 `LOOM_WA_INBOUND_NOTIFY_URL`。详见 [DEMO_WA_SETUP.md](./DEMO_WA_SETUP.md)。
 
 ```env
 SIGNHOUSE_WA_GATEWAY=true

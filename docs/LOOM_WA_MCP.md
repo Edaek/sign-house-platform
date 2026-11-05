@@ -124,11 +124,15 @@ curl -s https://HOST/api/mcp/hosted-wa/status
 
 ## Demo 部署清单（Pool + txt）
 
+完整步骤见 **[DEMO_WA_SETUP.md](./DEMO_WA_SETUP.md)**（双回复收敛 checklist）。
+
 1. `git pull` 含 remark/txt 与 Gateway 入 pool 修复的版本  
-2. Mini：`SIGNHOUSE_WA_GATEWAY=true`，`WA_INBOUND_CLASSIFY_MODE=loom`，`python run.py --all`  
-3. Loom：Wakka **不要**与 Gateway 双消费同一号码（或 Wakka 只推 Gateway，Loom 只 MCP）  
-4. Loom Connections → wa：`loom-wa@local` org JWT  
-5. Loom 系统提示：贴 [WA_BOT_PERSONA.md](./WA_BOT_PERSONA.md) 第六节  
+2. Mini：`SIGNHOUSE_WA_GATEWAY=true`，`SIGNHOUSE_WA_BRAIN=loom`，`LOOM_WA_INBOUND_NOTIFY_URL=…`，`python run.py --all`  
+3. **Wakka 只推 Gateway**；**NOps 关闭 Loom 同号 Wakka 入站**（勿 Gateway + Loom 双消费）  
+4. **勿**在 Demo 跑 `sign-house-v3-mcp` Gateway（同 `WAKKA_API_KEY` 会双发卡）  
+5. Loom Connections → wa：org JWT → `https://<demo>/mcp/`  
+6. Loom 系统提示：贴 [WA_BOT_PERSONA.md](./WA_BOT_PERSONA.md) 第七节（**每轮一条 WA**）  
+7. 验收：`./scripts/wa_brain_check.sh` → `doubleReplyRisk=low`  
 
 ---
 
