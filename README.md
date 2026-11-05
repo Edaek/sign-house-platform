@@ -99,7 +99,7 @@ brew install tesseract poppler
 ### Setup
 
 ```bash
-git clone https://github.com/Tom-YYYY/sign-house-platform.git
+git clone https://github.com/Edaek/sign-house-platform.git
 cd sign-house-platform
 
 ./scripts/setup.sh
