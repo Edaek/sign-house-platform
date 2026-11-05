@@ -74,7 +74,7 @@ jobs:
           VITE_MCP_PUBLIC_URL: ${{ steps.build_env.outputs.mcp_url }}
       
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./frontend/dist
 
