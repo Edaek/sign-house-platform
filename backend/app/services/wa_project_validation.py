@@ -78,14 +78,14 @@ def find_project_by_nas_folder(folder_name, *, parent_bucket=None, exclude_id=No
 
 
 def resolve_wa_code_for_new_nas_folder(site_code, folder_label, *, parent_bucket=None):
-    """Pick unique wa_projects.code for a new NAS folder (stub + long name may share site number)."""
+    """Pick wa_projects.code — prefer full NAS folder label so code=name=nasFolderName."""
     sc = (site_code or '').strip()
     fl = (folder_label or '').strip()
-    if sc and assert_code_available(sc, parent_bucket=parent_bucket) is None:
-        return sc
-    if fl and fl.casefold() != sc.casefold() and assert_code_available(fl, parent_bucket=parent_bucket) is None:
+    if fl and assert_code_available(fl, parent_bucket=parent_bucket) is None:
         return fl
-    return sc or fl
+    if sc and sc.casefold() != fl.casefold() and assert_code_available(sc, parent_bucket=parent_bucket) is None:
+        return sc
+    return fl or sc
 
 
 def find_project_by_code(code, *, parent_bucket=None, exclude_id=None):

@@ -335,6 +335,31 @@ export function formatWaProjectTitleSuffix(
   return folder
 }
 
+/** Collapse duplicate NAS folder rows (same label, different Mongo stubs). */
+export function dedupeBucketSiteProjects(projects: WaProject[]): WaProject[] {
+  const byFolder = new Map<string, WaProject>()
+  const score = (p: WaProject) =>
+    (p.id.startsWith('nas:') ? 0 : 1000) + (p.totalRecords ?? 0) + (p.nasFolderName?.length ?? 0)
+
+  for (const p of projects) {
+    const k = (p.nasFolderName || p.code || p.id).trim().toLowerCase()
+    if (!k) continue
+    const prev = byFolder.get(k)
+    if (!prev || score(p) > score(prev)) {
+      byFolder.set(k, p)
+    }
+  }
+  return [...byFolder.values()].sort((a, b) =>
+    (a.nasFolderName || a.code).localeCompare(b.nasFolderName || b.code, undefined, {
+      sensitivity: 'base',
+    }),
+  )
+}
+
+export function bucketSiteProjectKey(project: WaProject): string {
+  return project.id || `nas:${(project.nasFolderName || project.code || 'unknown').trim()}`
+}
+
 export function filterWaProjects(
   projects: WaProject[],
   query: string,

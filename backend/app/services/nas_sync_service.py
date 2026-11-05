@@ -558,6 +558,42 @@ def _ensure_nas_bucket_projects(owner_id, root_names, now):
     return created
 
 
+def _short_stub_folder_name(folder_name: str, site_code: str) -> bool:
+    """True when NAS dir is bare PJ-xxxx / site number (not the long descriptive folder)."""
+    fn = (folder_name or '').strip()
+    sc = (site_code or '').strip()
+    if not fn:
+        return False
+    if fn.casefold() == sc.casefold():
+        return True
+    if ' ' not in fn and len(fn) <= 16 and fn.upper().startswith('PJ-'):
+        return True
+    return False
+
+
+def _long_site_peer_in_bucket(folder_name: str, site_code: str, parent_bucket: str) -> bool:
+    """Another project in this bucket already owns the long NAS folder for this site."""
+    from app.services.project_number_match_service import (
+        loomy_primary_site_number,
+        match_classify_targets_by_site_number,
+    )
+
+    site = loomy_primary_site_number(folder_name) or loomy_primary_site_number(site_code)
+    if not site:
+        return False
+    fn_cf = (folder_name or '').strip().casefold()
+    pb = (parent_bucket or '').strip().upper()
+    for proj, _score in match_classify_targets_by_site_number(site, active_only=True):
+        if (proj.get('nasParentBucket') or '').strip().upper() != pb:
+            continue
+        peer = (proj.get('nasFolderName') or proj.get('code') or '').strip()
+        if not peer or peer.casefold() == fn_cf:
+            continue
+        if len(peer) > len(folder_name or ''):
+            return True
+    return False
+
+
 def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
     """Import/update all site folders under one NAS bucket (e.g. PJ-3000-3999)."""
     if not nas_mount.is_available():
@@ -588,16 +624,34 @@ def sync_bucket_site_projects_from_nas(bucket_code, owner_id):
         folder_name = (child.get('folderName') or site_code).strip()
         existing = find_project_by_nas_folder(folder_name, parent_bucket=parent_bucket)
         if existing:
+            from app.services.wa_project_validation import assert_code_available
+
             patch = {'updatedAt': now, 'nasParentBucket': parent_bucket}
             if folder_name:
                 patch['nasFolderName'] = folder_name
                 patch['nasFolder'] = folder_name
-            if not (existing.get('name') or '').strip():
-                nm = _nas_site_project_display_name(folder_name, site_code)
+                nm = folder_name
                 patch['name'] = nm
                 patch['nameNormalized'] = nm.casefold()
+                cur_code = (existing.get('code') or '').strip()
+                if cur_code.casefold() != folder_name.casefold():
+                    if assert_code_available(
+                        folder_name,
+                        parent_bucket=parent_bucket,
+                        exclude_id=existing['_id'],
+                    ) is None:
+                        patch['code'] = folder_name
             mongo.db.wa_projects.update_one({'_id': existing['_id']}, {'$set': patch})
             updated += 1
+            continue
+        if _short_stub_folder_name(folder_name, site_code) and _long_site_peer_in_bucket(
+            folder_name, site_code, parent_bucket,
+        ):
+            logger.info(
+                '[NASSync] Skip stub folder %r — long site folder already in Mongo (%s)',
+                folder_name,
+                parent_bucket,
+            )
             continue
         project_code = resolve_wa_code_for_new_nas_folder(
             site_code, folder_name, parent_bucket=parent_bucket,

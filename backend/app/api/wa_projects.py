@@ -249,6 +249,28 @@ def _match_bucket_child_project(folder_name: str, by_folder: dict[str, dict]) ->
     return by_folder.get(fn.casefold())
 
 
+def _dedupe_nas_bucket_site_rows(sites: list) -> list:
+    """One UI row per physical folder; prefer linked Mongo project with records."""
+    by_folder: dict[str, dict] = {}
+
+    def _score(row: dict) -> int:
+        s = 1000 if row.get('projectId') else 0
+        s += int(row.get('totalRecords') or 0)
+        fn = (row.get('nasFolderName') or row.get('folderName') or '').strip()
+        s += min(len(fn), 200)
+        return s
+
+    for row in sites or []:
+        fn = (row.get('nasFolderName') or row.get('folderName') or '').strip()
+        if not fn:
+            continue
+        key = fn.casefold()
+        prev = by_folder.get(key)
+        if prev is None or _score(row) > _score(prev):
+            by_folder[key] = row
+    return sorted(by_folder.values(), key=lambda r: (r.get('nasFolderName') or '').lower())
+
+
 def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: bool) -> dict:
     from app.services.nas_bucket_code import nas_path_from_web_bucket, nas_parent_bucket_match_values
     from app.services.nas_watcher_service import nas_mount
@@ -307,6 +329,7 @@ def _build_nas_bucket_sites_payload(bucket: str, children: list, *, from_cache: 
             row['nasParentBucket'] = parent_bucket
         sites.append(row)
 
+    sites = _dedupe_nas_bucket_site_rows(sites)
     site_rows = [s for s in sites if s.get('code')]
     payload = {
         'ok': True,

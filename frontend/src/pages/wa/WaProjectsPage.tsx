@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useWaStore, type WaProject } from '../../store/waStore'
 import {
@@ -6,6 +6,8 @@ import {
   mergeProjectsWithNasRootBuckets,
   bucketSiteProjects,
   bucketFolderLabel,
+  bucketSiteProjectKey,
+  dedupeBucketSiteProjects,
   filterWaProjects,
   isRangeBucketCode,
   isStandaloneBucketCode,
@@ -14,6 +16,7 @@ import {
   formatWaProjectLabel,
   type WaProjectBucket,
 } from '../../lib/waProjects'
+import { readWaProjectsScroll, saveWaProjectsScroll } from '../../lib/waProjectsScroll'
 import WaStatusBadge from '../../components/wa/StatusBadge'
 import clsx from 'clsx'
 import {
@@ -107,6 +110,25 @@ export default function WaProjectsPage() {
   const [nasRootBuckets, setNasRootBuckets] = useState<
     Array<{ bucketCode: string; nasName: string; childCount?: number }>
   >([])
+  const scrollRestoredRef = useRef(false)
+
+  useEffect(() => {
+    scrollRestoredRef.current = false
+  }, [selectedBucketCode])
+
+  useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | undefined
+    const onScroll = () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(() => saveWaProjectsScroll(selectedBucketCode), 120)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (debounce) clearTimeout(debounce)
+      saveWaProjectsScroll(selectedBucketCode)
+    }
+  }, [selectedBucketCode])
 
   useEffect(() => {
     fetchProjects()
@@ -333,17 +355,48 @@ export default function WaProjectsPage() {
 
   const filteredSiteProjects = useMemo(() => {
     if (!selectedBucket) return []
-    if (bucketSites.length > 0) {
-      return filterWaProjects(bucketSites, search)
-    }
-    if (bucketSitesSource === 'mongo' || bucketSites.length === 0) {
-      return filterWaProjects(bucketSiteProjects(selectedBucket), search)
-    }
-    return filterWaProjects(bucketSites, search)
+    const base =
+      bucketSites.length > 0
+        ? bucketSites
+        : bucketSitesSource === 'mongo' || bucketSites.length === 0
+          ? bucketSiteProjects(selectedBucket)
+          : bucketSites
+    return filterWaProjects(dedupeBucketSiteProjects(base), search)
   }, [selectedBucket, bucketSites, bucketSitesSource, search])
 
   const hasSearch = search.trim().length > 0
   const atBucketRoot = selectedBucketCode == null
+
+  useEffect(() => {
+    if (scrollRestoredRef.current) return
+    const waitingList =
+      (!atBucketRoot && bucketSyncing && bucketSites.length === 0) ||
+      (atBucketRoot && loading && projects.length === 0)
+    if (waitingList) return
+
+    const y = readWaProjectsScroll(selectedBucketCode)
+    scrollRestoredRef.current = true
+    if (y <= 0) return
+
+    const restore = () => window.scrollTo({ top: y, left: 0, behavior: 'auto' })
+    restore()
+    requestAnimationFrame(restore)
+    const t1 = window.setTimeout(restore, 80)
+    const t2 = window.setTimeout(restore, 250)
+    return () => {
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+    }
+  }, [
+    selectedBucketCode,
+    atBucketRoot,
+    bucketSyncing,
+    bucketSites.length,
+    loading,
+    projects.length,
+    filteredSiteProjects.length,
+    filteredBuckets.length,
+  ])
 
   const subtitle = useMemo(() => {
     if (atBucketRoot) {
@@ -442,7 +495,10 @@ export default function WaProjectsPage() {
           {!atBucketRoot && (
             <button
               type="button"
-              onClick={() => setSelectedBucketCode(null)}
+              onClick={() => {
+                saveWaProjectsScroll(selectedBucketCode)
+                setSelectedBucketCode(null)
+              }}
               className="mt-2 inline-flex items-center gap-1 text-sm text-sign-600 hover:text-sign-500 dark:text-sign-400"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -578,8 +634,9 @@ export default function WaProjectsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredSiteProjects.map((project) => (
               <SiteProjectCard
-                key={project.nasFolderName || project.id}
+                key={bucketSiteProjectKey(project)}
                 project={project}
+                listBucketCode={selectedBucketCode}
                 nasConnected={!!nasStatus?.connected}
                 linkingNas={
                   linkingNasFolder !== null &&
@@ -614,7 +671,10 @@ export default function WaProjectsPage() {
               key={bucket.code}
               bucket={bucket}
               nasFolderCount={nasFolderCountsByBucket[bucket.code]}
-              onOpen={() => setSelectedBucketCode(bucket.code)}
+              onOpen={() => {
+                saveWaProjectsScroll(null)
+                setSelectedBucketCode(bucket.code)
+              }}
             />
           ))}
         </div>
@@ -685,11 +745,13 @@ function BucketCard({
 
 function SiteProjectCard({
   project,
+  listBucketCode,
   nasConnected,
   linkingNas,
   onLinkNasFolder,
 }: {
   project: WaProject
+  listBucketCode: string | null
   nasConnected: boolean
   linkingNas?: boolean
   onLinkNasFolder?: () => void
@@ -754,6 +816,7 @@ function SiteProjectCard({
                   }).toString()
                 : '',
             }}
+            onClick={() => saveWaProjectsScroll(listBucketCode)}
             className="inline-flex items-center gap-1 text-xs font-medium text-sign-600 hover:text-sign-500 dark:text-sign-400"
           >
             Open <ArrowRight className="h-3 w-3" />

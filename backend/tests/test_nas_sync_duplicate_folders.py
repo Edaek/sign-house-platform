@@ -35,6 +35,9 @@ class NasSyncDuplicateFolderTests(unittest.TestCase):
             'app.services.wa_project_validation.find_project_by_nas_folder',
             side_effect=find_nas_folder,
         ), patch(
+            'app.services.nas_sync_service._long_site_peer_in_bucket',
+            return_value=False,
+        ), patch(
             'app.services.wa_project_validation.resolve_wa_code_for_new_nas_folder',
             return_value='PJ-2937',
         ), patch(
