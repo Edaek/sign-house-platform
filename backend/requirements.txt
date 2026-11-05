@@ -25,7 +25,7 @@ openpyxl==3.1.2
 
 # WhatsApp Gateway
 python-socketio[client]==5.11.1
-requests>=2.31.0
+requests>=2.34.2
 
 # File transfer (NAS via SFTP)
 paramiko>=3.4.0
