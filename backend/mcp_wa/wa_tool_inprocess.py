@@ -126,9 +126,18 @@ def _exec_list_pool(a: dict) -> str:
         },
     }
     if status == 'unassigned' and images:
-        from app.services.loom_turn_claim_service import claim_pool_classify_turn
+        from app.services.loom_turn_claim_service import (
+            claim_loom_inbound_turn,
+            pool_image_ids_for_turn_claim,
+            pool_inbound_turn_anchor_ids,
+        )
 
-        payload.update(claim_pool_classify_turn(str(img['_id']) for img in images))
+        payload.update(
+            claim_loom_inbound_turn(
+                image_ids=pool_image_ids_for_turn_claim(images),
+                wa_message_ids=pool_inbound_turn_anchor_ids(images),
+            ),
+        )
     return json_result(payload)
 
 

@@ -337,6 +337,10 @@ def build_loom_classify_payload(ctx: Dict[str, Any]) -> dict:
     if wa_loom_runtime_brain_enabled():
         payload['event'] = 'wa_inbound'
         payload['context']['event'] = 'wa_inbound'
+    inbound_mid = (ctx.get('inbound_message_id') or ctx.get('quoted_msg_id') or '').strip()
+    if inbound_mid:
+        payload['inboundMessageId'] = inbound_mid
+        payload['context']['inbound_message_id'] = inbound_mid
     return payload
 
 

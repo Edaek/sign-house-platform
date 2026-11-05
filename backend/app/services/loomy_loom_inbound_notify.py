@@ -92,6 +92,17 @@ def _flush(key: str) -> None:
     if not ctx:
         return
 
+    inbound_mid = (ctx.get('inbound_message_id') or ctx.get('quoted_msg_id') or '').strip()
+    if inbound_mid:
+        from app.services.loom_turn_claim_service import loom_notify_should_skip_duplicate
+
+        if loom_notify_should_skip_duplicate(inbound_mid):
+            logger.info(
+                '[LoomNotify] Skip notify — duplicate Loom turn for message %s',
+                inbound_mid[:48],
+            )
+            return
+
     from app import create_app
 
     app = create_app(os.environ.get('FLASK_CONFIG', 'development'))
@@ -111,6 +122,7 @@ def schedule_loom_runtime_inbound(
     group_id: Optional[str] = None,
     sender_name: Optional[str] = None,
     quoted_msg_id: Optional[str] = None,
+    inbound_message_id: Optional[str] = None,
     has_quoted: bool = False,
     flush_immediately: bool = False,
 ) -> bool:
@@ -135,6 +147,7 @@ def schedule_loom_runtime_inbound(
                 'pool_ids': [],
                 'sender_name': sender_name,
                 'quoted_msg_id': quoted_msg_id or '',
+                'inbound_message_id': (inbound_message_id or quoted_msg_id or '').strip(),
                 'has_quoted': has_quoted,
                 'at': wa_now(),
             }
@@ -149,6 +162,8 @@ def schedule_loom_runtime_inbound(
             entry['sender_name'] = sender_name
         if quoted_msg_id:
             entry['quoted_msg_id'] = quoted_msg_id
+        if inbound_message_id:
+            entry['inbound_message_id'] = inbound_message_id.strip()
         entry['has_quoted'] = has_quoted
 
         existing = _timers.pop(key, None)

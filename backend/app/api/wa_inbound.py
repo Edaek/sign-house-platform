@@ -391,7 +391,6 @@ def _quote_msg_id(data):
 def _schedule_loom_runtime_inbound(**kwargs):
     from app.services.loomy_loom_inbound_notify import schedule_loom_runtime_inbound
 
-    kwargs.setdefault('flush_immediately', False)
     return schedule_loom_runtime_inbound(**kwargs)
 
 
@@ -402,6 +401,7 @@ def _loom_text_inbound_response(
     group_id=None,
     sender_name=None,
     quoted_msg_id=None,
+    inbound_message_id=None,
     has_quoted: bool = False,
     pool_ids=None,
 ):
@@ -419,15 +419,24 @@ def _loom_text_inbound_response(
         return jsonify({'handled': True, 'type': 'agent_mode_not_supported_here'})
     if not wa_loom_runtime_brain_enabled():
         return jsonify({'handled': True, 'type': 'ignored_silent'})
+    anchor = (inbound_message_id or quoted_msg_id or '').strip()
     notified = _schedule_loom_runtime_inbound(
         phone=phone,
         group_id=group_id,
         user_text=user_text,
         sender_name=sender_name,
         quoted_msg_id=quoted_msg_id,
+        inbound_message_id=anchor or None,
         has_quoted=has_quoted,
         pool_ids=list(pool_ids or []),
+        flush_immediately=bool((user_text or '').strip()),
     )
+    if not notified and (user_text or '').strip():
+        logger.warning(
+            '[Inbound] loom_runtime_deferred — set LOOM_WA_INBOUND_NOTIFY_URL (+ BEARER) '
+            'and disable Loom direct Wakka on this number (see docs/DEMO_WA_SETUP.md). text=%r',
+            (user_text or '')[:80],
+        )
     return jsonify({
         'handled': True,
         'type': 'loom_runtime_notify_scheduled' if notified else 'loom_runtime_deferred',
@@ -443,6 +452,7 @@ def _loomy_after_pool_intake(
     group_sender=None,
     caption=None,
     quote_msg_id=None,
+    inbound_message_id=None,
 ):
     from app.services.wa_classify_mode import (
         wa_inbound_loomy_dispatch_enabled,
@@ -474,6 +484,7 @@ def _loomy_after_pool_intake(
 
     cap = (caption or '').strip()
     sender_phone = phone or group_sender or ''
+    anchor = (inbound_message_id or quote_msg_id or '').strip()
     _schedule_loom_runtime_inbound(
         phone=sender_phone,
         group_id=group_id,
@@ -481,6 +492,7 @@ def _loomy_after_pool_intake(
         pool_ids=pool_ids,
         sender_name=sender_name,
         quoted_msg_id=quote_msg_id,
+        inbound_message_id=anchor or None,
     )
 
 
@@ -962,6 +974,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 sender_name=data.get('fromName') or data.get('senderName'),
                 caption=caption,
                 quote_msg_id=_quote_msg_id(data),
+                inbound_message_id=(data.get('messageId') or '').strip() or None,
             )
 
             return jsonify({
@@ -982,6 +995,7 @@ def _handle_private(data, sender, from_name, text, photos, has_media):
                 user_text=trimmed_text,
                 sender_name=data.get('fromName') or data.get('senderName'),
                 quoted_msg_id=data.get('quotedMsgId'),
+                inbound_message_id=(data.get('messageId') or '').strip() or None,
                 has_quoted=bool(data.get('hasQuotedMsg')),
                 pool_ids=ctx.get('pool_ids'),
             )
@@ -1023,6 +1037,7 @@ def _handle_group(data, sender, from_name, group_id, *, sender_jid=None):
                 group_id=group_id,
                 sender_name=from_name,
                 quoted_msg_id=data.get('quotedMsgId'),
+                inbound_message_id=(data.get('messageId') or '').strip() or None,
                 has_quoted=bool(data.get('hasQuotedMsg')),
                 pool_ids=pids,
             )
@@ -1126,6 +1141,7 @@ def _handle_group_media(data, sender, from_name, group_id, final_photos, *, send
         group_sender=sender,
         caption=caption,
         quote_msg_id=quote_id,
+        inbound_message_id=(base_msg_id or '').strip() or None,
     )
 
     return jsonify({
