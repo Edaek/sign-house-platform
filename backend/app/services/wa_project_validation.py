@@ -34,12 +34,25 @@ def _code_regex_query(code: str) -> dict:
     return {'code': {'$regex': f'^{re.escape(code)}$', '$options': 'i'}}
 
 
+def project_matches_nas_folder_label(doc, folder_name: str) -> bool:
+    """True when Mongo row represents this exact NAS directory (not code-only PJ-xxxx alias)."""
+    folder_cf = (folder_name or '').strip().casefold()
+    if not folder_cf or not doc:
+        return False
+    nf = (doc.get('nasFolderName') or '').strip().casefold()
+    code = (doc.get('code') or '').strip().casefold()
+    if nf and nf == folder_cf:
+        return True
+    if code == folder_cf and (not nf or nf == code):
+        return True
+    return False
+
+
 def find_project_by_nas_folder(folder_name, *, parent_bucket=None, exclude_id=None):
     """Match a NAS child directory to wa_projects by full folder label (not parsed PJ-xxxx only)."""
     folder = (folder_name or '').strip()
     if not folder:
         return None
-    folder_cf = folder.casefold()
     query = {
         **_non_archived_filter(),
         '$or': [
@@ -53,17 +66,26 @@ def find_project_by_nas_folder(folder_name, *, parent_bucket=None, exclude_id=No
     if parent_bucket is not None:
         pk = _parent_bucket_key(parent_bucket)
         candidates = [c for c in candidates if _project_parent_key(c) == pk]
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        return candidates[0]
-    for doc in candidates:
-        if (doc.get('nasFolderName') or '').strip().casefold() == folder_cf:
-            return doc
-    for doc in candidates:
-        if (doc.get('code') or '').strip().casefold() == folder_cf:
-            return doc
+    matches = [c for c in candidates if project_matches_nas_folder_label(c, folder)]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        folder_cf = folder.casefold()
+        for doc in matches:
+            if (doc.get('nasFolderName') or '').strip().casefold() == folder_cf:
+                return doc
     return None
+
+
+def resolve_wa_code_for_new_nas_folder(site_code, folder_label, *, parent_bucket=None):
+    """Pick unique wa_projects.code for a new NAS folder (stub + long name may share site number)."""
+    sc = (site_code or '').strip()
+    fl = (folder_label or '').strip()
+    if sc and assert_code_available(sc, parent_bucket=parent_bucket) is None:
+        return sc
+    if fl and fl.casefold() != sc.casefold() and assert_code_available(fl, parent_bucket=parent_bucket) is None:
+        return fl
+    return sc or fl
 
 
 def find_project_by_code(code, *, parent_bucket=None, exclude_id=None):

@@ -4,11 +4,13 @@ from unittest.mock import MagicMock, patch
 
 from bson import ObjectId
 
-from app.api.wa_projects import _records_project_id
+from app.api.wa_projects import _RECORDS_SCOPE_EMPTY, _records_project_id
 from app.services.wa_project_validation import (
     assert_code_available,
     find_project_by_code,
+    find_project_by_nas_folder,
     normalize_code,
+    project_matches_nas_folder_label,
 )
 
 
@@ -88,6 +90,49 @@ class WaProjectBucketScopeTests(unittest.TestCase):
         }
         self.assertEqual(_records_project_id(url_project, req), site_id)
         mock_find.assert_called_once_with(long_name, parent_bucket='PJ-2900-2999')
+
+    def test_nas_folder_label_rejects_code_alias_when_long_name(self):
+        long_name = 'PJ-2937 粉嶺北(Yau Lee)_RN'
+        proj = {
+            'code': 'PJ-2937',
+            'nasFolderName': long_name,
+            'nasParentBucket': 'PJ-2900-2999',
+        }
+        self.assertTrue(project_matches_nas_folder_label(proj, long_name))
+        self.assertFalse(project_matches_nas_folder_label(proj, 'PJ-2937'))
+
+    @patch('app.services.wa_project_validation.mongo')
+    def test_find_nas_folder_stub_not_long_site(self, mock_mongo):
+        long_name = 'PJ-2937 粉嶺北(Yau Lee)_RN'
+        proj = {
+            '_id': 'site',
+            'code': 'PJ-2937',
+            'nasFolderName': long_name,
+            'nasParentBucket': 'PJ-2900-2999',
+            'status': 'active',
+        }
+        mock_mongo.db.wa_projects.find.return_value = [proj]
+        hit = find_project_by_nas_folder('PJ-2937', parent_bucket='PJ-2900-2999')
+        self.assertIsNone(hit)
+        hit_long = find_project_by_nas_folder(long_name, parent_bucket='PJ-2900-2999')
+        self.assertIsNotNone(hit_long)
+
+    @patch('app.services.wa_project_validation.find_project_by_nas_folder', return_value=None)
+    def test_records_empty_when_stub_folder_no_mongo_row(self, _find):
+        site_id = ObjectId()
+        long_name = 'PJ-2937 粉嶺北(Yau Lee)_RN'
+        url_project = {
+            '_id': site_id,
+            'code': 'PJ-2937',
+            'nasFolderName': long_name,
+            'nasParentBucket': 'PJ-2900-2999',
+        }
+        req = MagicMock()
+        req.args = {
+            'nasFolderName': 'PJ-2937',
+            'nasParentBucket': 'PJ-2900-2999',
+        }
+        self.assertEqual(_records_project_id(url_project, req), _RECORDS_SCOPE_EMPTY)
 
 
 if __name__ == '__main__':

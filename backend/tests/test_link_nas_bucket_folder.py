@@ -28,7 +28,7 @@ class LinkNasBucketFolderTests(unittest.TestCase):
         mock_mongo.db.wa_projects.insert_one.return_value = MagicMock(inserted_id='pid1')
 
         with patch(
-            'app.services.wa_project_validation.find_project_by_code',
+            'app.services.wa_project_validation.find_project_by_nas_folder',
             return_value=None,
         ), patch(
             'app.services.wa_project_validation.assert_code_available',

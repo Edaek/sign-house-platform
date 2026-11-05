@@ -101,6 +101,40 @@ class NasBucketSitesLookupTests(unittest.TestCase):
         )
         self.assertEqual(by_folder['PJ-2937 粉嶺北(Yau Lee)_RN']['totalRecords'], 2)
 
+    @patch('app.api.wa_projects.mongo')
+    @patch('app.api.wa_projects.serialize_doc')
+    def test_stub_nas_folder_without_mongo_row_unlinked(self, mock_ser, mock_mongo):
+        site = {
+            '_id': 'site-id',
+            'code': 'PJ-2937',
+            'nasFolderName': 'PJ-2937 粉嶺北(Yau Lee)_RN',
+            'nasParentBucket': 'PJ-2900-2999',
+            'status': 'active',
+        }
+        mock_mongo.db.wa_projects.find.return_value = [site]
+        mock_mongo.db.wa_records.aggregate.return_value = [
+            {'_id': 'site-id', 'totalRecords': 1},
+        ]
+        mock_ser.side_effect = lambda doc: {
+            'id': str(doc['_id']),
+            'code': doc.get('code'),
+            'status': 'active',
+        }
+
+        children = [
+            {'folderName': 'PJ-2937', 'code': 'PJ-2937', 'isSiteProject': True},
+            {
+                'folderName': 'PJ-2937 粉嶺北(Yau Lee)_RN',
+                'code': 'PJ-2937',
+                'isSiteProject': True,
+            },
+        ]
+        payload = _build_nas_bucket_sites_payload('PJ-2900-2999', children, from_cache=True)
+        by_folder = {s['folderName']: s for s in payload['sites']}
+        self.assertIsNone(by_folder['PJ-2937'].get('projectId'))
+        self.assertEqual(by_folder['PJ-2937']['totalRecords'], 0)
+        self.assertEqual(by_folder['PJ-2937 粉嶺北(Yau Lee)_RN']['projectId'], 'site-id')
+
 
 if __name__ == '__main__':
     unittest.main()

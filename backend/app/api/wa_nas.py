@@ -93,18 +93,19 @@ def browse_nas():
                 'staleFromCache': from_cache if nas_slow else False,
                 'hint': nas_slow_hint if nas_slow and not children else None,
             })
-        from app.services.wa_project_validation import find_project_by_code
+        from app.services.wa_project_validation import find_project_by_code, find_project_by_nas_folder
 
-        parent_for_lookup = (
-            (request.args.get('nasParentBucket') or '').strip()
-            or None
-        )
-        proj = find_project_by_code(code, parent_bucket=parent_for_lookup)
+        fn = (request.args.get('nasFolderName') or '').strip()
+        pb = (request.args.get('nasParentBucket') or '').strip()
+        parent_for_lookup = pb or None
+        proj = None
+        if fn:
+            proj = find_project_by_nas_folder(fn, parent_bucket=parent_for_lookup)
+        if not proj:
+            proj = find_project_by_code(code, parent_bucket=parent_for_lookup)
         if not proj and parent_for_lookup:
             proj = find_project_by_code(code)
         view = dict(proj) if proj else {'code': code}
-        fn = (request.args.get('nasFolderName') or '').strip()
-        pb = (request.args.get('nasParentBucket') or '').strip()
         if fn:
             view['nasFolderName'] = fn
         if pb:

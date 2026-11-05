@@ -14,6 +14,8 @@ wa_projects_bp = Blueprint('wa_projects', __name__)
 
 # Moved records are tombstones after relocate; do not count as active site records.
 _RECORD_COUNTABLE = {'$nin': ['voided', 'moved']}
+# Explicit NAS folder in URL with no matching wa_projects row — never fall back to site code.
+_RECORDS_SCOPE_EMPTY = ObjectId('ffffffffffffffffffffffff')
 
 _mongo_bucket_rows_cache: dict[str, tuple[float, list]] = {}
 _MONGO_BUCKET_ROWS_TTL_S = 45.0
@@ -53,9 +55,14 @@ def _records_project_id(project, req=None):
     fn = (src.args.get('nasFolderName') or '').strip()
     project_code = (project.get('code') or '').strip()
     if fn:
-        scoped = find_project_by_nas_folder(fn, parent_bucket=pb)
+        scoped = find_project_by_nas_folder(fn, parent_bucket=pb or None)
         if scoped:
             return scoped['_id']
+        if pb:
+            proj_nf = (project.get('nasFolderName') or '').strip().casefold()
+            if proj_nf == fn.casefold():
+                return project['_id']
+            return _RECORDS_SCOPE_EMPTY
         site_code = parse_nas_site_folder_code(fn) or fn
     elif is_range_folder_code(project_code):
         return project['_id']
@@ -218,8 +225,9 @@ def _index_wa_projects_by_nas_folder(projects: list) -> dict[str, dict]:
         labels = []
         if nf:
             labels.append(nf)
-        if code and code.casefold() != nf.casefold():
-            labels.append(code)
+        if code and (not nf or code.casefold() == nf.casefold()):
+            if not any(lb.casefold() == code.casefold() for lb in labels):
+                labels.append(code)
         for label in labels:
             key = label.casefold()
             prev = by_folder.get(key)
