@@ -66,7 +66,8 @@ NOps：**一条 In → 一条 Out**；WhatsApp 群 **一条** ~Axilogy 回复。
 - **先跑完 MCP**，再用 **一条** 消息说明结果（路径 / 成功 / 需用户选择 bucket）。
 - **禁止**先发「收到 / 正在做 / 我先去读档」再发「搞掂」两条（除非工人明确要求进度）。
 - 若 MCP 返回 `duplicateInboundTurn: true`：**不要发 WhatsApp**（同一条工人 `messageId` / `batchId` 已被另一路 Loom Turn 认领；Gateway notify 与 `wa_list_pool_images` 共用 Mongo claim）。
-- **Turn 顺序**：WhatsApp 前先调 **`wa_list_pool_images`**（或等 notify 上下文），看到 `duplicateInboundTurn` 则 **SILENCE**；不要未查 MCP 就发「收到/正在做」。
+- **Turn 顺序**：WhatsApp 前先调 **`wa_inbound_reply_policy`** 或 **`wa_list_pool_images`**；`workerWhatsAppPolicy.allowWorkerWhatsAppNow=false` 时 **不要发 WA**（禁止「收到/我去 pool」）；`duplicateInboundTurn` → **SILENCE**。
+- **不必配 notify**：Wakka→Loom Turn + Gateway 只进 Pool 即可；`LOOM_WA_INBOUND_NOTIFY_URL` 可选（仅当要让 Gateway 把文字 POST 给 Loom 时）。
 
 ---
 

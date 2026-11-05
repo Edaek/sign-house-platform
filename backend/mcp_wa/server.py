@@ -180,16 +180,37 @@ def wa_get_pool_stats() -> str:
 
 
 @mcp.tool()
+def wa_inbound_reply_policy(phone: str, group_id: str = '') -> str:
+    """First tool each WA turn: workerWhatsAppPolicy (no interim WA before list_pool)."""
+    try:
+        params = {'phone': phone.strip()}
+        if (group_id or '').strip():
+            params['group_id'] = group_id.strip()
+        return json_result(_client().get('/wa/loom/worker-reply-policy', params=params))
+    except SignHouseApiError as exc:
+        return str(exc)
+
+
+@mcp.tool()
 def wa_list_pool_images(
     status: str = 'unassigned',
     phone: str = '',
     project: str = '',
+    group_id: str = '',
     page: int = 1,
     limit: int = 50,
 ) -> str:
-    """List media pool images (status: unassigned | assigned)."""
+    """List media pool images. Response includes workerWhatsAppPolicy after MCP (one WA only)."""
     try:
-        params = {'status': status, 'phone': phone or None, 'project': project or None, 'page': page, 'limit': limit}
+        params = {
+            'status': status,
+            'phone': phone or None,
+            'project': project or None,
+            'page': page,
+            'limit': limit,
+        }
+        if (group_id or '').strip():
+            params['group_id'] = group_id.strip()
         return json_result(_client().get('/wa/image-pool', params=params))
     except SignHouseApiError as exc:
         return str(exc)

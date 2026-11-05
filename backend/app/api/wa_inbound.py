@@ -9,6 +9,7 @@ from datetime import datetime
 from app.services.wa_time import wa_now
 
 from flask import Blueprint, jsonify, request, current_app
+from flask_jwt_extended import jwt_required
 from bson import ObjectId
 from app import mongo
 from app.services.message_parser_service import is_command
@@ -484,6 +485,13 @@ def _loomy_after_pool_intake(
 
     cap = (caption or '').strip()
     sender_phone = phone or group_sender or ''
+    from app.services.loom_wa_worker_reply_policy import register_gateway_pool_intake
+
+    register_gateway_pool_intake(
+        phone=sender_phone,
+        group_id=group_id,
+        inbound_message_id=(inbound_message_id or quote_msg_id or '').strip() or None,
+    )
     anchor = (inbound_message_id or quote_msg_id or '').strip()
     _schedule_loom_runtime_inbound(
         phone=sender_phone,
@@ -697,6 +705,19 @@ def _save_media_buffer(data, msg_type):
     with open(fpath, 'wb') as f:
         f.write(data)
     return f'/uploads/wa-media/{fname}'
+
+
+@wa_inbound_bp.route('/loom/worker-reply-policy', methods=['GET'])
+@jwt_required()
+def wa_loom_worker_reply_policy():
+    """MCP/Loom: whether worker WhatsApp is allowed this turn (no interim before list_pool)."""
+    phone = (request.args.get('phone') or '').strip()
+    group_id = (request.args.get('group_id') or request.args.get('groupId') or '').strip() or None
+    if not phone:
+        return jsonify({'error': 'phone required'}), 400
+    from app.services.loom_wa_worker_reply_policy import build_worker_whatsapp_policy
+
+    return jsonify(build_worker_whatsapp_policy(phone=phone, group_id=group_id))
 
 
 @wa_inbound_bp.route('/brain/status', methods=['GET'])

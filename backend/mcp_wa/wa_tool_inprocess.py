@@ -138,6 +138,15 @@ def _exec_list_pool(a: dict) -> str:
                 wa_message_ids=pool_inbound_turn_anchor_ids(images),
             ),
         )
+    if phone:
+        from app.services.loom_wa_worker_reply_policy import merge_policy_into_payload
+
+        merge_policy_into_payload(
+            payload,
+            phone=phone,
+            group_id=(a.get('group_id') or a.get('groupId') or '').strip() or None,
+            list_pool_just_called=True,
+        )
     return json_result(payload)
 
 

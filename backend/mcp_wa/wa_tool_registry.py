@@ -31,6 +31,7 @@ DEFAULT_DENY = frozenset({
 
 DEFAULT_ALLOW = frozenset({
     'wa_whoami',
+    'wa_inbound_reply_policy',
     'wa_get_nas_status',
     'wa_get_pool_stats',
     'wa_list_pool_images',
@@ -391,6 +392,17 @@ def _exec_wa_whoami(c: SignHouseClient, _a: dict) -> str:
     return json_result(c.get('/auth/me'))
 
 
+def _exec_wa_inbound_reply_policy(c: SignHouseClient, a: dict) -> str:
+    phone = (a.get('phone') or '').strip()
+    if not phone:
+        return 'Error: phone required'
+    params: dict = {'phone': phone}
+    gid = (a.get('group_id') or a.get('groupId') or '').strip()
+    if gid:
+        params['group_id'] = gid
+    return json_result(c.get('/wa/loom/worker-reply-policy', params=params))
+
+
 def _exec_wa_get_whatsapp_status(c: SignHouseClient, _a: dict) -> str:
     return json_result(c.get('/wa/admin/system/status'))
 
@@ -498,6 +510,7 @@ _EXECUTORS: Dict[str, ToolFn] = {
     'wa_rename_nas_site_folder': _exec_wa_rename_nas_site_folder,
     'wa_sync_site_code_from_folder': _exec_wa_sync_site_code_from_folder,
     'wa_whoami': _exec_wa_whoami,
+    'wa_inbound_reply_policy': _exec_wa_inbound_reply_policy,
     'wa_get_whatsapp_status': _exec_wa_get_whatsapp_status,
     'wa_get_infra_status': _exec_wa_get_infra_status,
     'wa_browse_nas': _exec_wa_browse_nas,
@@ -570,6 +583,15 @@ TOOL_SPECS: List[dict] = [
     },
     {'name': 'wa_browse_nas', 'description': 'Browse NAS folders', 'args_hint': '{code}'},
     {'name': 'wa_whoami', 'description': 'Current API user', 'args_hint': '{}'},
+    {
+        'name': 'wa_inbound_reply_policy',
+        'description': (
+            'Call FIRST each WhatsApp turn. Returns workerWhatsAppPolicy.allowWorkerWhatsAppNow — '
+            'false until wa_list_pool_images; forbids interim「收到/我去 pool」before MCP. '
+            'No LOOM_WA_INBOUND_NOTIFY_URL required when Wakka→Loom.'
+        ),
+        'args_hint': '{phone, group_id?}',
+    },
     {'name': 'wa_list_keywords', 'description': 'Type keywords', 'args_hint': '{}'},
     {'name': 'wa_search_records', 'description': 'Search records', 'args_hint': '{q, phone, project}'},
     {'name': 'wa_get_record', 'description': 'Get WA record by id', 'args_hint': '{record_id}'},

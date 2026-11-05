@@ -76,6 +76,17 @@ def list_or_stats():
                 wa_message_ids=pool_inbound_turn_anchor_ids(images),
             ),
         )
+    list_phone = (request.args.get('phone') or '').strip()
+    group_id = (request.args.get('group_id') or request.args.get('groupId') or '').strip() or None
+    if list_phone:
+        from app.services.loom_wa_worker_reply_policy import merge_policy_into_payload
+
+        merge_policy_into_payload(
+            payload,
+            phone=list_phone,
+            group_id=group_id,
+            list_pool_just_called=True,
+        )
     return jsonify(payload)
 
 @wa_image_pool_bp.route('/assign', methods=['POST'])
