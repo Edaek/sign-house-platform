@@ -106,7 +106,12 @@ def log_wa_brain_on_startup() -> None:
     brain = (os.environ.get(ENV_WA_BRAIN) or '').strip()
     legacy = (os.environ.get('WA_INBOUND_CLASSIFY_MODE') or '').strip()
     if mode == MODE_LOOM:
-        hint = 'Loom Turn + /mcp/ (Sign House 不跑本机 Ollama 回复)'
+        send_ok = signhouse_whatsapp_outbound_allowed()
+        hint = (
+            'Loom Turn + /mcp/ (Sign House 不跑本机 Ollama；'
+            + ('可 break-glass 代发 WA' if send_ok else '禁止 Sign House 代发 WA')
+            + ')'
+        )
     else:
         hint = 'Sign House Ollama Loomy agent (本机 MCP 工具环)'
     logger.info(
@@ -127,6 +132,17 @@ def wa_loomy_agent_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
 def wa_loom_runtime_brain_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:
     """Loom runtime owns replies (per-user Bearer → /mcp); Sign House intake only."""
     return classify_mode(config) == MODE_LOOM
+
+
+def signhouse_whatsapp_outbound_allowed(config: Optional[Mapping[str, Any]] = None) -> bool:
+    """
+    When brain=loom, Sign House must not send worker-visible WhatsApp (Loom Turn only).
+    Opt-in: LOOMY_WA_SIGNHOUSE_SEND=true (break-glass / legacy).
+    """
+    if not wa_loom_runtime_brain_enabled(config):
+        return True
+    raw = _cfg_val(config, 'LOOMY_WA_SIGNHOUSE_SEND', 'LOOMY_WA_SIGNHOUSE_SEND', 'false')
+    return raw in ('1', 'true', 'yes', 'on')
 
 
 def wa_inbound_loomy_dispatch_enabled(config: Optional[Mapping[str, Any]] = None) -> bool:

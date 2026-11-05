@@ -188,6 +188,10 @@ def _exec_assign_pool(a: dict) -> str:
         proj['nasParentBucket'] = pb
     group_id = (a.get('group_id') or a.get('groupId') or '').strip() or None
     notify = bool(a.get('notify_whatsapp') or a.get('notifyWhatsApp'))
+    from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+    if wa_loom_runtime_brain_enabled():
+        notify = False
     phone = (a.get('phone') or '').strip() or None
     remark = (a.get('remark') or '').strip() or None
 

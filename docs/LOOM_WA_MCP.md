@@ -51,6 +51,8 @@ Loom：
 
 ---
 
+**sign-house-v3** 的 `wa_inbound` 已移除本地 agent / `*help*` / move 等旧 bot 回复路径；仅 **入库 + Loom defer**。本地 Ollama agent 请用 **sign-house-v3-mcp** 或坚持 `SIGNHOUSE_WA_BRAIN=agent` 的旧分支（不推荐与 demo Loom 同 Wakka）。
+
 ## 备选：Wakka 仍在 Sign House（Jeff 文档 Gateway 独占）
 
 若暂时 **不能** 把 Wakka 移到 Loom：

@@ -102,8 +102,8 @@ def _loom_brain_block_direct_wa_send(tool_name: str) -> str | None:
     if raw in ('0', 'false', 'no', 'off'):
         return None
     return (
-        f'Error: brain=loom — do not use {tool_name}; put worker text in Loom Turn reply '
-        '(wa_assign notify_whatsapp is OK). Override: LOOMY_WA_MCP_BLOCK_DIRECT_SEND=false'
+        f'Error: brain=loom — do not use {tool_name}; put worker text in Loom Turn reply only. '
+        'Override: LOOMY_WA_MCP_BLOCK_DIRECT_SEND=false'
     )
 
 

@@ -6,6 +6,7 @@ from app.services.wa_classify_mode import (
     MODE_LOOM,
     classify_mode,
     mattermost_pool_notify_enabled,
+    signhouse_whatsapp_outbound_allowed,
     wa_inbound_loomy_dispatch_enabled,
     wa_loom_runtime_brain_enabled,
     wa_loomy_agent_enabled,
@@ -36,6 +37,14 @@ class WaClassifyModeTests(unittest.TestCase):
         self.assertTrue(wa_loom_runtime_brain_enabled(cfg))
         self.assertTrue(wa_inbound_loomy_dispatch_enabled(cfg))
         self.assertFalse(worker_auto_classify_enabled(cfg))
+        self.assertFalse(signhouse_whatsapp_outbound_allowed(cfg))
+
+    def test_loom_signhouse_send_opt_in(self):
+        cfg = {
+            'SIGNHOUSE_WA_BRAIN': 'loom',
+            'LOOMY_WA_SIGNHOUSE_SEND': 'true',
+        }
+        self.assertTrue(signhouse_whatsapp_outbound_allowed(cfg))
 
     def test_signhouse_wa_brain_overrides_legacy(self):
         cfg = {

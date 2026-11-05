@@ -8,12 +8,39 @@ from flask import current_app
 
 logger = logging.getLogger(__name__)
 
+
+def _log_outbound(*, channel: str, target: str, text: str) -> None:
+    import inspect
+
+    preview = (text or '').replace('\n', ' ')[:120]
+    caller = 'unknown'
+    for frame in inspect.stack()[2:8]:
+        fn = frame.filename or ''
+        if 'wa_send_service.py' in fn:
+            continue
+        caller = f'{fn.rsplit("/", 1)[-1]}:{frame.function}'
+        break
+    logger.info('[Wakka] Sign House → %s %s (%s…) via %s', channel, target, preview, caller)
+
 _LEGACY_RECEIPT_SNIPPETS = ('收到', '照片', '專案編碼', '歸類')
 
 
 def _is_legacy_pool_receipt_text(text: str) -> bool:
     t = (text or '').replace('*', '')
     return all(s in t for s in _LEGACY_RECEIPT_SNIPPETS)
+
+
+def _block_signhouse_outbound_in_loom_mode(*, channel: str, target: str) -> bool:
+    from app.services.wa_classify_mode import signhouse_whatsapp_outbound_allowed
+
+    if signhouse_whatsapp_outbound_allowed():
+        return False
+    logger.info(
+        '[Wakka] Blocked Sign House WA send in brain=loom (%s → %s); Loom Turn owns replies',
+        channel,
+        target,
+    )
+    return True
 
 
 def _block_legacy_receipt_outbound(text: str, *, channel: str, target: str):
@@ -157,9 +184,12 @@ def send_chat_presence(to, state='composing', *, group_id=None):
 
 
 def send_message(to, text, quoted_msg_id=None, quoted_payload=None):
+    if _block_signhouse_outbound_in_loom_mode(channel='private', target=str(to)):
+        return None
     if _block_legacy_receipt_outbound(text, channel='private', target=str(to)):
         return None
     recipient = wakka_private_recipient(to)
+    _log_outbound(channel='private', target=recipient, text=text or '')
     body = {'to': recipient, 'message': text}
     body.update(_quote_body_fields(quoted_msg_id, quoted_payload))
     return _wakka_request('/api/v1/messages/send', 'POST', body)
@@ -177,8 +207,11 @@ def send_group_message(
     quoted_msg_id=None,
     quoted_payload=None,
 ):
+    if _block_signhouse_outbound_in_loom_mode(channel='group', target=str(group_id)):
+        return None
     if _block_legacy_receipt_outbound(text, channel='group', target=str(group_id)):
         return None
+    _log_outbound(channel='group', target=str(group_id), text=text or '')
     body = {'message': text}
     if media_data_uri:
         body['mediaUrl'] = media_data_uri

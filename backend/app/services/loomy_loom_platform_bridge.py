@@ -230,7 +230,12 @@ def _run_loom_actions(actions: List[dict], ctx: Dict[str, Any]) -> None:
                 args.setdefault('group_id', group_id)
             if pool_ids and not args.get('image_ids') and not args.get('pool_image_ids'):
                 args['image_ids'] = pool_ids
-            args.setdefault('notify_whatsapp', True)
+            from app.services.wa_classify_mode import wa_loom_runtime_brain_enabled
+
+            if wa_loom_runtime_brain_enabled():
+                args.setdefault('notify_whatsapp', False)
+            else:
+                args.setdefault('notify_whatsapp', True)
         if name == 'wa_list_pool_images' and phone and 'phone' not in args:
             args['phone'] = phone
         try:

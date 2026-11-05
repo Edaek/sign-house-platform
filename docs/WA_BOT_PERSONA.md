@@ -55,8 +55,10 @@
 
 - **推薦**：Wakka → Loom Turn；Sign House 跑 API + **`/mcp/`**（`SIGNHOUSE_WA_GATEWAY=false`）。見 [LOOM_WA_MCP.md](./LOOM_WA_MCP.md)。
 - **備選**：Gateway 收 inbound 再 POST Loom（`SIGNHOUSE_WA_GATEWAY=true`）。見 [LOOM_WA_PLATFORM_BRIDGE.md](./LOOM_WA_PLATFORM_BRIDGE.md)。
-- 同一 WA 號碼 **只能一個 consumer**（Gateway 或 Loom Wakka 二選一）。
-- **工人可見回覆**由 **Loom Turn** 生成（本 Persona + MCP 結果）；生產 **`WA_INBOUND_CLASSIFY_MODE=loom`**。
+- **要 Pool + Loom 回覆（方案 B）**：`SIGNHOUSE_WA_GATEWAY=true` + **`LOOM_WA_INBOUND_NOTIFY_URL`** + `run.py --all`；**勿** Wakka 同時直連 Loom（否則一條消息兩次進 Loom）。`LOOM_WA_RELAY_WHATSAPP_REPLY=false`（Loom 自己发卡）。
+- **要 Pool 且只有 Gateway 收 Wakka**：必配 notify，讓 Loom 只從 Sign House HTTP 收文字/上下文；Loom NOps 關閉重複 Wakka 入站。
+- **工人可見回覆**由 **Loom Turn** 生成；**同一輪只發一條 WhatsApp**：MCP 跑完再寫回覆，**禁止**先「收到正在做」再「搞定」分兩條（除非工人明確要進度）。
+- 生產 **`SIGNHOUSE_WA_BRAIN=loom`**（或 `WA_INBOUND_CLASSIFY_MODE=loom`）。
 
 ### 3.1 歸類前必查 Pool
 
@@ -169,9 +171,14 @@ SIGNHOUSE_WA_GATEWAY=false
 
 ```env
 SIGNHOUSE_WA_GATEWAY=true
-WA_INBOUND_CLASSIFY_MODE=loom
+SIGNHOUSE_WA_BRAIN=loom
+LOOMY_WA_INPROCESS_TOOLS=false
+LOOMY_WA_SIGNHOUSE_SEND=false
+LOOMY_WA_MCP_BLOCK_DIRECT_SEND=true
 LOOM_WA_INBOUND_NOTIFY_URL=…
 LOOM_WA_INBOUND_NOTIFY_BEARER=…
+LOOM_WA_RELAY_WHATSAPP_REPLY=false
+python run.py --all
 ```
 
 ### 可選：本地 agent（內測）
@@ -190,6 +197,8 @@ WA_INBOUND_CLASSIFY_MODE=agent
 
 ```text
 你是 Signhouse，Ceressky / Sign House 團隊隊友（不是客服機器人）。Mattermost：自然、短句、0–2 emoji；不自稱 AI，不用客服套話，不重述整段問題。沒依據就查 MCP；可 SILENCE。勿貼 Bearer 全文。
+
+WhatsApp 群：**每輪工人只應看到一條你的回覆**。先調 MCP，完成後用一條消息說結果（路徑/是否成功）；不要先发「收到我去做」再发「搞定」两条。勿用 wa_send_message（brain=loom 已拦截）。
 
 MCP: Sign House /mcp/ ；憑證在 Loom Connections → signhousemcp (wa)，每人 Bearer。401 請本人更新連線。不確定身份先 wa_whoami。發 WA 前 wa_get_whatsapp_status；群 JID 必須 @g.us。
 
